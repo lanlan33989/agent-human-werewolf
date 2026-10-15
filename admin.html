@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>配置台 · 桌游 AI 伙伴</title>
+<!--
+  ============================================================================
+  配置台（/admin）—— 用户要的：「随时改 key（ASR / LLM / 音色）+ 看得到所有
+  prompt 并修改」。
+
+  三条安全底线（页面上也写了一份，别只写在代码里）：
+    1. **密钥只进不出**：接口只会回**指纹**（`sk-…12ab`）。这个页面上永远看不到
+       完整的 key —— 它只在服务端进程里。想核对只能看指纹对不对得上。
+    2. 默认**只有本机**能用。从别的机器打开时，必须先在上面填口令
+       （服务端 `.env` 里设 `ADMIN_TOKEN`）；没设口令 ⇒ 外部一律拒。
+    3. 只能改**白名单里的键**（后端会 400 掉其它键）。
+  ============================================================================
+-->
+<style>
+  :root { --bg:#14161a; --card:#1d2026; --line:#2c3037; --fg:#e8eaee;
+          --dim:#9aa3af; --accent:#4f8cff; --ok:#3fb950; --bad:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+  header { padding:14px 16px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header .dim { color:var(--dim); font-size:12px; }
+  main { padding:16px; max-width:940px; margin:0 auto; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px;
+            padding:14px; margin-bottom:14px; }
+  section h2 { font-size:14px; margin:0 0 10px; display:flex; gap:8px; align-items:center; }
+  .hint { color:var(--dim); font-size:12px; margin:0 0 10px; }
+  .row { display:flex; gap:10px; align-items:center; padding:6px 0;
+         border-bottom:1px dashed var(--line); flex-wrap:wrap; }
+  .row:last-child { border-bottom:0; }
+  .k { width:190px; color:var(--dim); font-family:ui-monospace,Consolas,monospace;
+       font-size:12px; }
+  .cur { min-width:120px; font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  input[type=text], input[type=password], textarea, select {
+      background:#0f1114; color:var(--fg); border:1px solid var(--line);
+      border-radius:6px; padding:6px 8px; font:inherit; }
+  input[type=text], input[type=password] { flex:1; min-width:180px; }
+  textarea { width:100%; min-height:110px; font-family:ui-monospace,Consolas,monospace;
+             font-size:12px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px;
+           padding:8px 14px; font:inherit; cursor:pointer; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .tag { font-size:11px; padding:1px 6px; border-radius:99px; border:1px solid var(--line);
+         color:var(--dim); }
+  .tag.ok { color:var(--ok); border-color:var(--ok); }
+  .tag.bad { color:var(--bad); border-color:var(--bad); }
+  #msg { white-space:pre-wrap; font-size:12px; color:var(--dim); min-height:1.4em; }
+  .warn { color:var(--bad); }
+  .changed { border-color:var(--accent) !important; }
+  details summary { cursor:pointer; color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>配置台</h1>
+  <span class="dim">改 key / 通道 / 音色 / prompt —— 不重启进程</span>
+  <span id="liveTags"></span>
+</header>
+
+<main>
+  <section>
+    <h2>口令 <span class="tag" id="whereTag">检测中…</span></h2>
+    <p class="hint">本机访问免口令。从手机 / 别的电脑打开时，这里必须填服务端
+      <code>.env</code> 里的 <code>ADMIN_TOKEN</code>（没设的话外部一律拒 —— 这是故意的）。</p>
+    <div class="row">
+      <span class="k">X-Admin-Token</span>
+      <input type="password" id="token" placeholder="本机访问可以留空">
+      <button class="ghost" id="btnToken">记住（只存本机浏览器）</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>密钥 / 通道 <span class="tag" id="stateTag"></span></h2>
+    <p class="hint">密钥**只显示指纹**（完整值只在服务端进程里，接口不回传）。
+      改完点最下面的「保存并生效」→ 才会重新装配。</p>
+    <div id="envRows"></div>
+  </section>
+
+  <section>
+    <h2>Prompt 全量清单 <span class="tag" id="promptCount"></span></h2>
+    <p class="hint">这里是**当前代码里所有会喂给模型的话**：系统模板 / 说话要求 / 防注入 /
+      每个动作的指令 / 四档<b>赌注</b> / 九种<b>性格</b> / <b>音色</b>映射 / 摘要压缩。
+      <b>表里的条目是动态展开的</b> —— 代码里加了新措辞，这里自动多一项，不用改页面。
+      改完点「只保存 Prompt」：<b>下一局立刻生效</b>，进行中的那一局不受影响。</p>
+    <div id="promptRows"></div>
+    <details style="margin-top:10px">
+      <summary>只读：相关但<b>故意不给改</b>的常量（每条写了原因）</summary>
+      <div id="readonlyRows" style="font-size:12px;color:var(--dim);margin-top:6px"></div>
+    </details>
+  </section>
+
+  <section>
+    <h2>动作</h2>
+    <div class="row">
+      <button id="btnSaveEnv">保存并生效（key / 通道 / 音色）</button>
+      <button class="ghost" id="btnSavePrompt">只保存 Prompt</button>
+      <button class="ghost" id="btnReload">仅重新装配</button>
+      <button class="ghost" id="btnRefresh">刷新</button>
+    </div>
+    <div id="msg"></div>
+  </section>
+
+  <section>
+    <h2>怎么改才安全（照做）</h2>
+    <p class="hint" style="margin:0">
+      ① <b>密钥只进不出</b>：这个页面拿不到完整 key，所以别指望"把 key 复制出来"——
+      要用就在服务端 <code>.env</code> 里看。这不是限制，是防止页面成为泄露口。<br>
+      ② 从外网用之前，先在 <code>.env</code> 里设一个长口令 <code>ADMIN_TOKEN</code>，
+      并把服务端**不要**直接暴露到公网（走反向代理 + HTTPS）。<br>
+      ③ 改动会落盘到 <code>_runtime.json</code>，它的优先级**高于** <code>.env</code>；
+      看到的值和 <code>.env</code> 不一样时，以这里为准。
+    </p>
+  </section>
+</main>
+
+<script>
+'use strict';
+var CFG = null;
+var TOKEN = '';
+try { TOKEN = localStorage.getItem('tt.admin.token') || ''; } catch (e) { TOKEN = ''; }
+var el = function (id) { return document.getElementById(id); };
+var msg = function (t) { el('msg').textContent = t; };
+/* 把文本安全地放进 innerHTML / textarea：prompt 里完全可能出现 < > & 甚至字面上的
+   </textarea>，不转义就会把页面结构撑破（或把内容当标签渲染）。这不是洁癖，是必须。 */
+var esc = function (s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+};
+
+function headers() {
+  var h = { 'Content-Type': 'application/json' };
+  if (TOKEN) h['X-Admin-Token'] = TOKEN;
+  return h;
+}
+async function api(path, opts) {
+  var r = await fetch(path, Object.assign({ headers: headers() }, opts || {}));
+  var j = null;
+  try { j = await r.json(); } catch (e) { j = { error: await r.text() }; }
+  if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+
+function fmtLive(live) {
+  if (!live) return '';
+  var out = [];
+  ['asr', 'llm', 'tts'].forEach(function (k) {
+    var mock = live[k + '_mocked'];
+    out.push('<span class="tag ' + (mock ? 'bad' : 'ok') + '">' + k + ': '
+             + live[k] + (mock ? '（mock）' : '') + '</span>');
+  });
+  return out.join(' ');
+}
+
+async function load() {
+  try {
+    CFG = await api('/api/admin/config');
+  } catch (e) {
+    el('whereTag').textContent = '连不上';
+    msg('读配置失败：' + e.message);
+    return;
+  }
+  el('liveTags').innerHTML = fmtLive(CFG.live);
+  el('whereTag').textContent = CFG.local ? '本机（免口令）' : (CFG.has_token ? '外部（要口令）' : '外部（服务端未设口令 ⇒ 拒绝）');
+  el('whereTag').className = 'tag ' + (CFG.local ? 'ok' : 'bad');
+  el('stateTag').textContent = '_runtime.json：' + (CFG.overridden.length ? ('覆盖 ' + CFG.overridden.length + ' 项') : '无覆盖');
+  el('stateTag').className = 'tag ' + (CFG.overridden.length ? 'ok' : '');
+
+  var sec = {};
+  (CFG.secrets || []).forEach(function (k) { sec[k] = 1; });
+  var rows = '';
+  CFG.writable.forEach(function (k) {
+    var isSecret = !!sec[k];
+    var overridden = CFG.overridden.indexOf(k) >= 0;
+    rows += '<div class="row">'
+      + '<span class="k">' + k + (overridden ? ' <span class="tag ok">已覆盖</span>' : '') + '</span>'
+      + '<span class="cur">' + (CFG.env[k] || '（空）') + '</span>'
+      + '<input type="' + (isSecret ? 'password' : 'text') + '" data-key="' + k
+      + '" placeholder="' + (isSecret ? '留空 = 不改；只有指纹能看' : '留空 = 不改') + '">'
+      + '</div>';
+  });
+  el('envRows').innerHTML = rows;
+
+  var pr = await api('/api/admin/prompts');
+  var html = '';
+  (pr.groups || []).forEach(function (gp) {
+    html += '<div style="margin:14px 0 4px;font-size:13px">' + esc(gp.name)
+      + ' <span class="tag">' + gp.items.length + ' 项</span></div>';
+    gp.items.forEach(function (it) {
+      html += '<div style="margin-top:8px"><b>' + esc(it.key) + '</b>'
+        + (it.kind === 'json' ? ' <span class="tag">JSON（用来加/删条目）</span>' : '')
+        + '<br><span style="color:var(--dim);font-size:12px">' + esc(it.note || '')
+        + '</span></div>'
+        + '<textarea data-key="' + esc(it.key) + '">' + esc(it.value || '') + '</textarea>';
+    });
+  });
+  el('promptRows').innerHTML = html;
+  el('promptCount').textContent = (pr.count || 0) + ' 项可改';
+  el('readonlyRows').innerHTML = (pr.readonly || []).map(function (r) {
+    return '<div style="margin-top:6px"><b>' + esc(r.name) + '</b>：' + esc(r.why)
+      + '<br><code>' + esc(String(r.value).slice(0, 220)) + '</code></div>';
+  }).join('');
+  msg('已加载。改完记得点保存。');
+}
+
+function collectEnv() {
+  var patch = {};
+  var ins = document.querySelectorAll('#envRows input[data-key]');
+  for (var i = 0; i < ins.length; i++) {
+    var v = ins[i].value;
+    if (v !== '') patch[ins[i].getAttribute('data-key')] = v;
+  }
+  return patch;
+}
+function collectPrompts() {
+  /* 返回 items 数组（key 是服务端算出来的全量清单键，如 `agents:LEVELS.娱乐.stake`）。
+     全部提交而不是只提交改动：这样"把某一项清空"这种意图也能表达出来。 */
+  var out = [];
+  var tas = document.querySelectorAll('#promptRows textarea[data-key]');
+  for (var i = 0; i < tas.length; i++) {
+    out.push({ key: tas[i].getAttribute('data-key'), value: tas[i].value });
+  }
+  return out;
+}
+
+el('btnToken').onclick = function () {
+  TOKEN = el('token').value.trim();
+  try { localStorage.setItem('tt.admin.token', TOKEN); } catch (e) { /* 无所谓 */ }
+  msg(TOKEN ? '口令已记住（只存在这台浏览器）' : '口令已清空');
+  load();
+};
+el('btnSaveEnv').onclick = async function () {
+  var patch = collectEnv();
+  if (!Object.keys(patch).length) { msg('没有要改的（输入框都是空的）'); return; }
+  try {
+    var r = await api('/api/admin/config', { method: 'POST', body: JSON.stringify({ env: patch }) });
+    msg('已落盘：' + r.saved.join(', ') + '\n正在重新装配…');
+    var l = await api('/api/admin/reload', { method: 'POST' });
+    msg('已保存并生效：' + JSON.stringify(l.live) + '\n（进行中的那一局不受影响，下一局用新配置）');
+    load();
+  } catch (e) { msg('保存失败：' + e.message); }
+};
+el('btnSavePrompt').onclick = async function () {
+  try {
+    var r = await api('/api/admin/prompts', { method: 'POST', body: JSON.stringify({ prompts: collectPrompts() }) });
+    msg('prompt 已生效：' + r.applied.join(', ') + '\n' + r.note);
+  } catch (e) { msg('保存失败：' + e.message); }
+};
+el('btnReload').onclick = async function () {
+  try {
+    var l = await api('/api/admin/reload', { method: 'POST' });
+    msg('重新装配完成：' + JSON.stringify(l.live));
+    load();
+  } catch (e) { msg('重新装配失败：' + e.message); }
+};
+el('btnRefresh').onclick = load;
+
+el('token').value = TOKEN;
+load();
+</script>
+</body>
+</html>

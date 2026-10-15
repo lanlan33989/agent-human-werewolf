@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>榜单与战报</title>
+<style>
+  :root{--bg:#14161a;--card:#1d2026;--line:rgba(255,255,255,.12);--fg:#ECEDEE;
+        --dim:rgba(255,255,255,.62);--accent:#E5484D;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,
+       "PingFang SC","Microsoft YaHei",sans-serif;line-height:1.6;}
+  .wrap{max-width:900px;margin:0 auto;padding:22px 18px 60px;}
+  h1{font-size:22px;margin:0 0 4px;}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:20px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:18px;}
+  h2{font-size:16px;margin:0 0 12px;}
+  table{width:100%;border-collapse:collapse;font-size:14px;}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{color:var(--dim);font-weight:500;font-size:13px;}
+  a{color:var(--fg);}
+  a.btn{display:inline-block;padding:5px 12px;border:1px solid var(--line);border-radius:9px;
+        text-decoration:none;font-size:13px;}
+  a.btn:hover{border-color:var(--accent);}
+  .win{color:#8BD17C;font-weight:600;}
+  .tag{display:inline-block;padding:1px 8px;border-radius:8px;border:1px solid var(--line);
+       font-size:12px;color:var(--dim);}
+  .empty{color:var(--dim);font-size:14px;padding:6px 0;}
+  .nav{margin-bottom:18px;}
+  code{background:rgba(255,255,255,.07);padding:1px 6px;border-radius:6px;font-size:12.5px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>榜单与战报</h1>
+  <div class="sub" id="sub">正在读取…</div>
+  <div class="nav"><a class="btn" href="/play">← 回对局页</a></div>
+
+  <div class="card">
+    <h2>按档分组（同一档才有可比性）</h2>
+    <div id="stats"><div class="empty">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>已结束的对局</h2>
+    <div id="games"><div class="empty">—</div></div>
+  </div>
+
+  <div class="card">
+    <h2>说明</h2>
+    <div class="sub" style="margin:0">
+      榜单只统计**内存里还活着**的对局（探针阶段不做持久化，重启即清空）。<br>
+      战报会揭示所有人的身份，所以**只在局末**能取（局中访问会返回 409）。<br>
+      指标按档分组：不同档的 AI 不是一回事（赌注措辞、说话要求都不同），混在一起算的胜率没有意义。
+    </div>
+  </div>
+</div>
+
+<script>
+function pct(v){ return (v === null || v === undefined) ? '—' : Math.round(v * 100) + '%'; }
+
+async function load(){
+  try {
+    var st = await (await fetch('/api/game/stats')).json();
+    var gm = await (await fetch('/api/game/games')).json();
+  } catch(e){
+    document.getElementById('sub').textContent = '读取失败：' + e.message;
+    return;
+  }
+  document.getElementById('sub').textContent =
+    '共 ' + (gm.games || []).length + ' 局已结束 ｜ ' + (gm.note || '');
+
+  var groups = st.by_level || {};
+  var keys = Object.keys(groups);
+  var box = document.getElementById('stats');
+  if (!keys.length){
+    box.innerHTML = '<div class="empty">还没有打完的局。去对局页开一局，结束回来看。</div>';
+  } else {
+    var h = '<table><tr><th>档位</th><th>局数</th><th>狼胜</th><th>好人胜</th>'
+          + '<th>平均轮数</th><th>真人座位胜率</th><th>AI 座位胜率</th></tr>';
+    keys.sort();
+    keys.forEach(function(k){
+      var g = groups[k];
+      h += '<tr><td><span class="tag">' + k + '</span></td>'
+        + '<td>' + g.games + '</td>'
+        + '<td>' + g.wolf_wins + '</td>'
+        + '<td>' + g.good_wins + '</td>'
+        + '<td>' + (g.avg_rounds === null ? '—' : g.avg_rounds) + '</td>'
+        + '<td>' + pct(g.human_seat_win_rate) + '</td>'
+        + '<td>' + pct(g.ai_seat_win_rate) + '</td></tr>';
+    });
+    box.innerHTML = h + '</table>';
+  }
+
+  var list = gm.games || [];
+  var gb = document.getElementById('games');
+  if (!list.length){
+    gb.innerHTML = '<div class="empty">暂无。战报在每局结束后自动生成。</div>';
+  } else {
+    var h2 = '<table><tr><th>局号</th><th>板子</th><th>档位</th><th>结果</th>'
+           + '<th></th></tr>';
+    list.forEach(function(g){
+      h2 += '<tr><td><code>' + g.gid + '</code></td>'
+          + '<td>' + g.board + '</td>'
+          + '<td>' + (g.level || '—') + '</td>'
+          + '<td class="' + (g.winner === 'wolf' ? 'win' : '') + '">'
+          + (g.winner === 'wolf' ? '狼人胜' : '好人胜') + '（' + g.rounds + ' 轮）</td>'
+          + '<td><a class="btn" href="' + g.report + '" target="_blank">战报</a> '
+          + '<a class="btn" href="' + g.replay + '" target="_blank">日志</a></td></tr>';
+    });
+    gb.innerHTML = h2 + '</table>';
+  }
+}
+load();
+</script>
+</body>
+</html>

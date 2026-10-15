@@ -1,0 +1,1087 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#5B21B6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>面杀AI玩家 · 对局</title>
+<!--
+  真引擎驱动的对局页。
+
+  与 demo/index.html 的关系：
+    · 界面形式**以 demo/index.html 为绝对参照** —— 样式表 table.css 和
+      排座/座位特效 table.js 都是从它**原样提取**的，页面结构也用同一套 id
+      （p0 封面 / p3 身份牌 / p4 牌桌），保证两边长得一模一样。
+    · demo/index.html 本身**一个字符都没有改动** —— 它是纯前端演示，留着给人看。
+    · 区别只有一个：这一页的数据来自真引擎（/api/game/*），不是前端编的剧本。
+
+  为什么不做成单文件双击打开：数据必须来自引擎，而引擎在服务端。
+  起服务后打开 http://localhost:8000/play 即可（手机同局域网也能开）。
+-->
+<link rel="stylesheet" href="/table.css">
+<style>
+  /* 只加 demo 里没有的两块：轮盘、发言记录。其余全部走 table.css。 */
+  /* ===== 2026-10-05 大改版：黑色半透明交接卡片全部取消 =====
+     #handoff 现在只是：① 一个纯状态标记（.on = 有人拿着手机）；
+     ② 底部一条透明操作条（打字兜底 / 提示 / 报错），没有卡片底、没有幕布。 */
+  #handoff{
+    position:absolute;inset:0;z-index:9;display:none;
+    background:transparent;pointer-events:none;
+    flex-direction:column;justify-content:flex-end;
+  }
+  #handoff.on{display:flex;}
+  #handoff .sheet{
+    pointer-events:none;display:flex;flex-direction:column;
+    margin:0 10px calc(env(safe-area-inset-bottom,0px) + 2px);
+    padding:0;background:transparent;box-shadow:none;max-height:none;overflow:visible;
+  }
+  #handoff .sheet > *{pointer-events:auto;}
+  #handoff .tip{margin-top:6px;font-size:13px;color:rgba(255,255,255,.75);text-align:center;
+    text-shadow:0 1px 4px rgba(0,0,0,.7);}
+  #handoff #hoSpeak{display:none;flex-direction:column;gap:8px;margin-top:6px;}
+  #handoff #hoSpeak.on{display:flex;}
+  #handoff .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px;}
+  #handoff .row button{
+    min-width:74px;padding:14px 10px;border-radius:14px;border:1px solid rgba(255,255,255,.28);
+    background:rgba(0,0,0,.45);color:#fff;font-family:inherit;font-size:18px;font-weight:700;
+  }
+  #handoff .row button.sel{background:var(--yellow);color:var(--purple-d);border-color:var(--yellow);}
+  #handoff .row button[disabled]{opacity:.4;}
+  #handoff input{
+    width:100%;padding:14px;border-radius:12px;font-family:inherit;font-size:16px;
+    border:1px solid rgba(255,255,255,.28);background:rgba(0,0,0,.45);color:#fff;
+  }
+  /* ===== 轮盘（大圆 = 唯一按钮区域）===== */
+  #wheelRot{
+    position:absolute;inset:0;border-radius:50%;
+    transform:rotate(0deg);will-change:transform;
+  }
+  /* 号码刻度：按人数均分圆周，JS 算好角度后用 left/top 定位 */
+  .wnum{
+    position:absolute;width:46px;height:46px;border-radius:50%;
+    transform:translate(-50%,-50%);
+    border:2.5px solid rgba(255,255,255,.4);
+    background:rgba(255,255,255,.10);color:#fff;
+    font-family:inherit;font-size:19px;font-weight:800;line-height:1;
+    display:flex;align-items:center;justify-content:center;
+    padding:0;
+  }
+  .wnum.human{border-color:#4da3ff;}
+  .wnum.ai{border-color:#ff5252;}
+  .wnum.dead{opacity:.3;}
+  .wnum.pick{cursor:pointer;animation:pickBreathe 1.5s ease-in-out infinite;}
+  .wnum.sel{background:var(--yellow);color:var(--purple-d);border-color:var(--yellow);}
+  .wnum.victim{border-color:#ff5a5a;background:rgba(255,90,90,.3);color:#ffd9d9;}
+  /* 刻度上的私有标记（队友/验人/狼刀指向）—— 随轮盘一起转 */
+  .wnum .tag{
+    position:absolute;top:-14px;left:50%;transform:translateX(-50%);
+    font-size:11px;font-weight:700;font-style:normal;white-space:nowrap;
+    color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8);pointer-events:none;
+  }
+  .wnum .tag.wolfmate{color:#ff9b9b;}
+  .wnum .tag.seerwolf{color:#ff7b7b;}
+  .wnum .tag.seergood{color:#9fd0ff;}
+  .wnum .tag.knife{color:#ffd53d;}
+  /* 圆心按钮（点圆心 = 确认/开始/交回）—— 大圆本体的点击语义由 JS 状态机决定 */
+  #p4 .tcenter{touch-action:none;}   /* 拖盘旋转必须掐掉浏览器滚动手势 */
+  #p4 .tcenter.acting{border-color:var(--yellow);
+    box-shadow:0 0 0 6px rgba(255,213,61,.18);cursor:pointer;}
+  #p4 .tcenter .who{white-space:normal;}
+  /* 倒计时数字（2026-10-06 用户定：神职 15s / 狼刀 20s，服务端裁决） */
+  #cdNum{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+    font-size:30px;font-weight:800;color:var(--yellow);line-height:1;
+    font-variant-numeric:tabular-nums;}
+  #cdNum.urgent{color:#ff5a5a;animation:cdBlink 1s steps(2) infinite;}
+  @keyframes cdBlink{50%{opacity:.35;}}
+  /* 预言家结果的大标识（2026-10-07 第二期用户定稿）：播报「他是这个」时
+     圆盘上显示大大的好（绿）/坏（红），3 秒后消失（与「预言家请闭眼」同时）。
+     只有本人看得到 —— AI 预言家/没验人时它根本不出现。 */
+  #seerBig{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    display:none;z-index:8;pointer-events:none;
+    font-size:132px;font-weight:900;line-height:1;
+    text-shadow:0 6px 22px rgba(0,0,0,.75);}
+  #seerBig.on{display:block;}
+  #seerBig.good{color:#5ac878;}
+  #seerBig.bad{color:#ff5a5a;}
+  /* 女巫的 ✓ / ✕：两个都大（用户点名） */
+  #wheelBtns{position:absolute;left:0;right:0;bottom:-64px;display:none;
+    justify-content:center;gap:26px;z-index:10;}
+  #wheelBtns.on{display:flex;}
+  #wheelBtns button{
+    width:76px;height:76px;border-radius:50%;font-size:38px;line-height:1;
+    font-family:inherit;font-weight:800;border:3px solid;
+    cursor:pointer;padding:0;
+  }
+  #wheelYes{background:rgba(90,200,120,.18);border-color:#5ac878;color:#8be38b;}
+  #wheelNo{background:rgba(255,90,90,.14);border-color:#ff5a5a;color:#ff9b9b;}
+  /* 空刀时解药按钮**置灰不可点**（2026-10-07 用户定：照常走解药播报与面板流程，
+     只是解药按钮置灰）。pointer-events 也关掉 —— 免得长按/触摸还留一条缝。 */
+  #wheelYes.off, #wheelYes:disabled{
+    background:rgba(255,255,255,.06);border-color:#5b6472;color:#7b8593;
+    opacity:.6;filter:grayscale(1);pointer-events:none;}
+  /* 轮盘下方的补充入口（空刀 / 都不用 / 交回） */
+  #wheelExtra{position:absolute;left:50%;transform:translateX(-50%);
+    bottom:calc(14px + 44px + 58px);display:none;gap:10px;justify-content:center;
+    z-index:6;width:max-content;max-width:96%;}
+  #wheelExtra.on{display:flex;}
+  #wheelExtra button{
+    min-width:86px;padding:12px 14px;border-radius:999px;font-size:15px;font-weight:700;
+    border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.45);
+    color:#fff;font-family:inherit;
+  }
+  /* 播报进度条跟着顶栏一起删了； speakQueue 里的 progBar 引用已去掉 */
+  #logbox{
+    flex:0 0 auto;max-height:26vh;overflow-y:auto;
+    margin-top:8px;padding:10px 12px;border-radius:14px;
+    background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.12);
+    font-size:13px;line-height:1.6;color:rgba(255,255,255,.82);
+  }
+  #logbox .sys{color:rgba(255,213,61,.92);}
+  #logbox .say{margin-top:2px;}
+  #health{font-size:12px;line-height:1.7;color:rgba(255,255,255,.72);text-align:center;margin-top:10px;}
+  #health .bad{color:#FFB4B4;}
+  #health .ok{color:#B7F0B1;}
+  /* 人数输入 —— 替代原来的「选一个板子」（2026-09-15 改） */
+  .counters{display:flex;gap:16px;justify-content:center;align-items:center;margin-top:10px;}
+  .counters label{font-size:15px;color:rgba(255,255,255,.82);}
+  .counters input{
+    width:66px;margin-left:6px;padding:8px;border-radius:10px;text-align:center;
+    border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.1);
+    color:#fff;font-family:inherit;font-size:18px;
+  }
+  #rulesLine{font-size:13px;line-height:1.7;color:rgba(255,255,255,.72);text-align:center;margin-top:12px;}
+  #rulesLine .bad{color:#FFB4B4;}
+  /* 档位选择：四个并排按钮 + 一行说明 */
+  .levels{display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap;}
+  .levels button{
+    flex:1 1 0;min-width:70px;padding:10px 6px;border-radius:12px;cursor:pointer;
+    border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);
+    color:rgba(255,255,255,.82);font-family:inherit;font-size:15px;
+  }
+  .levels button.on{background:#E5484D;border-color:#E5484D;color:#fff;font-weight:700;}
+  .leveldesc{font-size:12px;line-height:1.6;color:rgba(255,255,255,.6);text-align:center;margin-top:8px;min-height:32px;}
+  /* 合规提醒横幅（连续使用超 2 小时） */
+  .longuse{display:none;margin-top:10px;padding:10px 12px;border-radius:12px;
+           background:rgba(255,213,61,.12);border:1px solid rgba(255,213,61,.4);
+           color:#FFE08A;font-size:12.5px;line-height:1.6;text-align:left;}
+  .longuse.on{display:block;}
+  /* 规则开关：一行一项，勾选框/下拉靠左 */
+  .switches{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+  .sw{display:flex;align-items:center;gap:8px;font-size:13.5px;color:rgba(255,255,255,.86);}
+  .sw input[type=checkbox]{width:18px;height:18px;accent-color:#E5484D;}
+  .sw select{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);
+             border-radius:8px;padding:4px 8px;font-family:inherit;font-size:13px;}
+  /* 局末出口：战报与榜单（局中隐藏） */
+  .endlinks{display:none;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px;}
+  .endlinks a{text-decoration:none;}
+  /* 现场诊断面板（手机排查用）—— **固定浮层**，任何页面都能打开。
+     为什么必须是浮层：它原来挂在牌桌页里，而"连一局都开不起来"的时候根本进不了牌桌页 ——
+     最需要诊断的时刻恰恰看不到它（用户 2026-09-19 就是这么反馈的）。
+     手机上也没有控制台，用户能说的只有"没反应"，而"没反应"至少有五种原因
+     （不是安全上下文 / 没给麦克风接口 / 约束被拒 / 音频没解锁 / 识别通道不通），
+     所以这些必须逐条摆到屏幕上，而不是让人去猜。 */
+  .diagpanel{display:none;position:fixed;z-index:80;
+             left:50%;transform:translateX(-50%);
+             width:min(410px, calc(100vw - 20px));
+             bottom:calc(env(safe-area-inset-bottom,0px) + 10px);
+             max-height:72vh;overflow-y:auto;
+             padding:12px;border-radius:14px;
+             background:rgba(8,2,18,.97);border:1px solid rgba(255,255,255,.22);
+             box-shadow:0 10px 30px rgba(0,0,0,.6);
+             color:rgba(255,255,255,.86);font-size:12px;line-height:1.7;
+             text-align:left;word-break:break-all;
+             font-family:ui-monospace,Consolas,monospace;}
+  .diagpanel.on{display:block;}
+  .diagpanel .k{color:#FFD53D;}
+  .diagpanel .bad{color:#FFB4B4;}
+  .diagpanel .ok{color:#8BE38B;}
+  /* 诊断悬浮按钮：固定在最上层（z-index 高于交接浮层的 9），
+     手机上任何时候都点得到。半透明、小，尽量不碍事。 */
+  .diagfab{position:fixed;z-index:90;padding:0;
+           top:calc(env(safe-area-inset-top,0px) + 6px);
+           right:calc(50% - min(215px, 50vw) + 6px);
+           width:34px;height:34px;border-radius:50%;font-size:15px;line-height:1;
+           background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.28);
+           color:#FFD53D;opacity:.6;font-family:inherit;}
+  .diagfab:active{opacity:1;}
+  /* 录音按钮（原「按住说话」）。
+     ⚠️ 2026-09-29 起交互是**点一下开始、再点一下结束**，而且按钮里**不放文字**：
+        · 有文字时手机上长按会弹浏览器自带的"复制"菜单 ⇒ 去掉文字节点（外观用 ::before 画）。
+        · "按住"那一套手势问题（手指移动被判成滚动 ⇒ pointercancel ⇒ 秒松开）随之消失；
+          但 `touch-action:none` **继续保留** —— 对"点按"它同样是对的：
+          避免手指在按钮上小幅移动被当成滚动，把这一下点击吞掉。
+        · 状态不再写在按钮文字上：`.on` = 正在录音（话筒圆点 → 红方块）。 */
+  #hoSay{touch-action:none;-webkit-touch-callout:none;user-select:none;
+         display:inline-flex;align-items:center;justify-content:center;
+         min-width:104px;}
+  #hoSay::before{content:"";width:16px;height:16px;border-radius:50%;
+                 background:currentColor;opacity:.9;}
+  #hoSay.on::before{border-radius:4px;background:#ff5a5a;opacity:1;}
+  #hoSay.on{box-shadow:0 0 0 2px rgba(255,90,90,.5) inset;}
+  /* 浮层里的其它按钮：别让双击缩放/滚动把它们的手势吃掉。
+     🔴 **必须排除 #hoSay**（2026-09-21 修）。原因是一条很隐蔽的特异性压制：
+       这一条的特异性是 0,1,1,1（#handoff .sheet button），而上面 152 行的
+       `#hoSay{touch-action:none}` 是 0,1,0,0 —— **无论谁写在后面都输**，
+       于是"按住说话声明 touch-action:none"那个修复一直是**死代码**：
+       手机上长按照样被浏览器判成滚动手势 ⇒ pointercancel ⇒ 秒自己松开，
+       正是 §9.3 记的那个用户报障。修法是让这条批量规则**不匹配它**，
+       而不是把 152 行挪到后面（同样是 0,1,0,0，挪了也没用）。
+       抓到它的是 `_smoke-play.js` 里那条 touch-action 断言 ——
+       在此之前它从没在"交接屏开着"的状态下跑过，所以一直没露出来。 */
+  #handoff .sheet button{touch-action:manipulation;}
+  /* 座次编排（2026-10-01）：开局前拖动决定人类/AI 的座位顺序 */
+.planChip { display:inline-block; padding:5px 8px; border-radius:8px; font-size:12px;
+            border:1px solid #c9c2b8; background:#fff; cursor:grab; user-select:none; }
+.planChip.ph { background:#3b2a86; color:#fff; border-color:#3b2a86; }
+.planChip.pa { color:#333; }
+.planChip.sel { outline:3px solid #e8a33d; }
+.planChip.drag { opacity:.4; }
+/* ===== 单个大圆（2026-10-02 用户定，只改本页，demo 不动）=====
+   ① 不再一圈座位：谁在说话，大圆就显示谁（N号玩家（AI）/（人类）/法官）。
+   ② AI 文本不上屏，只有票型用大字展示。
+   ③ 人类发言回合：大圆显示「N号玩家（人类）」，点一下开始、再点一下结束，
+      并且**不再弹半透明交接卡片**（.sheet）。 */
+#p4 .seat, #p4 .wound{display:none;}
+#p4 .tcenter{ width:min(58vw,300px); height:min(58vw,300px); }
+#p4 .tcenter .g{ font-size:calc(min(58vw,300px) * .2); }
+#p4 .tcenter .t{ font-size:calc(min(58vw,300px) * .1); letter-spacing:1px; }
+#p4 .tcenter .who{ font-size:calc(min(58vw,300px) * .14); font-weight:800;
+  color:#fff; margin-top:8px; text-align:center; line-height:1.35; padding:0 10px;
+  white-space:nowrap; }
+#p4 .tcenter.pickable{ cursor:pointer;
+  border-color:var(--yellow);
+  animation:pickBreathe 1.5s ease-in-out infinite; }
+#p4 .tcenter.rec{ border-color:#ff5a5a;
+  box-shadow:0 0 0 8px rgba(255,90,90,.25); }
+/* 票型大字：贴在大圆下方，投票结算后一直显示到下一次投票 */
+#voteBig{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
+  max-width:94%; text-align:center; font-size:27px; font-weight:800;
+  color:#FFE08A; text-shadow:0 2px 12px rgba(0,0,0,.65);
+  pointer-events:none; z-index:5; line-height:1.4; display:none; }
+/* 大圆发言模式下的提示行与按钮（2026-10-02）：
+   提示行 = 录音状态唯一可见处（● 红 = 正在录音）；按钮 = 过 / 打字 */
+#spkTip{ position:absolute; left:50%; bottom:calc(14px + 44px + 54px); transform:translateX(-50%);
+  max-width:94%; text-align:center; font-size:14px; font-weight:600;
+  color:rgba(255,255,255,.88); text-shadow:0 1px 6px rgba(0,0,0,.65);
+  z-index:5; display:none; line-height:1.5; }
+#spkTip.rec{ color:#FF9B9B; }
+#sayCtl{ position:absolute; left:50%; bottom:calc(14px + 44px); transform:translateX(-50%);
+  z-index:5; display:none; }
+#sayCtl.on{ display:block; }
+#sayCtl button{ min-width:96px; padding:13px 18px; border-radius:14px; font-size:17px;
+  font-weight:700; border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.35); color:#fff; font-family:inherit; }
+/* 大圆发言模式复用 startSay/stopSay：它们要 #hoSay/#hoText/#hoStatus 存在，
+   这里给一套视觉上隐藏的（display:none 会连事件一起藏 —— 无妨，点击走大圆） */
+#spkHolder{ display:none; }
+/* ===== 座位小圆（2026-10-02 用户追加）=====
+   大圆顶部一排小圆代表玩家：圆内只有号码，人类蓝轮廓、AI 红轮廓；
+   轮到谁行动，光标（黄色小三角）就滑到谁头上 —— 位置用 transition 平滑过去，
+   而不是瞬移，这样"轮转"看得见。一行至多 8 个（超出自动换行）。 */
+#seatDots{ position:absolute; left:50%; top:8px; transform:translateX(-50%);
+  display:flex; flex-wrap:wrap; justify-content:center; gap:9px;
+  max-width:344px;                                /* 8×34 + 7×9 = 335，留 9px 余量 */
+  z-index:4; pointer-events:none; }
+.seatdot{ position:relative; width:34px; height:34px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:16px; font-weight:800; color:#fff;
+  background:rgba(255,255,255,.07);
+  transition:box-shadow .3s, background .3s, opacity .3s; }
+.seatdot.human{ border:2.5px solid #4da3ff; }     /* 蓝 = 人类 */
+.seatdot.ai{ border:2.5px solid #ff5252; }        /* 红 = AI */
+.seatdot.dead{ opacity:.32; }
+.seatdot.active{ box-shadow:0 0 0 4px rgba(255,213,61,.4);
+  background:rgba(255,213,61,.16); }
+#dotCursor{ position:absolute; width:0; height:0; display:none;
+  border-left:9px solid transparent; border-right:9px solid transparent;
+  border-top:11px solid var(--yellow);
+  transition:left .45s cubic-bezier(.4,.1,.2,1), top .45s cubic-bezier(.4,.1,.2,1);
+  z-index:5; filter:drop-shadow(0 1px 4px rgba(0,0,0,.5)); }
+/* 狼夜实时盘子：一个座位格 = 谁点了它 + 几个锁定 */
+.wchip { display:inline-block; min-width:52px; padding:4px 6px; border-radius:8px;
+         border:1px solid #c9c2b8; background:#fff; text-align:center; font-size:12px; }
+.wchip.hot { border-color:#c0392b; background:#fdecea; }
+
+/* 封面上的诊断入口（小字按钮，不抢「开始一局」的视线） */
+  .diaglink{margin-top:12px;padding:9px 12px;border-radius:12px;font-family:inherit;
+            font-size:13px;color:rgba(255,255,255,.82);background:transparent;
+            border:1px dashed rgba(255,255,255,.32);}
+  /* 封面在手机上**必须能滚**（2026-09-19 用户报障"开始一局/人数按钮全没了"）。
+     原因不是没渲染，是被**裁掉**：`#phone` 是固定高度的 overflow:hidden 列，
+     而 `#p0` 又是 `justify-content:center` —— 内容只要比屏幕高，
+     **上下会同时被切**（居中 + 溢出是最阴的组合，看着像"按钮消失了"）。
+     为什么现在才暴露：批八/批九往封面加了三组控件（玩多大 / AI 性格 / 规则开关，
+     其中规则开关由后端表自动生成 ⇒ 条目只会越来越多），把封面顶超了。
+     修法：让 `#p0` 自己滚动、内容从**顶部**排；`.mid` 不再 flex:1
+     （在滚动容器里 flex:1 会被压成 0，logo 就贴到顶上了）。 */
+  #p0{align-items:stretch;justify-content:flex-start;overflow-y:auto;
+      -webkit-overflow-scrolling:touch;}
+  #p0 .mid{flex:0 0 auto;padding:6px 0 10px;}
+  /* ===== 2026-10-12 用户定稿：夜间/投票拨号盘（弃用大圆盘）=====
+     页面除号码数字外无文案；顶部 = 角色大字 + 倒计时。 */
+  #nightDial{display:none;position:absolute;left:50%;top:50%;
+    transform:translate(-50%,-50%);z-index:7;
+    grid-template-columns:repeat(3,1fr);gap:10px;width:min(84vw,350px);}
+  #nightDial.on{display:grid;}
+  #nightDial button{aspect-ratio:1;border-radius:50%;font-size:30px;font-weight:800;
+    font-family:inherit;border:2.5px solid rgba(255,255,255,.4);
+    background:rgba(255,255,255,.10);color:#fff;padding:0;cursor:pointer;}
+  #nightDial button.human{border-color:#4da3ff;}
+  #nightDial button.ai{border-color:#ff5252;}
+  #nightDial button.dead{opacity:.3;pointer-events:none;}
+  #nightDial button.victim{border-color:#ff5a5a;background:rgba(255,90,90,.3);color:#ffd9d9;
+    animation:pickBreathe 1.5s ease-in-out infinite;}
+  #nightDial button.act{border-color:var(--yellow);color:var(--yellow);
+    background:rgba(255,213,61,.12);font-size:15px;}
+  #dialHead{display:none;position:absolute;left:50%;top:10px;transform:translateX(-50%);
+    z-index:7;text-align:center;width:max-content;pointer-events:none;}
+  #dialHead.on{display:block;}
+  #dialHead .r{font-size:32px;font-weight:900;color:#fff;
+    text-shadow:0 2px 10px rgba(0,0,0,.7);line-height:1.3;}
+  #dialHead .cd{font-size:36px;font-weight:800;color:var(--yellow);
+    font-variant-numeric:tabular-nums;line-height:1.1;}
+  #dialHead .cd.urgent{color:#ff5a5a;animation:cdBlink 1s steps(2) infinite;}
+  /* ===== 2026-10-12 用户：底部按钮挪右上角（与诊断并排同大小），小字在其下 ===== */
+  #topctl{position:fixed;z-index:95;display:flex;gap:8px;
+          top:calc(env(safe-area-inset-top,0px) + 6px);
+          /* 🔴 锚在**手机框**（#phone）右上角，不是浏览器窗口右上角（用户 2026-10-12） */
+          right:calc(50% - min(215px, 50vw) + 56px);}
+  #topctl button{width:34px;height:34px;border-radius:50%;font-size:15px;line-height:1;
+    background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.28);
+    color:#fff;font-family:inherit;padding:0;cursor:pointer;}
+  #topctl button:active{opacity:1;}
+  .diagfab{right:calc(50% - min(215px, 50vw) + 8px) !important;
+           top:calc(env(safe-area-inset-top,0px) + 6px) !important;}
+  #series{position:fixed;z-index:94;top:calc(env(safe-area-inset-top,0px) + 46px);
+          right:calc(50% - min(215px, 50vw) + 8px);max-width:min(430px,100vw);
+          font-size:11px;color:rgba(255,255,255,.62);text-align:right;
+          background:transparent;border:none;padding:0;margin:0;}
+</style>
+</head>
+<body>
+
+<div id="phone">
+
+  <!-- ============ 第 0 页：封面 / 开局 ============ -->
+  <section class="page on" id="p0">
+    <div class="mid">
+      <div class="logo">面杀 AI 玩家</div>
+      <div class="sub">4 个人，玩出 8 人局的推理密度</div>
+      <div class="tip" style="margin-top:22px">把这部手机放在桌子中央</div>
+    </div>
+    <div class="pad">
+      <div class="h2">定几个人</div>
+      <div class="counters">
+        <label>真人<input type="number" id="nHuman" min="1" max="8" value="2"></label>
+        <label>AI<input type="number" id="nAi" min="0" max="9" value="2"></label>
+        <!-- 座次编排（2026-10-01）：默认 = 真人 1 号先发言 + 真人之间均匀隔 AI；
+             拖动（电脑）或点两下交换（手机）可任意调。开局时随 /new 发给后端。 -->
+        <div id="planWrap" style="margin-top:8px">
+          <div id="planRow" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
+          <div style="margin-top:4px">
+            <button id="planDefault" class="bigbtn" style="padding:6px 10px;font-size:12px">恢复推荐排位</button>
+            <span class="tip" style="font-size:11px">推荐 = 真人先发言、真人之间均匀隔 AI</span>
+          </div>
+        </div>
+      </div>
+      <!-- 档位按钮**由 /api/game/rules 动态生成**（见 renderLevels）。
+           不写死档位名：否则后端加一档，前端忘改 ⇒ 那一档永远选不到。 -->
+      <div class="h2" style="margin-top:16px">玩多大</div>
+      <div id="levelRow" class="levels"></div>
+      <!-- AI 性格（H2）：从 /api/game/rules 的表生成（含"不配/随机"两个特殊值）。
+           人格**与身份无关**（按座位分配、不看角色）⇒ 它不构成身份信号。 -->
+      <div class="h2" style="margin-top:16px">AI 性格</div>
+      <div id="personaRow" class="levels"></div>
+      <!-- 规则开关**由 /api/game/settings 的表生成**（见 renderSwitches）。
+           和档位按钮同一个理由：不写死键名与选项，后端加开关前端自动多一个。 -->
+      <div class="h2" style="margin-top:16px">规则开关</div>
+      <div id="switchRow" class="switches"></div>
+      <div id="rulesLine">—</div>
+      <button class="bigbtn" id="btnNew">开始一局</button>
+      <!-- 2026-10-01（用户要求）：刷新/重开之后**一定停在封面**，不再自动进桌面。
+           上一局如果还活着，这个按钮会自己冒出来 —— 接不接回由人决定。
+           （不是删掉"断线恢复"，而是**不再替用户做决定**：锁屏/误刷新仍不会丢局。） -->
+      <button class="bigbtn" id="btnResume" hidden>继续上一局</button>
+      <div class="warn" id="bootMsg"></div>
+      <!-- 榜单与战报（2026-10-12 用户：从局末出口挪到设置页底部） -->
+      <a class="bigbtn" id="lnkBoard" href="/board" target="_blank" rel="noopener"
+         style="display:block;text-align:center;margin-top:10px;text-decoration:none">榜单与战报</a>
+    </div>
+  </section>
+
+  <!-- ============ 第 3 页：身份牌（交接式保密） ============ -->
+  <section class="page" id="p3">
+    <div class="pad">
+      <div class="cfg" id="cfgTop">—</div>
+      <div class="cfgnote" id="cfgNote">把手机递给本人，看完牌再交回桌子中央</div>
+    </div>
+    <div class="cardarea">
+      <div class="bigcard" id="bigcard">
+        <div class="inner">
+          <div class="face front"><div class="q">?</div><div class="t">点一下看牌</div></div>
+          <div class="face back" id="bigback"><div class="r">—</div><div class="k">—</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="cardhint" id="cardHint">—</div>
+    <div class="pad"><button class="bigbtn" id="btnNextCard">看完，交给下一位</button></div>
+  </section>
+
+  <!-- ============ 第 4 页：牌桌 ============ -->
+  <!-- 2026-10-05 用户定（大改版）：
+       ① 顶部金色标题栏整条去掉 —— 公有信息只进底部日志区（renderLog）。
+       ② 中间大圆 = 唯一按钮区域 = **轮盘**：可拖动旋转（线下围坐，各自把
+          自己的号码转到面前），点数字选中、再点圆心确认，完成
+          刀/守/毒/验/枪/投票；夜间的私有信息（队友/验人/被刀）直接标在
+          号码刻度上，随轮盘一起转。
+       ③ 所有黑色半透明交接卡片（.sheet）取消。 -->
+  <section class="page" id="p4">
+    <div class="tablewrap" id="tablewrap">
+      <div class="table" id="table">
+        <div class="tcenter" id="bigCircle">
+          <div id="wheelRot"><div class="acts" id="hoActs"></div></div>
+          <div class="g" id="bigIcon">⚖️</div>
+          <div class="t" id="bigTitle">法官</div>
+          <div class="who" id="bigWho"></div>
+          <div id="cdNum" aria-label="剩余秒数"></div>
+          <div id="seerBig" aria-label="验人结果（好/坏）"></div>
+          <div id="wheelBtns">
+            <button id="wheelYes" aria-label="使用解药">✓</button>
+            <button id="wheelNo" aria-label="不用解药">✕</button>
+          </div>
+        </div>
+      </div>
+      <div id="wheelExtra"></div>
+      <!-- 座位小圆（2026-10-02 用户追加）：号码 + 人类蓝/AI 红 + 行动光标 -->
+      <!-- 座位号码标识排列：2026-10-07 用户定「直接去掉」。
+           （`renderDots` / `moveDotCursor` 都自带 `if (!wrap) return`，删掉这个容器即可
+            变成空操作；CSS 里的 #seatDots/#dotCursor/.seatdot 已成死样式，下次清理。） -->
+      <!-- 票型大字（2026-10-02 用户定：不显示 AI 文本，只把票型大字展示） -->
+      <div id="voteBig"></div>
+      <!-- 拨号盘（2026-10-12 用户定稿）：夜间操作 + 投票；顶部角色大字 + 倒计时 -->
+      <div id="dialHead"><div class="r"></div><div class="cd" id="dialCd"></div></div>
+      <div id="nightDial"></div>
+      <!-- 大圆发言模式的提示行 + 按钮（2026-10-02：录音状态要看得见；
+           识别失败不再自动弹卡片 —— 提示行给指引，「打字」是手动出口） -->
+      <div id="spkTip"></div>
+      <!-- 「打字 / 过」两个按钮已去掉（2026-10-07 用户定：发言屏只有号码 + 开麦/关麦） -->
+      <!-- 大圆发言模式复用 startSay/stopSay（它们要 #hoSay/#hoText/#hoStatus 存在）：
+           给一套视觉隐藏的，点击走大圆本体 -->
+      <div id="spkHolder">
+        <input id="hoText"><div id="hoStatus"></div><button id="hoSay"></button>
+      </div>
+    </div>
+    <!-- 日志区已整体删除（2026-10-12 用户：所有页面都不要）——公有信息以播报为准 -->
+    <!-- ⏭ / ↻ 已挪到右上角 #topctl（2026-10-12 用户：与诊断按钮并排同大小） -->
+    <div class="footnote" id="foot">—</div>
+    <!-- 场次计时（跨局累计）+ 合规提醒横幅。两者都是静态 DOM，
+         不能被 foot() 的 textContent 清掉。 -->
+    <div class="footnote" id="series">—</div>
+    <div id="longUse" class="longuse"></div>
+    <!-- 局末出口（静态 DOM，不能被 foot() 的 textContent 清掉）：
+         战报只在局末可取 —— 接口层对局中访问会返回 409（战报会揭示所有人身份）。 -->
+    <div id="endLinks" class="endlinks">
+      <a id="lnkReport" class="bigbtn" target="_blank" rel="noopener">本局战报</a>
+    </div>
+
+    <!-- 交接浮层已并入轮盘（2026-10-05 用户定：取消所有黑色半透明半屏）。
+         #handoff 保留为纯状态标记（class on = 有人拿着手机操作轮盘），
+         兼作「打字」兜底输入条的唯一可见内容。 -->
+    <div id="handoff">
+      <div class="sheet">
+        <div class="tip" id="hoTip" style="display:none">—</div>
+        <div id="hoSpeak"></div>
+        <div class="tip" id="hoErr" style="color:#FFB4B4;min-height:20px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 快进 / 重开：右上角与诊断按钮并排（2026-10-12 用户定稿） -->
+  <div id="topctl">
+    <button id="btnSkip" title="跳过这句">⏭</button>
+    <button id="btnAgain" title="再来一局">↻</button>
+  </div>
+  <!-- 诊断入口（**悬浮**）：手机上这是唯一的排查手段（没有控制台）。 -->
+  <button id="btnDiag" class="diagfab" title="语音 / 麦克风诊断">🩺</button>
+  <!-- 诊断面板：固定在 #phone 上（不是某一页里），连一局都开不起来时也能打开。
+       别的地方也能开：封面上的小字按钮、或 /play?diag=1。 -->
+  <div id="diagPanel" class="diagpanel"></div>
+
+</div><!-- /#phone -->
+
+<script src="/rec.js"></script>
+<script src="/table.js"></script>
+<script src="/speech_ui.js"></script>
+<script src="/tableui.js"></script>
+<script>
+/* ============================================================
+   对局页接线：真引擎 → 界面
+
+   引擎那边唯一的信息出口是 get_view_for(seat)（见 HANDOFF-开发交接单.md §10 不变量），
+   这一页只通过它拿私有信息，所以「界面不知道谁是狼」这条依然成立。
+   ============================================================ */
+
+var S = { seats: [], wolfNos: [1], seerNo: null, seatPx: 0, woundBase: 4,
+          chords: [], gaps: [], rx: 0, ry: 0 };
+
+var GID = null, RULES = null;
+var PUBLIC = null, SPOKEN = 0, SPEAKING = false, PAUSED = false, VOICE_ON = true;
+/* 流式播报：正在播的那一句（跳过按钮要能掐掉它）+ 总开关（?nostream=1 强制走老路） */
+var SPEAK_STREAM = null;
+var VOICE_STREAM = !/[?&]nostream=1/.test(location.search);
+var LOCAL_LINES = [];        /* 本地产生的提示行（合规提醒等）——它们不在服务端时间线里 */
+var WSINCE = 0;              /* 本"场"开始时间（跨局累计，见 seriesSince） */
+var WREMINDED = 0;           /* 上次提醒时的分钟数（每小时提醒一次，不刷屏） */
+var WAKE = null;             /* 屏幕常亮句柄 */
+var HANDOFF = null;          /* 正在交接的座位号（1-based），null = 没人拿着手机 */
+var HANDOFF_SIG = null;      /* 手上这屏的"签名"：座位 + 此刻能做的动作（见 sigOf） */
+var MYVIEW = null;           /* 交接中那位本人的视图 */
+var cardQueue = [];          /* 还没看牌的人类座位 */
+var PICK = null;             /* 已选中的目标（点座位后暂存） */
+var CARD_FLIPPED = false;    /* 本张身份牌翻过没有（没翻就不让走） */
+var BUSY = false;            /* 有一个动作正在提交（真模型要好几秒，必须防连点） */
+
+function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+function show(id){
+  var ps = document.querySelectorAll('.page');
+  for (var i = 0; i < ps.length; i++) ps[i].classList.remove('on');
+  $(id).classList.add('on');
+}
+/* 顶部字幕条已删（2026-10-05 用户定：公有信息只进日志区）——
+   setLine 保留为空操作：speakQueue / btnSkip 还在调它。
+   法官播报的可见出口是 renderLog() 的日志区。 */
+function setLine(t){ /* no-op：字幕条已随顶栏删除 */ }
+function foot(t){ $('foot').textContent = t; }
+
+async function api(path, opts){
+  var r = await fetch(path, opts);
+  if (!r.ok){ throw new Error(r.status + ' ' + (await r.text()).slice(0, 120)); }
+  return await r.json();
+}
+
+/* ---------------------------------------------------------- 场次计时 / 合规提醒 / 屏幕常亮 */
+
+/* 合规：连续使用超过 2 小时要**主动提醒**。
+   依据《人工智能拟人化互动服务管理暂行办法》（2026-07-15 已施行）。
+   一场 4 局 ≈ 2 小时 40 分 ⇒ 正常玩就会触发，所以 MVP 就得有。
+   ⚠️ 计时必须**跨局累计**（存 localStorage）：法规说的是"连续使用"，
+      不是"单局时长"—— 只按一局算的话永远触发不了，等于没做。 */
+function seriesSince(){
+  var now = Date.now();
+  var v = parseInt(localStorage.getItem('tt.since') || '0', 10);
+  /* 隔了 30 分钟以上算"新的一场"（中间放下手机去干别的了）；
+     v > now 说明本机时钟被往回调过，也用新值兜住。 */
+  if (!v || v > now || (now - v) > 30 * 60 * 1000){
+    v = now;
+    localStorage.setItem('tt.since', String(v));
+  }
+  return v;
+}
+
+function renderSeries(){
+  var mins = Math.max(0, Math.round((Date.now() - WSINCE) / 60000));
+  var t = new Date(WSINCE);
+  var hh = String(t.getHours()).padStart(2, '0');
+  var mm = String(t.getMinutes()).padStart(2, '0');
+  var s = '本场 ' + hh + ':' + mm + ' 开始｜已 ' +
+          (mins >= 60 ? (Math.floor(mins / 60) + ' 小时 ' + (mins % 60) + ' 分')
+                      : (mins + ' 分钟'));
+  if (!('wakeLock' in navigator)) s += '｜⚠️ 浏览器不支持常亮，请手动关掉自动锁屏';
+  var el = $('series');
+  if (el) el.textContent = s;
+}
+
+function checkLongUse(){
+  var mins = (Date.now() - WSINCE) / 60000;
+  /* 超 2 小时起提醒；之后每小时再提一次（避免每 30 秒刷一次屏） */
+  if (mins >= 120 && mins - WREMINDED >= 60){
+    WREMINDED = mins;
+    var h = Math.floor(mins / 60);
+    var b = $('longUse');
+    if (b){
+      b.classList.add('on');
+      b.innerHTML = '⏱ 已连续使用 <b>' + h + ' 小时</b> —— 这是按'
+        + '《人工智能拟人化互动服务管理暂行办法》做的主动提醒'
+        + '（该办法 2026-07-15 已施行，连续使用超 2 小时需提醒）。';
+    }
+    LOCAL_LINES.push({ t: 'sys', s: '【提醒】已经玩了 ' + h + ' 个小时了，要不要歇一会儿？喝口水再战。' });
+    renderLog();
+  }
+}
+
+async function keepAwake(){
+  if (!('wakeLock' in navigator)) return;
+  try {
+    WAKE = await navigator.wakeLock.request('screen');
+    WAKE.addEventListener('release', function(){ WAKE = null; });
+  } catch (e) {
+    /* 缺用户手势或被系统拒绝：不致命，但夜间闭眼时黑屏容易被当成卡死 */
+    var el = $('handoff');
+    if (el) $('hoStatus') && ($('hoStatus').textContent = '拿不到屏幕常亮权限，注意手动点亮屏幕');
+  }
+}
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible' && WAKE === null && GID) keepAwake();
+});
+
+/* ---------------------------------------------------------- 封面 / 开局 */
+
+async function boot(){
+  /* 2026-10-12（用户）：识别/大脑/说话那行装配文案删除 —— 诊断面板里全都有。 */
+  try {
+    /* 组局规则只有服务端一份，前端只负责显示 —— 不在这里自己再算一遍狼数，
+       否则规则一改就会两边漂移。 */
+    RULES = await api('/api/game/rules');
+    $('nHuman').oninput = renderRules;
+    $('nAi').oninput = renderRules;
+    renderRules();
+    renderLevels();
+    renderPersonas();
+    loadSettings();
+  } catch (e) { $('bootMsg').textContent = '读不到组局规则：' + e.message; }
+}
+
+/* ---------------------------------------------------------- 规则开关（G9） */
+/* 控件**由服务端那张表生成**，前端不写死"有哪几个开关、哪个是勾选哪个是下拉"。
+   改完立刻 POST 保存；只影响**新开的局**（服务端不让中途改规则）。 */
+var SWITCHES = null, SETTINGS = {};
+
+async function loadSettings(){
+  try {
+    var d = await api('/api/game/settings');
+    SWITCHES = d.switches || [];
+    SETTINGS = d.current || {};
+    renderSwitches();
+  } catch (e){
+    $('switchRow').innerHTML = '<span class="bad">读不到规则开关：' + e.message + '</span>';
+  }
+}
+
+function renderSwitches(){
+  var row = $('switchRow');
+  row.innerHTML = '';
+  (SWITCHES || []).forEach(function(s){
+    var wrap = document.createElement('label');
+    wrap.className = 'sw';
+    wrap.title = s.note || '';
+    var cur = (s.key in SETTINGS) ? SETTINGS[s.key] : s.default;
+    if (s.type === 'bool'){
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!cur;
+      cb.onchange = function(){ saveSwitch(s.key, cb.checked); };
+      wrap.appendChild(cb);
+      wrap.appendChild(document.createTextNode(s.label));
+    } else {
+      var sel = document.createElement('select');
+      (s.options || []).forEach(function(o){
+        var op = document.createElement('option');
+        op.value = o.value;
+        op.textContent = o.label;
+        if (o.value === cur) op.selected = true;
+        sel.appendChild(op);
+      });
+      sel.onchange = function(){ saveSwitch(s.key, sel.value); };
+      wrap.appendChild(document.createTextNode(s.label + '：'));
+      wrap.appendChild(sel);
+    }
+    row.appendChild(wrap);
+  });
+}
+
+async function saveSwitch(key, val){
+  var one = {};
+  one[key] = val;
+  try {
+    var d = await api('/api/game/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: one })
+    });
+    SETTINGS = d.current || {};
+    renderSwitches();
+  } catch (e){
+    $('bootMsg').textContent = '规则开关没保存成功：' + e.message;
+  }
+}
+
+/* ---------------------------------------------------------- AI 性格（H2） */
+var PERSONA = 'off';    /* 缺省不配人格（缺省就是"没有这个功能"的旧行为） */
+
+function renderPersonas(){
+  if (!RULES) return;
+  var row = $('personaRow');
+  row.innerHTML = '';
+  var items = (RULES.personality_specials || []).concat(RULES.personalities || []);
+  items.forEach(function(x){
+    var b = document.createElement('button');
+    b.textContent = x.label || x.key;
+    b.className = (x.key === PERSONA) ? 'on' : '';
+    b.title = x.brief || '';
+    b.onclick = function(){ PERSONA = x.key; renderPersonas(); };
+    row.appendChild(b);
+  });
+  var cur = items.filter(function(x){ return x.key === PERSONA; })[0];
+  if (cur && cur.brief) b.title = cur.brief;   /* 只留悬停提示，页面不再显示文案 */
+}
+
+var LEVEL = null;   /* 选中的档位（娱乐/认真/硬核/地狱）；null = 规则还没读回来 */
+
+/* 档位按钮：**从服务端那份表生成**，不写死名字（后端加一档这里就自动多一个按钮）。
+   默认选「认真」而不是后端缺省的「娱乐」——后端缺省是为了兼容旧调用方（测试/脚本），
+   不是给玩家用的默认值；玩家打开页面想要的是中间那档。 */
+function renderLevels(){
+  if (!RULES || !RULES.levels || !RULES.levels.length) return;
+  var row = $('levelRow');
+  row.innerHTML = '';
+  var names = RULES.levels.map(function(x){ return x.key; });
+  if (names.indexOf(LEVEL) < 0) LEVEL = (names.indexOf('认真') >= 0) ? '认真' : names[0];
+  RULES.levels.forEach(function(x){
+    var b = document.createElement('button');
+    b.textContent = x.key;
+    b.className = (x.key === LEVEL) ? 'on' : '';
+    b.onclick = function(){ LEVEL = x.key; renderLevels(); };
+    row.appendChild(b);
+  });
+}
+
+/* 人数 → 会配成几狼几神几民。人数不合法时直接说明原因，不让玩家点下去才发现。 */
+function renderRules(){
+  if (!RULES) return false;
+  var nh = parseInt($('nHuman').value, 10) || 0;
+  var na = parseInt($('nAi').value, 10) || 0;
+  var p = (RULES.preview || {})[String(nh + na)];
+  var why = '';
+  if (nh < 1) why = '至少要 1 个真人';
+  else if (nh + na > 9) why = '真人 + AI 最多 9 人';
+  else if (!p) why = (nh + na) + ' 人不在支持范围（4–16）';
+  else if (!p.ok) why = p.reason;
+  if (why) { $('rulesLine').innerHTML = '<span class="bad">' + why + '</span>'; return false; }
+  $('rulesLine').innerHTML = '共 <b>' + (nh + na) + '</b> 人　' + p.label;
+  buildPlan();                            /* 人数变了就重排座次（长度没变则保留手排） */
+  return true;
+}
+
+/* ================================================================ 座次编排（2026-10-01）
+   默认：真人坐 1 号先发言，真人之间均匀隔 AI（环形间隔尽量一致 —— 与后端
+   game_api.default_layout 同一套算法，**两边必须一致**：前端给预览，后端兜底）。
+   拖动（电脑）/ 点两下交换（手机）可任意调；开局时把整个数组发给 /api/game/new。 */
+var PLAN = [];
+function defaultPlan(nh, na){
+  var out = [], i;
+  if (nh <= 0){ for (i = 0; i < na; i++) out.push('ai'); return out; }
+  if (na < nh){ for (i = 0; i < nh; i++) out.push('human');
+                for (i = 0; i < na; i++) out.push('ai'); return out; }
+  var base = Math.floor(na / nh), extra = na % nh, g, k;
+  for (g = 0; g < nh; g++){
+    out.push('human');
+    var gap = base + (g < extra ? 1 : 0);
+    for (k = 0; k < gap; k++) out.push('ai');
+  }
+  return out;
+}
+function buildPlan(){
+  var nh = parseInt($('nHuman').value, 10) || 0;
+  var na = parseInt($('nAi').value, 10) || 0;
+  var n = nh + na;
+  var wrap = $('planWrap'); if (!wrap) return;
+  if (n <= 0){ wrap.style.display = 'none'; PLAN = []; return; }
+  wrap.style.display = 'block';
+  if (PLAN.length !== n) PLAN = defaultPlan(nh, na);
+  var h = '';
+  for (var i = 0; i < n; i++){
+    h += '<span class="planChip ' + (PLAN[i] === 'human' ? 'ph' : 'pa')
+      + '" data-i="' + i + '" draggable="true">' + (i + 1) + '号·'
+      + (PLAN[i] === 'human' ? '真人' : 'AI') + '</span>';
+  }
+  $('planRow').innerHTML = h;
+  bindPlan();
+}
+function bindPlan(){
+  var sel = null, dragI = null;
+  var chips = document.querySelectorAll('#planRow .planChip');
+  for (var i = 0; i < chips.length; i++){
+    (function(ch){
+      var idx = function(){ return parseInt(ch.getAttribute('data-i'), 10); };
+      ch.onclick = function(){
+        /* 点两下交换：手机上没有拖拽，这是等价操作 */
+        if (sel === null){ sel = idx(); ch.classList.add('sel'); return; }
+        if (sel === idx()){ sel = null; ch.classList.remove('sel'); return; }
+        var t = PLAN[sel]; PLAN[sel] = PLAN[idx()]; PLAN[idx()] = t;
+        sel = null; buildPlan();
+      };
+      ch.addEventListener('dragstart', function(){ dragI = idx(); ch.classList.add('drag'); });
+      ch.addEventListener('dragend', function(){ ch.classList.remove('drag'); });
+      ch.addEventListener('dragover', function(e){ e.preventDefault(); });
+      ch.addEventListener('drop', function(e){
+        e.preventDefault();
+        if (dragI === null || dragI === idx()) return;
+        var m = PLAN.splice(dragI, 1)[0];
+        PLAN.splice(idx(), 0, m);
+        dragI = null; buildPlan();
+      });
+    })(chips[i]);
+  }
+  var def = $('planDefault');
+  if (def) def.onclick = function(){
+    PLAN = defaultPlan(parseInt($('nHuman').value, 10) || 0,
+                       parseInt($('nAi').value, 10) || 0);
+    buildPlan();
+  };
+}
+
+/* 局末出口（「本局战报」/「榜单与战报」）只在局末显示。
+   ⚠️ 2026-09-29 修：原来**没有任何地方把它收回去** ⇒ 开下一局时屏幕下部一直挂着
+   上一局的「本局战报」，而且那个 href 还指着**上一局**的战报文件
+   （点开看到的是上一局所有人的身份）。用户实测报的就是这一条。 */
+function resetEndLinks(){
+  var el = $('endLinks');
+  if (!el) return;
+  el.style.display = 'none';
+  var a = $('lnkReport');
+  if (a) a.removeAttribute('href');
+}
+
+async function newGame(){
+  if (!renderRules()) return;      /* 人数不合法就别发请求，白等一次往返 */
+  $('bootMsg').textContent = '正在开局…';
+  try {
+    var d = await api('/api/game/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ humans: parseInt($('nHuman').value, 10) || 2,
+                             ais: parseInt($('nAi').value, 10) || 0,
+                             level: LEVEL || undefined,
+                             personality: PERSONA || undefined,
+                             layout: PLAN.length ? PLAN.slice() : undefined })
+    });
+    GID = d.gid;
+    PUBLIC = d.public;
+    SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null;
+    resetEndLinks();                        /* 收回上一局的局末出口（见上面的注释） */
+    resetSeerBig();                         /* 新局清掉上一局的验人结果大标识（见 tableui.js） */
+    cardQueue = d.seats.filter(function(s){ return s.kind === 'human'; })
+                      .map(function(s){ return s.seat; });
+    localStorage.setItem('tt.gid', GID);   /* 断线/刷新恢复的锚点 */
+  showResumeButton('');                  /* 开了新局 ⇒ 封面那个「继续上一局」收起来 */
+    LOCAL_LINES = [];
+    keepAwake();                            /* 开局就拿屏幕常亮：夜间闭眼不能黑屏 */
+    $('bootMsg').textContent = '';
+    nextCard();
+  } catch (e) { $('bootMsg').textContent = '开局失败：' + e.message; }
+}
+
+/* ---------------------------------------------------------- 身份牌（保密） */
+
+function nextCard(){
+  if (!cardQueue.length){ enterTable(); return; }
+  CARD_FLIPPED = false;
+  var seatNo = cardQueue.shift();
+  $('cfgTop').textContent = '请把手机交给 ' + (seatNo + 1) + ' 号';
+  $('cfgNote').textContent = '只让本人看这一屏，看完点下面的按钮';
+  var c = $('bigcard');
+  c.classList.remove('flip');
+  $('bigback').className = 'face back';
+  $('bigback').innerHTML = '<div class="r">—</div><div class="k">—</div>';
+  $('cardHint').textContent = '点一下牌子看身份';
+  c.onclick = async function(){
+    /* 🔴 2026-10-12（用户：翻开后支持翻回去再看）：已翻过 ⇒ 再点翻回/翻正，
+       不再重复请求 —— 牌面内容留在 #bigback 里。 */
+    if (CARD_FLIPPED){
+      c.classList.toggle('flip');
+      $('cardHint').textContent = c.classList.contains('flip')
+        ? '记住自己的身份，然后点下面的按钮交给下一位'
+        : '再点一下牌子翻回来看身份';
+      return;
+    }
+    try {
+      var v = await api('/api/game/' + GID + '/seat/' + seatNo);
+      var priv = [];
+      if (v.team_mates && v.team_mates.length)
+        priv.push('你的狼队友：' + v.team_mates.map(function(x){ return (x + 1) + ' 号'; }).join('、'));
+      if (v.team_mates && !v.team_mates.length && v.role === 'wolf') priv.push('本局只有你一个狼人');
+      if (v.investigations){
+        var ks = Object.keys(v.investigations);
+        if (ks.length) priv.push('你验过：' + ks.map(function(k){
+          return (Number(k) + 1) + ' 号是' + (v.investigations[k] ? '狼人' : '好人');
+        }).join('；'));
+      }
+      if (v.potions) priv.push('解药' + (v.potions.heal ? '可用' : '已用') +
+                              '，毒药' + (v.potions.poison ? '可用' : '已用'));
+      var cls = v.role === 'wolf' ? 'wolf' : (v.role === 'seer' ? 'seer' : 'good');
+      $('bigback').className = 'face back ' + cls;
+      $('bigback').innerHTML = '<div class="r">' + v.role_label + '</div>' +
+        '<div class="k">' + (priv.length ? priv.join('<br>') : '没有额外信息') + '</div>';
+      c.classList.add('flip');
+      CARD_FLIPPED = true;
+      $('cardHint').textContent = '记住自己的身份，然后点下面的按钮交给下一位';
+    } catch (e) { $('cardHint').textContent = '取不到身份：' + e.message; }
+  };
+  show('p3');
+}
+
+/* ---------------------------------------------------------- 牌桌 */
+
+function enterTable(){
+  /* 🔴 2026-10-06 走查抓到：上一局结束时轮盘/交接状态若没清（比如局结束时
+     还有人拿着手机），新局一进牌桌 WHEEL 里就带着旧局的 act/pass ——
+     点圆心会往**新局**提交旧动作，服务端 400。进桌先清一次。 */
+  try { closeHandoff(); } catch (e) { /* 封面路径本来就没有交接态 */ }
+  S.seats = (PUBLIC.players || []).map(function(p){
+    return { no: p.seat + 1, kind: p.kind, alive: p.alive };
+  });
+  /* wolfNos 只影响 layout() 给刀口红圈预留的那点余量（几何），
+     真正把座位标成狼的是 markWolves() —— 这里**不调用**它，所以不会泄露。 */
+  S.wolfNos = [1];
+  show('p4');
+  renderTable();
+  layout();
+  foot('把手机放回桌子中央');
+  tick();
+}
+
+function paintSeats(){
+  if (!PUBLIC) return;
+  (PUBLIC.players || []).forEach(function(p){
+    if (!p.alive){ addCls(p.seat + 1, 'dead'); }
+  });
+  (PUBLIC.players || []).forEach(function(p){
+    if (PUBLIC.current_speaker === p.seat) addCls(p.seat + 1, 'speaking');
+    else delCls(p.seat + 1, 'speaking');
+  });
+}
+
+function renderLog(){
+  /* 🔴 2026-10-12（用户：日志区在所有页面**彻底删除**）—— 时间线不再上屏，
+     公有信息以法官播报为准。本函数只保留票型大字（voteBig）的更新；
+     合规提醒走 longUse 横幅，不再有日志出口。 */
+  var vote = null;
+  ((PUBLIC && PUBLIC.timeline) || []).forEach(function(x){
+    if (x.t !== 'sys') return;
+    if (x.s.indexOf('投票结果') === 0) vote = x.s;
+  });
+  var vb = $('voteBig');
+  if (vb){
+    if (vote){ vb.textContent = vote.replace(/^投票结果：/, ''); vb.style.display = 'block'; }
+    else vb.style.display = 'none';
+  }
+}
+
+/* ---------------------------------------------------------- 底部控制 */
+
+/* 暂停键已删（2026-10-05 用户：无效就取消）—— PAUSED 留作常量 false，
+   voicedUp / speakQueue 里的旁路判断仍然成立。 */
+$('btnSkip').onclick = function(){
+  /* 先掐掉正在流的那一句 —— 流式是一段段排进 Web Audio 的，
+     不掐的话它会自己念完（跳过的语义就没了）。 */
+  if (SPEAK_STREAM){ try { SPEAK_STREAM.stop(); } catch (e) { /* ignore */ } SPEAK_STREAM = null; }
+  if (PUBLIC){ SPOKEN = (PUBLIC.timeline || []).length; setLine('（跳过）'); }
+};
+/* 再来一局 —— **2026-10-01 改了行为**（用户：「都是以同配置开一局，这不合理，
+   应该直接回到初始界面才对」）。
+   原来：调 newGame() 用同一套配置**直接再开一局**。
+   现在：停轮询、回到封面。封面上那几个输入框还留着上一局的值，所以想"同样配置
+   再来一局"只要再按一下「开始一局」—— 只多一步，但人**看得见自己在开什么**。
+   ⚠️ 没有删掉"接回上一局"的能力：那一局还在服务端活着，封面上的
+      「继续上一局」按钮会把它显示出来（见 backToCover / showResumeButton）。 */
+$('btnAgain').onclick = function(){
+  if (!confirm('回到初始界面？（这一局还活着，封面上的「继续上一局」能接回来）')) return;
+  backToCover();
+};
+
+/* 回到开始界面：留住"还能接回"的锚点、显示接回按钮、停轮询（tick 自己会停）、换页。 */
+function backToCover(){
+  if (GID) localStorage.setItem('tt.gid', GID);   /* 锚点留着 ⇒ 那一局还能接回 */
+  showResumeButton(GID
+    ? ('继续上一局（局号 ' + GID + '，'
+       + (PUBLIC && PUBLIC.phase === 'ended' ? '已结束' : '进行中') + '）')
+    : '', GID);
+  try { closeHandoff(); } catch (e) { /* 不在交接屏上就算了 */ }
+  show('p0');
+  foot('回到开始界面。想接着上一局，就点「继续上一局」。');
+}
+
+/* 封面上那个「继续上一局」按钮：有活着的局才显示（text 为空 ⇒ 藏起来）。
+   ⚠️ 局号必须由参数带进来：从"刷新后停在封面"这条路径过来时 GID 还是空的。 */
+function showResumeButton(text, gid){
+  var b = $('btnResume');
+  if (!b) return;
+  if (!text || !gid){ b.hidden = true; b.onclick = null; return; }
+  b.hidden = false;
+  b.textContent = text;
+  b.onclick = async function(){
+    try {
+      var p2 = await api('/api/game/' + gid + '/public');
+      resumeInto(gid, p2);
+    } catch (e) {
+      localStorage.removeItem('tt.gid');       /* 服务端重启过 / 局被挤掉了 */
+      showResumeButton('');
+      foot('那一局在服务端已经不在了：' + e.message);
+    }
+  };
+}
+
+/* 真正接回上一局（**只有用户按了那个按钮才会走到这里**，不再自动）。 */
+function resumeInto(gid, pub){
+  GID = gid; PUBLIC = pub;
+  SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null; LOCAL_LINES = [];
+  cardQueue = [];                    /* 身份牌已经看过了，不再走那一轮 */
+  showResumeButton('');              /* 进桌面了，封面那个按钮收起来 */
+  enterTable();
+  foot(pub.phase === 'ended'
+    ? '本局已结束 —— 可以看下面的「本局战报」'
+    : ('已接回上一局（局号 ' + gid + '），继续吧'));
+}
+
+window.addEventListener('resize', function(){ if ($('p4').classList.contains('on')) layout(); });
+
+/* ---------------------------------------------------------- 启动 */
+/* 🔴 2026-10-12（用户："我刚刚打开游戏"却显示已 23 分钟）：本场起点原来存
+   localStorage（跨页面续算，30 分钟内都算同一场）⇒ 显示与体感不符。
+   现在：**本场 = 本次打开页面的时刻**，小字从打开那一刻起算。 */
+WSINCE = Date.now();
+renderSeries();
+setInterval(renderSeries, 30000);
+setInterval(checkLongUse, 30000);
+
+/* 断线/刷新恢复 —— **2026-10-01 改了行为**：
+   原来：本地存着局号就**自动接回桌面**（刷新一下就直接进了牌桌）。
+   用户意见：「强刷界面，都是以同配置开一局，这不合理，应该直接回到初始界面」。
+   现在：**刷新一定停在封面**；若那一局还活着，封面上出现「继续上一局」按钮。
+   恢复能力一点没少（锁屏 / 误刷新不会把一局弄丢），只是**不再替用户做决定**。
+   服务端重启过（404）⇒ 清掉本地锚点并藏起按钮。 */
+async function tryResume(){
+  var gid = localStorage.getItem('tt.gid');
+  if (!gid) { showResumeButton(''); return; }
+  try {
+    var pub = await api('/api/game/' + gid + '/public');
+    showResumeButton('继续上一局（局号 ' + gid + '，'
+      + (pub.phase === 'ended' ? '已结束' : '进行中') + '）', gid);
+  } catch (e) {
+    localStorage.removeItem('tt.gid');   /* 服务端重启过了：别让下次还试 */
+    showResumeButton('');
+  }
+}
+
+(async function start(){
+  boot();
+  await tryResume();
+  show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */
+})();
+
+$('btnNew').onclick = newGame;
+
+/* 身份牌页的「看完，交给下一位」。
+   这里原本漏了绑定 —— 点它没反应，整局就卡在身份牌那一步（用页面点出来才发现）。
+   顺手加一道保险：没翻牌就点，只提示、不前进 —— 否则有人会不知道自己是什么身份就开局。 */
+$('btnNextCard').onclick = function(){
+  if (!CARD_FLIPPED){
+    $('cardHint').textContent = '先点一下上面的牌子，看自己的身份';
+    return;
+  }
+  nextCard();
+};
+</script>
+</body>
+</html>

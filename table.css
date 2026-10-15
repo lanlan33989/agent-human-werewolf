@@ -1,0 +1,324 @@
+/* ============================================================
+   面杀AI玩家 · 纯前端演示
+   - 无后端、无依赖、无网络请求，单文件可直接双击打开
+   - 手机 H5 竖屏优先
+   - 颜色：纯紫背景 + 黄字（按需求）
+   ============================================================ */
+:root{
+  --purple:#5B21B6;          /* 纯紫背景 */
+  --purple-d:#3C0F80;
+  --purple-l:#7C3AED;
+  --yellow:#FFD53D;          /* 主黄字 */
+  --yellow-d:#E8B92A;
+  --blue:#4DA3FF;            /* 预言家 */
+  --red:#FF5252;             /* 狼人 */
+  --grey:#8B8B99;            /* 出局 */
+  --white:#FFFFFF;
+  --seat:46px;               /* 座位圆直径，JS 会重算 */
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;margin:0;}
+body{
+  background:#21063F;                      /* 竖列两侧的底色（深一档的紫） */
+  overflow:hidden;overscroll-behavior:none;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:16px;line-height:1.5;
+  -webkit-user-select:none;user-select:none;
+  -webkit-text-size-adjust:100%;
+}
+/* 一条干干净净的竖列：占满整屏高，宽度封顶后居中。
+   （参考 present-prototype.html 的做法 —— 不做假机身、不做整体缩放。） */
+#phone{
+  position:relative;
+  width:100%;max-width:430px;
+  height:100vh;height:100dvh;
+  margin:0 auto;
+  background:var(--purple);
+  color:var(--yellow);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+@media (min-width:520px){
+  #phone{box-shadow:0 0 0 1px rgba(255,255,255,.09), 0 26px 64px rgba(0,0,0,.5);}
+}
+body.paused *{animation-play-state:paused !important;}   /* 暂停＝真定格 */
+
+/* 页容器：flex 撑满竖列（不再绝对定位） */
+.page{
+  flex:1;min-height:0;display:none;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 14px) 16px calc(env(safe-area-inset-bottom,0px) + 14px);
+}
+.page.on{display:flex;}
+
+/* ================= 第 0 页 ================= */
+#p0{align-items:center;justify-content:center;text-align:center;}
+#p0 .logo{
+  font-size:38px;font-weight:800;letter-spacing:3px;
+  color:var(--yellow);
+  text-shadow:0 4px 0 rgba(0,0,0,.18);
+  animation:pop .7s cubic-bezier(.2,1.4,.4,1) both;
+}
+#p0 .sub{margin-top:14px;font-size:15px;color:rgba(255,255,255,.82);letter-spacing:1px;}
+#p0 .dot{
+  margin-top:38px;width:56px;height:56px;border-radius:50%;
+  background:var(--yellow);color:var(--purple-d);
+  font-size:26px;display:grid;place-items:center;
+  box-shadow:0 6px 18px rgba(0,0,0,.28);
+  animation:breathe 2.2s ease-in-out infinite;
+}
+#p0 .tip{margin-top:12px;font-size:12px;color:rgba(255,255,255,.6);}
+@keyframes pop{from{opacity:0;transform:translateY(14px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes breathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+
+/* ================= 通用 ================= */
+.h1{font-size:22px;font-weight:700;color:var(--yellow);text-align:center;}
+.h2{margin-top:6px;font-size:13px;color:rgba(255,255,255,.66);text-align:center;}
+.mid{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0;}
+.pad{flex:0 0 auto;}
+
+.bigbtn{
+  width:100%;padding:20px;margin-top:14px;
+  border:none;border-radius:16px;
+  font-family:inherit;font-size:19px;font-weight:700;letter-spacing:1px;
+  background:var(--yellow);color:var(--purple-d);
+  box-shadow:0 6px 0 var(--yellow-d);
+  transition:transform .08s;
+}
+.bigbtn:active{transform:translateY(3px);box-shadow:0 3px 0 var(--yellow-d);}
+.bigbtn.ghost{
+  background:rgba(255,255,255,.12);color:rgba(255,255,255,.55);
+  box-shadow:none;border:1px dashed rgba(255,255,255,.28);
+}
+.bigbtn.ghost .lock{font-size:13px;font-weight:400;display:block;margin-top:2px;opacity:.8;}
+.bigbtn.shake{animation:shake .32s ease;}
+@keyframes shake{
+  0%,100%{transform:translateX(0)}
+  25%{transform:translateX(-6px)}
+  50%{transform:translateX(6px)}
+  75%{transform:translateX(-4px)}
+}
+
+/* ================= 第 2 页：滚轮 ================= */
+.pickrow{display:flex;gap:14px;margin-top:8px;}
+.pickcol{flex:1;min-width:0;text-align:center;}
+.pickcol .lab{font-size:13px;color:rgba(255,255,255,.7);margin-bottom:6px;}
+.wheelbox{
+  position:relative;height:210px;border-radius:14px;
+  background:rgba(0,0,0,.16);
+  border:1px solid rgba(255,255,255,.14);
+  overflow:hidden;
+}
+.wheelbox .band{
+  position:absolute;left:6px;right:6px;top:50%;height:44px;
+  transform:translateY(-50%);
+  background:rgba(255,213,61,.16);
+  border-top:1px solid rgba(255,213,61,.5);
+  border-bottom:1px solid rgba(255,213,61,.5);
+  pointer-events:none;
+}
+.wheel{
+  height:100%;overflow-y:scroll;scroll-snap-type:y mandatory;
+  padding:83px 0;                        /* (210-44)/2 */
+  scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+}
+.wheel::-webkit-scrollbar{display:none;}
+.witem{
+  height:44px;display:flex;align-items:center;justify-content:center;
+  scroll-snap-align:center;
+  font-size:20px;font-weight:600;color:rgba(255,255,255,.42);
+  transition:color .15s,transform .15s;
+}
+.witem.cur{color:var(--yellow);transform:scale(1.12);}
+.pickval{margin-top:8px;font-size:12px;color:rgba(255,255,255,.55);}
+.warn{margin-top:10px;font-size:12px;color:#FFD9D9;text-align:center;min-height:18px;}
+
+/* ================= 第 3 页：身份牌 ================= */
+#p3 .cfg{
+  font-size:15px;color:var(--yellow);text-align:center;font-weight:700;
+  background:rgba(0,0,0,.2);border-radius:12px;padding:12px;
+  border:1px solid rgba(255,213,61,.28);
+}
+#p3 .cfgnote{margin-top:6px;font-size:12px;color:rgba(255,255,255,.6);text-align:center;}
+.tabs{
+  display:flex;gap:8px;overflow-x:auto;padding:12px 2px 6px;
+  scrollbar-width:none;
+}
+.tabs::-webkit-scrollbar{display:none;}
+.tab{
+  flex:0 0 auto;padding:8px 14px;border-radius:999px;
+  background:rgba(255,255,255,.12);color:rgba(255,255,255,.75);
+  font-size:14px;border:1px solid transparent;
+}
+.tab.on{background:var(--yellow);color:var(--purple-d);font-weight:700;}
+.tab.ai{color:var(--blue);}
+.cardarea{flex:1;display:grid;place-items:center;min-height:0;}
+.bigcard{
+  width:min(62vw,240px);aspect-ratio:2/3;perspective:1000px;
+}
+.bigcard .inner{
+  position:relative;width:100%;height:100%;
+  transition:transform .5s cubic-bezier(.4,.1,.2,1);
+  transform-style:preserve-3d;
+}
+.bigcard.flip .inner{transform:rotateY(180deg);}
+.bigcard .face{
+  position:absolute;inset:0;border-radius:16px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  backface-visibility:hidden;-webkit-backface-visibility:hidden;
+  box-shadow:0 10px 26px rgba(0,0,0,.34);
+}
+.bigcard .front{
+  background:linear-gradient(150deg,#7C3AED,#4C1D95);
+  border:2px solid rgba(255,255,255,.28);
+  color:var(--yellow);
+}
+.bigcard .front .q{font-size:46px;font-weight:800;}
+.bigcard .front .t{margin-top:8px;font-size:12px;color:rgba(255,255,255,.7);}
+.bigcard .back{
+  transform:rotateY(180deg);
+  background:#FFF9E4;color:#4C1D95;
+  border:2px solid rgba(255,255,255,.5);
+}
+.bigcard .back .r{font-size:26px;font-weight:800;}
+.bigcard .back .k{margin-top:8px;font-size:13px;color:#8A7A2A;}
+.bigcard .back.wolf{background:#FFE6E6;color:#8B1A1A;}
+.bigcard .back.seer{background:#E6F1FF;color:#0B3D75;}
+.bigcard .back.good{background:#EAF7E6;color:#1F5C1A;}
+.bigcard.locked .front{border-style:dashed;color:rgba(255,255,255,.5);}
+.bigcard.locked .front .q{font-size:34px;}
+.bigcard.locked .front .t{color:rgba(255,255,255,.5);}
+.bigcard:active .inner{transform:scale(.985);}
+.bigcard.flip:active .inner{transform:rotateY(180deg) scale(.985);}
+.cardhint{text-align:center;font-size:12px;color:rgba(255,255,255,.6);margin-top:10px;}
+
+/* ================= 第 4 页：牌桌 ================= */
+#p4{padding-top:calc(env(safe-area-inset-top,0px) + 10px);}
+/* 字幕区：做大。它是这一页的主要信息出口（原 76px / 17px 字太小） */
+.topbar{
+  position:relative;flex:0 0 auto;
+  border-radius:18px;background:rgba(0,0,0,.26);
+  border:1px solid rgba(255,255,255,.14);
+  padding:22px 20px 26px;
+  min-height:118px;
+  display:flex;align-items:center;justify-content:center;text-align:center;
+}
+.topbar .line{
+  font-size:24px;font-weight:700;color:var(--yellow);
+  line-height:1.42;letter-spacing:.5px;word-break:break-word;
+}
+.topbar .prog{
+  position:absolute;left:20px;right:20px;bottom:11px;height:4px;
+  background:rgba(255,255,255,.14);border-radius:2px;overflow:hidden;
+}
+.topbar .prog i{display:block;height:100%;width:0;background:var(--yellow);}
+
+/* 控制按钮：底部中央 */
+.controls{
+  flex:0 0 auto;display:flex;justify-content:center;gap:20px;
+  padding:12px 0 8px;
+}
+.controls button{
+  width:54px;height:54px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.32);color:var(--yellow);
+  font-size:22px;line-height:1;
+  display:grid;place-items:center;font-family:inherit;
+}
+.controls button:active{background:rgba(0,0,0,.58);}
+.controls button.paused{background:var(--yellow);color:var(--purple-d);}
+
+/* 牌桌区域：撑满剩余空间。座位排成**椭圆**（横窄竖长也能用），
+   所以这里不再强制正方形 —— 形状让给 JS 去算，目的是把圆圈放到最大。 */
+.tablewrap{flex:1;min-height:0;position:relative;}
+.table{position:absolute;inset:0;}
+.tcenter{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:var(--judge,88px);height:var(--judge,88px);border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.22),rgba(0,0,0,.35));
+  border:1px solid rgba(255,255,255,.22);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:var(--yellow);
+}
+.tcenter .g{font-size:calc(var(--judge,88px) * .3);line-height:1;}
+.tcenter .t{font-size:calc(var(--judge,88px) * .12);margin-top:3px;color:rgba(255,255,255,.7);letter-spacing:1px;}
+
+.seat{
+  position:absolute;transform:translate(-50%,-50%);
+  width:var(--seat);height:var(--seat);
+  perspective:600px;
+}
+.seat .inner{
+  position:relative;width:100%;height:100%;
+  transition:transform .45s cubic-bezier(.4,.1,.2,1);
+  transform-style:preserve-3d;
+}
+.seat.flip .inner{transform:rotateY(180deg);}
+.seat .f{
+  position:absolute;inset:0;border-radius:50%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  backface-visibility:hidden;-webkit-backface-visibility:hidden;
+  border:3px solid rgba(255,255,255,.4);
+  background:rgba(255,255,255,.14);
+  color:#fff;font-weight:700;
+  transition:border-color .3s,background .3s,box-shadow .3s,opacity .3s;
+}
+/* 字号跟着圆圈尺寸走 —— 圈变大了，字也要跟着大 */
+.seat .f .n{font-size:calc(var(--seat) * .34);line-height:1.05;}
+.seat .f .k{font-size:calc(var(--seat) * .17);font-weight:500;opacity:.78;letter-spacing:.5px;}
+.seat .b{
+  transform:rotateY(180deg);
+  background:#FFF9E4;color:#3C0F80;border-color:#fff;
+  font-size:calc(var(--seat) * .3);
+}
+.seat.ai .f{border-style:dashed;}
+.seat.ai .f .k{color:rgba(255,255,255,.85);}
+/* 状态 */
+.seat.seer .f{border-color:var(--blue);background:rgba(77,163,255,.28);box-shadow:0 0 0 4px rgba(77,163,255,.22);}
+.seat.wolf .f{border-color:var(--red);background:rgba(255,82,82,.28);box-shadow:0 0 0 4px rgba(255,82,82,.22);}
+.seat.dead{filter:grayscale(1);opacity:.42;}
+.seat.dead .f{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.2);color:#B9B9C4;}
+.seat.acting .f{border-color:var(--yellow);box-shadow:0 0 0 4px rgba(255,213,61,.3);}
+.seat.chosen .f{border-color:var(--yellow);background:rgba(255,213,61,.32);}
+/* 雷达（发言中） */
+.seat.speaking::before,.seat.speaking::after{
+  content:'';position:absolute;left:50%;top:50%;
+  width:100%;height:100%;margin:-50% 0 0 -50%;
+  border-radius:50%;border:2px solid var(--yellow);
+  animation:radar 1.6s linear infinite;pointer-events:none;
+}
+.seat.speaking::after{animation-delay:.8s;}
+@keyframes radar{
+  0%{transform:scale(.9);opacity:.85}
+  100%{transform:scale(1.6);opacity:0}
+}
+/* 刀口红圈 */
+.wound{
+  position:absolute;border-radius:50%;border:2px solid var(--red);
+  pointer-events:none;animation:woundIn .4s ease-out both;
+}
+@keyframes woundIn{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:none}}
+/* 投票动效 */
+.votefx{
+  position:absolute;inset:-8px;border-radius:50%;
+  border:3px solid var(--yellow);pointer-events:none;
+  animation:voteFx 1s ease-out forwards;
+}
+@keyframes voteFx{
+  0%{transform:scale(.6);opacity:.95}
+  100%{transform:scale(1.9);opacity:0}
+}
+/* 查验阶段：可点选的座位给一圈呼吸提示（原来这里有个指示手指图案，已按要求去掉） */
+.seat.pickable .f{
+  border-color:var(--yellow);
+  box-shadow:0 0 0 3px rgba(255,213,61,.22);
+  animation:pickBreathe 1.5s ease-in-out infinite;
+}
+@keyframes pickBreathe{
+  0%,100%{box-shadow:0 0 0 2px rgba(255,213,61,.16)}
+  50%{box-shadow:0 0 0 6px rgba(255,213,61,.3)}
+}
+.footnote{
+  flex:0 0 auto;text-align:center;font-size:11px;
+  color:rgba(255,255,255,.5);padding-top:4px;min-height:16px;
+}

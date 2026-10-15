@@ -1,0 +1,48 @@
+# ---- Secrets / keys (NEVER commit) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+_runtime.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / frontend ----
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# ---- Audio / media generated at runtime ----
+*.wav
+*.mp3
+*.pcm
+
+# ---- Logs ----
+logs/
+*.log
+*.err
+npm-debug.log*
+yarn-error.log*
+
+# ---- Dev scratch files ----
+=
+_tips.txt
+_wi.txt
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
