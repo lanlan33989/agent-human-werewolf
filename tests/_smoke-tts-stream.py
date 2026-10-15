@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 WS = os.environ.get("PLAY_BASE_WS", "ws://127.0.0.1:8000")
 TEXT = "天亮了，请各位睁眼。昨晚是平安夜，没有发生任何事。"

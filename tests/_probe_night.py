@@ -1,3 +1,5 @@
+import sys as _s, os as _o
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 # -*- coding: utf-8 -*-
 p = 'tableui.js'
 s = open(p, encoding='utf-8', newline='').read()

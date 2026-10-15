@@ -22,7 +22,7 @@ import os
 import sys
 import types
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根目录
 
 os.environ["MOCK"] = "0"
 os.environ["MOCK_ASR"] = "0"

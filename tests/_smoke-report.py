@@ -6,6 +6,8 @@
 而是"**能不能读**"：小节在不在、每轮有没有被重建出来、身份表行数对不对、
 而且它**绝不能因为某个字段缺失就整篇报错**（局末崩掉 = 玩家看到 500）。
 """
+import sys as _s, os as _o
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 import re
 import sys
 

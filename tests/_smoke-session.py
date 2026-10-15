@@ -13,7 +13,7 @@ D6 回归：真人局前夜的可用性收尾
   7. 每局上下文隔离：一场 4 局是 4 个独立对局，不能带上一局的记忆
 
 跑法：
-    ./.venv/Scripts/python.exe _smoke-session.py
+    ./.venv/Scripts/python.exe tests/_smoke-session.py
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import time as _time  # noqa: E402  （夜间节拍是墙上时间，测试要�
 import sys
 from pathlib import Path
 
-BASE = Path(__file__).parent
+BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 # 2026-10-07 第三期：夜间窗口是真·墙上时间 —— 不缩短的话**一夜四段 = 65 秒**，

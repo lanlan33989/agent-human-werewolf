@@ -26,7 +26,7 @@ import time
 import wave
 from pathlib import Path
 
-BASE = Path(__file__).parent
+BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 WS_URL = os.environ.get("PLAY_BASE_WS", "ws://127.0.0.1:8000/ws/asr")

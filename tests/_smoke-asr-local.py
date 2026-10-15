@@ -7,7 +7,7 @@
   本文件               测真实识别质量，需要本地模型（.env 的 ASR_MODEL_PATH 或已下好的缓存）
 
 用法：
-    ./.venv/Scripts/python.exe _smoke-asr-local.py
+    ./.venv/Scripts/python.exe tests/_smoke-asr-local.py
 
 它回答的问题：本地模型到底能不能用、中文和狼人杀黑话识别得怎么样、CPU 上多慢。
 """

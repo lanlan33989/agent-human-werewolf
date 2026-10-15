@@ -3,7 +3,7 @@
 验证 P0-talk 服务端（mock 模式）：/ 与 /api/health 与 /api/utter 是否正常。
 
 用法（在 h5 目录下）：
-    ./.venv/Scripts/python.exe _smoke-talk.py
+    ./.venv/Scripts/python.exe tests/_smoke-talk.py
 """
 import base64
 import io

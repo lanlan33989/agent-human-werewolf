@@ -12,7 +12,7 @@
     · 400/401/404 是配置错，重试没意义；429/5xx 才该退避重试；超时**绝不重试**
       这四条判断没有任何一条能靠"真调一次"测出来（真调只能覆盖成功那条路）。
 
-跑法：python _smoke-asr-qwen.py
+跑法：python tests/_smoke-asr-qwen.py
 退出码：0 = 全过；1 = 有失败
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["MOCK"] = "1"          # 别让 import server 时去连真服务
 os.environ["MOCK_ASR"] = "1"
 

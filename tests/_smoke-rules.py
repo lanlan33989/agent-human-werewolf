@@ -21,7 +21,7 @@
    比如"猎人被投出后能开枪"验的是"这一枪真的打出去了"，不是 `phase is SHOOT`。
    实现换了（相位名改掉、结算顺序重排）这条断言照样有效。
 
-跑法：python _smoke-rules.py
+跑法：python tests/_smoke-rules.py
 退出码：0 = 全一致；1 = 有判例与实现不一致（那就是 bug）。
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from __future__ import annotations
 import pathlib
 import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from engine import Board, Game, Phase, Role, Rules  # noqa: E402
 

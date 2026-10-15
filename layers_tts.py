@@ -247,5 +247,5 @@ class DoubaoHttpTts(Tts):
         if not (self.appid and self.token):
             raise RuntimeError("未配置 VOLC_TTS_APPID / VOLC_TTS_TOKEN")
         raise NotImplementedError(
-            "火山 TTS 尚未接入：需要确认 endpoint 与字段，见 README-P0.md"
+            "火山 TTS 尚未接入：需要确认 endpoint 与字段，见 docs/README-P0.md"
         )

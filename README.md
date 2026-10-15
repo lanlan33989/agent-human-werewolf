@@ -67,8 +67,11 @@ python -m venv .venv
 
 ```bash
 .venv/Scripts/python.exe start.py --doctor            # 只看端口现状，不动任何东西
-.venv/Scripts/python.exe _probe_game_http.py --board mini4   # 过 HTTP 走完一局，定位 AI 卡住环节
+.venv/Scripts/python.exe tests/_smoke-game-api.py     # 接口回归（testclient，无需起服务）
+.venv/Scripts/python.exe tests/_smoke-engine.py       # 引擎规则回归
 ```
+
+冒烟测试均可在仓库根目录直接运行：`python tests/<脚本名>.py`。
 
 ## 页面一览
 
@@ -92,7 +95,8 @@ python -m venv .venv
 ├── layers_asr/llm/tts.py   # ASR / LLM / TTS 适配层（可插拔）
 ├── metrics.py / experience.py / report.py   # 对局指标 / 复盘 / 战报
 ├── *.html / *.js / *.css    # 前端页面
-└── _smoke-*.py          # 冒烟测试
+├── docs/               # 设计文档与踩坑记录（README-P0 等）
+└── tests/              # 冒烟测试与诊断脚本（tests/_smoke-*.py）
 ```
 
 ## 已知限制
@@ -101,7 +105,7 @@ python -m venv .venv
 - 本地 faster-whisper 为 CPU 推理，耗时 ~0.5×实时，仅用于拾音/黑话验证，不是产品延迟指标
 - 火山引擎 ASR/TTS 为骨架实现（代码内 TODO 标注）
 
-详细的设计取舍、远场测试方法论与踩坑记录见 [README-P0.md](README-P0.md)。
+详细的设计取舍、远场测试方法论与踩坑记录见 [docs/README-P0.md](docs/README-P0.md)。
 
 ## 安全提示
 

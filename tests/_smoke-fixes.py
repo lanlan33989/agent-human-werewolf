@@ -9,7 +9,7 @@
   4. 「打字框打不了字」—— 轮询每隔 2.5 秒用 innerHTML 重建输入框
 
 跑法：
-    ./.venv/Scripts/python.exe _smoke-fixes.py
+    ./.venv/Scripts/python.exe tests/_smoke-fixes.py
 """
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ import struct
 import sys
 import wave
 from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
+
 from engine import make_board  # noqa: E402
 from _testboards import SEER4  # noqa: E402
-
-BASE = Path(__file__).parent
-sys.path.insert(0, str(BASE))
 
 PASS, FAIL = [], []
 

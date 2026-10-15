@@ -26,6 +26,8 @@
     .venv\\Scripts\\python.exe _smoke-map.py --fast      # 跳过第 6 条（不跑 smoke）
 """
 from __future__ import annotations
+import sys as _s, os as _o
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 
 import argparse
 import ast
@@ -37,7 +39,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent          # .../tabletop-ai/h5
+BASE = Path(__file__).resolve().parent.parent    # .../tabletop-ai/h5
 ROOT = BASE.parent                              # .../tabletop-ai
 MAP = ROOT / "HANDOFF-开发交接单.md"
 RETIRED = ROOT / "狼人杀旧版本参照.md"            # 已退役，仅作追溯

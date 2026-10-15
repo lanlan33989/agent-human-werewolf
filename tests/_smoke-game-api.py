@@ -7,7 +7,7 @@
 强制 mock 环境（这一层不涉及 ASR / LLM 调用）。
 
 用法（在 h5 目录下）：
-    ./.venv/Scripts/python.exe _smoke-game-api.py
+    ./.venv/Scripts/python.exe tests/_smoke-game-api.py
 """
 import os
 import sys

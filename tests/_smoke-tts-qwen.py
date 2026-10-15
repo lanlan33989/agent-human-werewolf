@@ -10,7 +10,7 @@
   · 云端返回的 WAV **头里的长度字段可能是错的**（实测一次算出 44739 秒）⇒ 必须重写头
   · 400（配置错）不重试；429（限流）重试；超时**绝不**重试
 
-跑法：python _smoke-tts-qwen.py
+跑法：python tests/_smoke-tts-qwen.py
 退出码：0 = 全过；1 = 有失败
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ import sys
 import wave
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["MOCK"] = "1"
 
 import httpx  # noqa: E402

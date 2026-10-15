@@ -6,8 +6,10 @@
     L0 全局公开 / L1 狼队组内共享 / L2 个体私有 / L3 元信息
 
 用法（在 h5 目录下）：
-    ./.venv/Scripts/python.exe _smoke-engine.py
+    ./.venv/Scripts/python.exe tests/_smoke-engine.py
 """
+import sys as _s, os as _o
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 import random
 import sys
 

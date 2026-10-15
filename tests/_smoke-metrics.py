@@ -6,6 +6,8 @@
 它的正确性只有靠"给定输入 → 给定数字"这种白盒断言来钉，
 而不是靠"跑一局没崩"。
 """
+import sys as _s, os as _o
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 import sys
 
 import game_api

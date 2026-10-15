@@ -34,7 +34,7 @@ os.environ.setdefault("MOCK", "1")
 os.environ.setdefault("MOCK_ASR", "1")
 os.environ.setdefault("MOCK_LLM", "1")
 os.environ.setdefault("MOCK_TTS", "1")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import game_api as _ga            # noqa: E402
 import night_script               # noqa: E402

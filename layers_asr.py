@@ -60,7 +60,7 @@ class DoubaoAsr(Asr):
             raise RuntimeError("未配置 VOLC_ASR_APPID / VOLC_ASR_TOKEN")
         # TODO: 组装真实请求。音频为 16k 单声道 PCM-WAV。
         raise NotImplementedError(
-            "火山 ASR 尚未接入：需要确认接口版本与服务地址，见 README-P0.md"
+            "火山 ASR 尚未接入：需要确认接口版本与服务地址，见 docs/README-P0.md"
         )
 
 

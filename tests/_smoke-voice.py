@@ -10,7 +10,7 @@ D5 回归：语音接进对局（本地 TTS + 共享录音模块 + 半双工）
   5. 探针页不再复制录音/编码逻辑（防漂移）
 
 跑法：
-    ./.venv/Scripts/python.exe _smoke-voice.py
+    ./.venv/Scripts/python.exe tests/_smoke-voice.py
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import sys
 import wave
 from pathlib import Path
 
-BASE = Path(__file__).parent
+BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 PASS, FAIL = [], []

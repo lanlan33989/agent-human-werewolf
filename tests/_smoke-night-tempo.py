@@ -14,13 +14,13 @@
     · 有人类的那一段：闭眼句 at − arm at ≥ 窗口（arm = 前端「念完 +2 秒」的通知）
 
 用法（在 h5 目录下）：
-    ./.venv/Scripts/python.exe _smoke-night-tempo.py
+    ./.venv/Scripts/python.exe tests/_smoke-night-tempo.py
 """
 import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) or ".")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) or ".")
 
 os.environ.setdefault("MOCK", "1")
 os.environ.setdefault("MOCK_ASR", "1")
@@ -94,7 +94,7 @@ print("=" * 74)
 print("① 窗口秒数只有一个来源（夜间剧本表）")
 print("=" * 74)
 
-_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+_src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "night_driver.py"), encoding="utf-8").read()
 check("★ 驱动器里**没有**第二份窗口表（NIGHT_ACT_WINDOW 已删；两份必然漂移）",
       "NIGHT_ACT_WINDOW =" not in _src)
