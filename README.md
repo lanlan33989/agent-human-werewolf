@@ -48,7 +48,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/<you>/agent-human-werewolf.git
+git clone https://github.com/lanlan33989/agent-human-werewolf.git
 cd agent-human-werewolf
 
 python -m venv .venv
