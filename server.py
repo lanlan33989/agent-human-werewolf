@@ -188,7 +188,44 @@ async def lifespan(_app: FastAPI):
             _WARMED["cloud"] = False
             print(f"[server] 云端 ASR 预热失败（不影响启动）：{type(e).__name__}: {e}",
                   flush=True)
+    _start_drive_pump()
     yield
+
+
+# ---------------------------------------------------------------- 推进水泵
+# 🔴 2026-10-23（用户点名，参考队友局域网版 server/room.ts + pacing.ts）：
+#    他们的状态机是"服务端双层定时器"驱动：AI 水泵（单 setTimeout 链持续推进）
+#    + 独立的 deadlineGuard（到点裁决）—— 推进**不依赖客户端轮询**。
+#    我们原来把推进全挂在 GET /public 上：页面关了 / 轮询被卡住 / 客户端只在
+#    面板页才轮询，状态机就停摆（夜间面板不弹、窗口到点不收人，都是这条链的病）。
+#    现在补上服务端水泵：后台线程周期性把每一局往前推。/public 的 drive()
+#    降级为"赶上进度"的补充信号（双层保留客户端这一拍：谁先到谁干活，s.lock 互斥）。
+_PUMP_STARTED = {"v": False}
+
+
+def _start_drive_pump() -> None:
+    """启动推进水泵（**进程级去重**：start.py 的两个 uvicorn 实例共用本进程
+    的模块状态，与上面的 `_WARMED` 同一套路；若按进程分开跑，各自 SESSIONS
+    也是各自进程的，多一个空转水泵无害）。"""
+    if _PUMP_STARTED["v"]:
+        return
+    _PUMP_STARTED["v"] = True
+
+    def _loop() -> None:
+        while True:
+            time.sleep(0.3)
+            for s in list(game_api.SESSIONS.values()):
+                try:
+                    if s.game.winner is None:
+                        # drive() 内部自己拿 s.lock（与 /act、/public 互斥）；
+                        # 人类有待办时 auto_advance 立刻返回，这里几乎零开销。
+                        s.drive(0.15)
+                except Exception as e:  # noqa: BLE001
+                    # 单局故障不能拖死水泵：打日志、继续推别的局
+                    print(f"[pump] {s.id}: {type(e).__name__}: {e}", flush=True)
+
+    threading.Thread(target=_loop, name="drive-pump", daemon=True).start()
+    print("[server] 推进水泵已启动（0.3s 节拍）", flush=True)
 
 
 app = FastAPI(title="P0-talk", lifespan=lifespan)

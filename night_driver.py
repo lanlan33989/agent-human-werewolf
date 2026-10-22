@@ -197,12 +197,20 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     #    测试把窗口缩到 2% 时没有真实语音，播报节奏必须跟着缩，
     #    否则"测试无客户端 → est 拖 3s/句 → 短跑测试直接超预算"（实测踩坑）。
     _sc = night_script.win_scale()
+    # 🔴 2026-10-23 实机修复（用户："狼队、女巫毒药面板都没弹出"）：
+    #    回溯累加只统计**夜间剧本句**（带 `node` 字段的）—— timeline 里还躺着
+    #    上一个白天的玩家长发言（几百字/句，按 3.4 字/秒一算单句就虚增几十秒），
+    #    把起算时刻推到一分钟后 ⇒ 面板/倒计时全被拖死。
+    #    白天句不进夜间播报队列；万一真有队列积压（上一节点的闭眼句还没念完），
+    #    它带 node，串行累加照样会算进去，客户端 arm（真实念完）再兜一层。
     t = None
     for j in range(idx + 1):
         x = tl[j]
-        start = (x.get("at") or 0.0) + _sc * (x.get("delay") or 0.0)
+        if "node" not in x:
+            continue                  # 白天发言 / 公示日志：不在夜间播报队列里
+        start = (x.get("at") or x.get("ts") or 0.0) + _sc * (x.get("delay") or 0.0)
         if t is not None and t > start:
-            start = t                      # 队列串行：上一句没念完不能开下一句
+            start = t                 # 队列串行：上一句没念完不能开下一句
         t = start + _sc * (0.5 + len(x.get("s") or "") / 3.4)
     if t is None:
         return None
