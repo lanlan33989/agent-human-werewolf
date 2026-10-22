@@ -358,6 +358,17 @@ def speech_ui_js() -> Response:
     return _asset("speech_ui.js", "application/javascript")
 
 
+@app.get("/judge_voice.js")
+def judge_voice_js() -> Response:
+    """法官播报本地合成通道（2026-10-22 双通道改造）。
+
+    法官台词（sys）在 speech_ui 播报队列里优先走浏览器 speechSynthesis 本地合成
+    （零 HTTP 往返，夜间相位切换不再被云端链路拖住）；AI 发言仍走云端。
+    本通道不可用（无 speechSynthesis / 无中文音色）时由播报队列逐句回落云端。
+    """
+    return _asset("judge_voice.js", "application/javascript")
+
+
 @app.get("/tableui.js")
 def tableui_js() -> Response:
     """大屏 UI 状态机（2026-10-02 从 play.html 抽出）：
