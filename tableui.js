@@ -372,8 +372,19 @@ async function tick(){
       var _tlC = (PUBLIC && PUBLIC.timeline) || [];
       var _dueLn = (NOW && typeof NOW.panel_line === 'number' && NOW.panel_line >= 0)
         ? (_tlC[NOW.panel_line] || null) : null;
+      /* 🔴 2026-10-22 v3（用户实机："投票播报还未结束狼队刀人面板就弹出"）：
+         v2 的"应播时刻已过 8 秒"分不清**卡死**和**排队** —— 白天投票的播报
+         积压时，夜间句的 at+delay 早就过了 8 秒，但队列还在念前面的话；
+         v2 条件全真 ⇒ 抢跑 arm ⇒ started 提前置真 ⇒（bug1 的闸失效）面板
+         和倒计时全部提前。补两条判据：
+           · "队列已推进到这句" = SPOKEN > panel_line（这句已开念）；
+           · "还没念完"       = SPOKE_DONE 没越过它。
+         两者同时成立才是真卡死（正在播但 audio 事件不来）；还在排队 ⇒ 不兜底。 */
       var _armFallback = !!(_dueLn && _dueLn.at
-                            && (Date.now() / 1000 - (_dueLn.at + (_dueLn.delay || 0))) > 8);
+                            && (Date.now() / 1000 - (_dueLn.at + (_dueLn.delay || 0))) > 8
+                            && typeof SPOKEN === 'number'
+                            && SPOKEN > NOW.panel_line
+                            && (!SPOKE_DONE || SPOKE_DONE.idx < NOW.panel_line));
       var done = _armFallback
                  || (NOW ? linePlayed(_armNode)
                      : ((jx < 0) || !VOICE_ON || PAUSED
@@ -797,8 +808,14 @@ function openHandoff(need, allies){
     var _dueB = (PUBLIC.now && typeof PUBLIC.now.panel_line === 'number'
                  && PUBLIC.now.panel_line >= 0)
       ? (_tlD[PUBLIC.now.panel_line] || null) : null;
+    /* 🔴 2026-10-22 v3：与 arm 兜底同款判据 —— 投票播报积压时不许把"排队"
+       误判成"卡死"而放行面板（否则面板抢在法官念到之前弹出）。 */
     var _stalled = !!(_dueB && _dueB.at
-                      && (Date.now() / 1000 - (_dueB.at + (_dueB.delay || 0))) > 8);
+                      && (Date.now() / 1000 - (_dueB.at + (_dueB.delay || 0))) > 8
+                      && typeof SPOKEN === 'number'
+                      && SPOKEN > (PUBLIC.now.panel_line || 0)
+                      && (!SPOKE_DONE
+                          || SPOKE_DONE.idx < (PUBLIC.now.panel_line || 0)));
     /* 🔴 2026-10-22：过期判定优先用剩余秒数（until_left<=0）—— 墙钟比较
        （until<=本地now）在设备时钟有偏差时会**误杀整窗面板**（手机快 10 秒
        ⇒ 窗口明明还剩 10s 却判过期 ⇒ 面板不开）。until_left 是服务端在
@@ -953,6 +970,10 @@ var DIAL_NAMES = { wolf: '狼人', witch_heal: '女巫', witch_poison: '女巫',
 function paintDialKnives(v){
   var d = $('nightDial');
   if (!d || !v) return;
+  /* 🔴 2026-10-22（用户实机：投票界面出现隔夜的刀子图案）：投票和夜间动作
+     共用同一个拨号盘，而这个函数没有 paintWheelKnives 那样的 phase 守卫 ——
+     白天投票时 MYVIEW 里还挂着昨晚的 wolf_points，刀标就画上去了。 */
+  if (v.phase && v.phase !== 'night') return;
   d.querySelectorAll('button[data-no]').forEach(function(b){
     if (b.textContent.indexOf('🔪') === 0) b.textContent = b.getAttribute('data-no');
   });
