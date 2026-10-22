@@ -1073,8 +1073,10 @@ if _sw is not None:
     # 推到「毒药那问」：解药那一屏结束**不能**把 witch_asked 写死。
     # ⚠️ 必须**真的等时间**：机器人待办挂着时 drive() 会立刻返回（不消耗预算），
     #    节点时钟走的是墙上时间 ⇒ 纯循环推不动它。
+    #    ⚠️ v4（2026-10-22）：解药窗 = 估算播完 + W（约 26s，比旧 1.5×W 略长），
+    #    等待上限必须覆盖「从窗口任意时刻起等到它走完」⇒ 给整窗 + 余量。
     _t7b = _tm.monotonic()
-    while _tm.monotonic() - _t7b < 5:
+    while _tm.monotonic() - _t7b < 30:
         if _ga.night_driver._nn_cur(_sw) == "witch_poison":
             break
         _sw.drive(0.1)

@@ -422,15 +422,22 @@ class Session:
                           "not_before": round((x.get("at") or 0)
                                               + (x.get("delay") or 0), 2)}
                          for i, x in enumerate(tl) if x.get("node") == cur]
+            # 🔴 v4（2026-10-22，参考队友局域网版架构）：
+            #    `started` 不再只认客户端 arm —— 服务端按台词表**自己估算**
+            #    "本节点那句播完 + 2s"（`_nn_ready_mono`），到点自动置真。
+            #    面板与倒计时由服务端同一时钟驱动，前端 arm 降级为
+            #    "真实播报比估算慢时延长窗口"的补充信号。
+            _armed = armed
+            _ready = night_driver._nn_ready_mono(self, cur)
+            _started = _armed or (_ready is not None
+                                  and time.monotonic() >= _ready)
             return {"kind": "wheel", "seat": pick["seat"], "node": cur,
-                    "until": (time.time() + left) if armed else None,
-                    # 🔴 2026-10-22（用户实机："面板弹出时倒计时已经走了好久"）：
+                    "until": (time.time() + left) if left is not None else None,
                     # `until` 是**服务器墙钟**，前端拿它减本地 Date.now() —— 设备
-                    # 时钟稍有偏差（手机对电脑），倒计时一出来就是"已走过"的样子，
-                    # 过期闸（前端 until<=now）还会误杀整窗面板。补一个
-                    # **剩余秒数**口径，前端用它本地插值，彻底免疫时钟差。
-                    "until_left": round(left, 2) if armed else None,
-                    "started": armed, "need": pick, "why": "",
+                    # 时钟稍有偏差（手机对电脑）就会漂。**剩余秒数**口径免疫时钟差，
+                    # 前端用它本地插值。
+                    "until_left": round(left, 2) if left is not None else None,
+                    "started": _started, "need": pick, "why": "",
                     "panel_line": panel_line, "lines_due": lines_due}
 
         if g.phase is Phase.DISCUSS:
