@@ -283,18 +283,24 @@ async function tick(){
        ⇒ 麦克风按钮抢在夜间播报结束前冒出来（用户听到的就是"夜里还没结束就能开麦"）。
        `voicedUp()` 就是那条"整队播报门"（语音关掉时它恒真 ⇒ 不会憋死）。
        `now.kind === 'none'` 也放行：那一拍没有面板，需要它去把旧面板收掉。 */
-    /* 三档口径（都在播报之后）：wheel/shoot = 那句念完（linePlayed）；speak/vote = voicedUp；none = 放行。 */
+    /* 三档口径（2026-10-23 起）：wheel/shoot = **服务端 started**；speak/vote = voicedUp；none = 放行。 */
     var _gateOk = NOW
       ? (NOW.kind === 'none'
          || ((NOW.kind === 'wheel' || NOW.kind === 'shoot')
-             /* ⚠️ 这里**只许用 `linePlayed`**，不许再 `|| NOW.started`（2026-10-07 第七起：
-                用户实机"预言家面板弹出过早，居然在女巫闭眼播报时弹出来了"）。
-                原因：服务端的 arm 失联兜底会在**半个窗口**时把 `started` 置真，
-                而"女巫请闭眼"那句还要念几秒才轮到"预言家请睁眼" ⇒ 面板抢跑。
-                "面板不许被播报永久否决"这条已经由 `linePlayed` **自己**兜住了
-                （它内部有"最近一次念完已过 8 秒 ⇒ 音频坏了，放行"），
-                而"人类拿得到整窗"由服务端 `_nn_deadline` 保证（不再依赖前端）。 */
-             ? linePlayed(NOW.node) : voicedUp()))
+             /* 🔴 2026-10-23（用户实机："狼人/解药面板依旧不弹、毒药读秒 12→14→13"）：
+                面板门改听**服务端的 started**。v4 已把起算权收回服务端
+                （est = 估算"念完+2s"，水泵按墙钟走窗口），而旧门 `linePlayed`
+                锚在本机音频游标（SPOKE_DONE 追 panel_line）—— 客户端队列一慢
+                （本地合成慢 / 切后台节流 / TTS 悬挂），游标就追不上，面板整窗
+                不开，而服务端窗口照收 ⇒ 狼/解药面板永远错过。
+                started 与读秒同源（同一服务端时钟）⇒ 面板弹出那一刻读秒必是
+                满窗，"弹出即起走"从机制上成立。
+                （2026-10-07 第七起的"面板抢跑"另有真因：那时 started 由 arm
+                 失联兜底在半窗置真 —— v4 的 started 已改为精确 est，不再有
+                 那个半窗抢跑源。）
+                老服务端不下发 started ⇒ 退回 linePlayed（音频卡死兜底仍在其内）。 */
+             ? (typeof NOW.started === 'boolean' ? NOW.started : linePlayed(NOW.node))
+             : voicedUp()))
       : nightReady(top);
     /* 记下"这个节点的窗口第一次被看到"的时刻（上面 arm 兜底用） */
     if (!NOW || NOW.node !== _nodeSeenNode){

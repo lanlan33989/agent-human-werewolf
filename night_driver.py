@@ -233,18 +233,24 @@ def _nn_deadline(self, node_id: str) -> float:
     win = night_script.window_of(node_id)
     base = self._nn_at
     if getattr(self, "_nn_need_arm", False):
-        armed = getattr(self, "human_wait_since", None)
         # 🔴 v4：没 arm 时不再"往后推半个窗口"（粗兜底），改用**服务端自己的
         #    播报完成估算**精确起算（念完 +2s）—— 倒计时从满窗起走，面板与
-        #    倒计时同拍。客户端 arm 晚于估算（音频比估算慢）仍会往后延：
-        #    max(est, armed) 谁晚听谁。估算失效（None）⇒ 退回旧的半窗兜底。
+        #    倒计时同拍。
+        # 🔴 2026-10-23 实机（用户："毒药读秒 12→14→13、预言家从 16 开始"）：
+        #    arm **不再延长窗口**。原来 max(est, armed) 谁晚听谁 —— 面板弹出
+        #    （音频门晚于 est）那一刻窗口已走到中段，arm 一落地 deadline 又
+        #    往后跳 ⇒ 读秒先见到 12、又回涨到 14。起算权既已收回服务端（v4），
+        #    窗口就只由 est 裁决：面板弹出（= started）与读秒同拍、整窗走满。
+        #    估算失效（None）⇒ 才退回 arm / 半窗兜底（老对局没有估算依据）。
         est = _nn_ready_mono(self, node_id)
-        if est is None:
-            est = base + win * 0.5
-        if armed is not None:
-            base = max(base, est, armed)    # 人类窗口从"估算/真实念完"的较晚者起算
-        else:
+        if est is not None:
             base = max(base, est)
+        else:
+            armed = getattr(self, "human_wait_since", None)
+            if armed is not None:
+                base = max(base, armed)     # 老对局：arm 是唯一"念完了"的信号
+            else:
+                base = base + win * 0.5     # 连 arm 都没有：退回旧的半窗兜底
     return base + win
 
 
