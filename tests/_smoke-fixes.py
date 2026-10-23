@@ -307,18 +307,13 @@ p2 = ((BASE / "play.html").read_text(encoding="utf-8")
       + (BASE / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
       + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
-index_html = (BASE / "index.html").read_text(encoding="utf-8")
+# 🔴 2026-10-23：探针页 index.html 已删（用户：非游戏画面），相关判据随之退役
 server_py = (BASE / "server.py").read_text(encoding="utf-8")
 
 check("play.html：渲染的是服务端 timeline（不自己拼接历史）",
       "PUBLIC.timeline" in p2)
 check("play.html：女巫有「不用解药」入口（✕ 大按钮）",
       'id="wheelNo"' in p2)
-check("index.html：ASR 是模拟时出红色警告",
-      'id="warnBanner"' in index_html and "根本不会识别你说的话" in index_html)
-check("index.html：显示当前服务地址（便于发现连错端口）",
-      "location.origin" in index_html)
-check("index.html：显示拾音质量指标", "showInputAudio" in index_html)
 check("server.py：返回 input_audio 与 asr_mocked",
       '"input_audio": input_audio' in server_py and '"asr_mocked": asr_mocked' in server_py)
 

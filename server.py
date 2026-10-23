@@ -33,7 +33,7 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 BASE = Path(__file__).parent
 
@@ -355,9 +355,13 @@ def _asset(name: str, media: str) -> Response:
                     media_type=media, headers=NO_STORE)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", include_in_schema=False)
 def index() -> Response:
-    return _page("index.html")
+    # 🔴 2026-10-23（用户："这几个页面全删了吧，非游戏画面，好几次拉起你就拉起这个"）：
+    #    根路径原来挂着 Day-1 的 P0-talk 探针页（index.html，只验证"说一句话→
+    #    听→回→说"那条链）—— 对局早已不需要它，每次开局还要再拼 /play。
+    #    探针页已删，根路径现在直接落对局页。
+    return RedirectResponse("/play", status_code=302)
 
 
 @app.get("/rec.js")
@@ -864,7 +868,7 @@ async def utter(request: Request, only: str = "") -> JSONResponse:
     识别完直接提交。它先前借用的这条链路会顺带跑一次 LLM + 一次 TTS，
     然后把结果整个丢掉。LLM 现在是 mock 所以看不出来；接真模型后，
     每按一次「按住说话」就会白花一次模型调用 + 一次语音合成。
-    探针页（`index.html`）走完整链路，不带这个参数。
+    （原探针页 index.html 走完整链路不带这个参数——该页已于 2026-10-23 删除。）
     """
     audio = await request.body()
     rate = int(request.headers.get("X-Sample-Rate", "16000"))
