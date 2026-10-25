@@ -527,6 +527,21 @@ def auto_advance(self, max_steps: int = 300,
             if g.phase is Phase.ENDED:
                 return "ended"
 
+            # ★ 提示词实验室的"门"（2026-10-26）：
+            #   实验室按了暂停 ⇒ 这一步先不走，返回 "working"（= 还在推进，
+            #   靠 /public 轮询接着推，是这个返回值的既有语义，不需要改调用方）。
+            #   按了"单步"⇒ 放行一步，走完自动停住。
+            #   没有控制文件时（默认）gate() 直接返回 False，行为完全不变。
+            try:
+                import lab_api as _lab
+                _lab.set_ctx(round=getattr(g, "round", 0),
+                             phase=getattr(getattr(g, "phase", None), "value", None)
+                             or str(getattr(g, "phase", "") or ""))
+                if _lab.gate():
+                    return "working"
+            except Exception:
+                pass
+
             # ★ 相位剧本（H1）：循环只问"这个相位交给谁"，具体逻辑在各段剧本里。
             #   以前这里是一串 `if g.phase is …`，加一个相位就要在循环里再插一段。
             handler = steps.handler_for(g.phase)

@@ -9,6 +9,13 @@ import os
 import time
 import httpx
 
+# 提示词实验室：所有模型调用都必经本文件，落盘放在这里最省事也最全。
+# 关不掉就设 LAB_LOG=0；任何异常都被 lab_api 内部吞掉，不会影响对局。
+try:
+    import lab_api as _lab
+except Exception:      # 没有这个模块（或被删）就当没这回事
+    _lab = None
+
 
 class Llm:
     def chat(self, user_text: str) -> str:
@@ -132,12 +139,19 @@ class OpenAICompatLlm(Llm):
                       + str(_u.get("prompt_cache_hit_tokens"))
                       + " prompt_cache_miss_tokens="
                       + str(_u.get("prompt_cache_miss_tokens")), flush=True)
+                if _lab:
+                    _lab.log_call(model=self.model, messages=messages, raw=out,
+                                  ms=int((time.monotonic() - _t0) * 1000), ok=True)
                 return out
             except httpx.TimeoutException as e:
                 # ⚠️ 超时**不走重试**：它已经把整段预算烧光了，再重试只会让桌上多等一轮。
                 # 实测中科大那家单次调用 10~43 秒 —— 掐断重试比老实等完更糟。
                 print("[llm-timing] 超时 耗时=" + str(round(time.monotonic() - _t0, 1))
                       + "s 输入" + str(_in_chars) + "字", flush=True)
+                if _lab:
+                    _lab.log_call(model=self.model, messages=messages, raw="",
+                                  ms=int((time.monotonic() - _t0) * 1000), ok=False,
+                                  err="timeout")
                 raise RuntimeError(f"LLM 超时：{e}") from e
             except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
                 last = e
@@ -147,6 +161,10 @@ class OpenAICompatLlm(Llm):
                 if i + 1 < attempts:
                     time.sleep(min(8.0, 0.8 * (2 ** i)))     # 0.8s / 1.6s / 3.2s
 
+        if _lab:
+            _lab.log_call(model=self.model, messages=messages, raw="",
+                          ms=int((time.monotonic() - _t0) * 1000), ok=False,
+                          err=f"{type(last).__name__}: {last}"[:200])
         raise RuntimeError(f"LLM 调用失败（已重试 {attempts} 次）：{last}")
 
 

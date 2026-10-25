@@ -199,6 +199,12 @@ import summarize  # noqa: E402
 
 app.include_router(game_api.router)
 
+# 提示词实验室对接（2026-10-26）：步骤落盘 + 暂停/单步 + 步骤查询。
+# 独立模块、独立前缀 /api/lab，不碰对局逻辑；默认只落盘、不暂停。
+import lab_api  # noqa: E402
+
+app.include_router(lab_api.router)
+
 
 # ---------------------------------------------------------------- AI 玩家接模型
 # ⚠️ 光在 .env 里填 LLM_MODEL、把 MOCK_LLM 设成 0 是**不够**的：

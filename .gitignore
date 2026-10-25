@@ -41,6 +41,9 @@ yarn-error.log*
 _tips.txt
 _wi.txt
 
+# ---- 提示词实验室运行时产物（步骤日志 / 暂停控制），不是代码 ----
+lab/
+
 # ---- OS / editor ----
 .DS_Store
 Thumbs.db
