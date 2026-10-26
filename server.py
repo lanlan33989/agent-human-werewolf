@@ -255,11 +255,61 @@ def _model_for_seat(seat: int, pool: list) -> tuple:
     return pool[int(seat) % len(pool)]
 
 
+# ---- 第①列席位接管（2026-10-26）：实验室推过来的席位数组，按"第 n 个 AI"映射 ----
+# key/model/baseUrl/temperature 全走第①列配置（用户点名）；文件持久，重启后仍生效。
+# 第 1 个创建的 AI 用第 1 个席位、依序循环（覆盖应用时清零计数，保证每局从席位A开始）。
+_SEAT_OVERRIDES: list = []
+_OV_SEQ = {"n": 0}
+
+
+def _load_agent_overrides() -> list:
+    try:
+        import lab_api as _lab
+        return _lab.get_agents_config()
+    except Exception:                                # noqa: BLE001
+        return []
+
+
+def _apply_agent_overrides(agents_list: list) -> None:
+    global _SEAT_OVERRIDES
+    _SEAT_OVERRIDES = list(agents_list or [])
+    _OV_SEQ["n"] = 0                     # 新覆盖生效：下一局从席位A重新开始
+    print("[lab] 对局装配改用实验室席位 ×" + str(len(_SEAT_OVERRIDES)), flush=True)
+
+
+try:
+    import lab_api as _lab
+    _lab.register_apply_agents(_apply_agent_overrides)
+    _SEAT_OVERRIDES = _lab.get_agents_config()
+except Exception:                                    # noqa: BLE001
+    pass
+
+
 def _llm_agent_factory(seat: int, rng):
     from agents import LlmAgent, RuleAgent
 
+    # ① 实验室席位覆盖（优先级最高：key/model/baseUrl/temperature 全走第①列；
+    #    覆盖存在时即使全局是 MOCK 也给真通道 —— 覆盖本身就是"我明确要真模型"）
+    if _SEAT_OVERRIDES:
+        o = _SEAT_OVERRIDES[_OV_SEQ["n"] % len(_SEAT_OVERRIDES)]
+        _OV_SEQ["n"] += 1
+        try:
+            from layers_llm import OpenAICompatLlm
+            llm = OpenAICompatLlm(
+                base_url=o["baseUrl"], api_key=o["apiKey"], model=o["model"],
+                turn_timeout=float(o.get("timeout") or 60),
+                temperature=float(o.get("temperature") or 0.8),
+                thinking="1" if o.get("thinking") == "enabled" else "0")
+            ag = LlmAgent(seat, chat_fn=lambda msgs, _llm=llm: _llm.chat_messages(
+                msgs, getattr(_llm, "turn_timeout", None)), rng=rng)
+            ag.model = o["model"] or o.get("label") or "lab-agent"
+            return ag
+        except Exception as e:                       # noqa: BLE001
+            print("[lab] 席位通道创建失败，退化默认装配：" + repr(e), flush=True)
+    # ② 全局 MOCK：没覆盖时保持旧行为（规则发言器）
     if isinstance(LLM, MockLlm):
         return RuleAgent(seat, rng)
+    # ③ 默认：env 模型池按座位取模
     llm, name = _model_for_seat(seat, LLM_POOL)
     # ⚠️ `rng` 必须传进去（2026-09-29 修）：LlmAgent 在模型超时/空串时会退化成
     #    RuleAgent 的模板句，而 RuleAgent 不传 rng 就用 `random.Random(seat * 7919)`

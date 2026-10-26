@@ -56,17 +56,25 @@ class OpenAICompatLlm(Llm):
 
     def __init__(self, *, base_url: str | None = None, api_key: str | None = None,
                  model: str | None = None, timeout: float | None = None,
-                 turn_timeout: float | None = None) -> None:
+                 turn_timeout: float | None = None,
+                 temperature: float | None = None,
+                 thinking: str | None = None) -> None:
         """
         参数优先、环境变量兜底。
 
         为什么要能传参：**同一个类要装成两个通道** —— 对局通道（贵、快）
         和摘要通道（便宜、可以慢一点，见 H4）。用环境变量分身会导致
         "改摘要模型把对局模型一起改了"这种事故。
+        temperature/thinking（2026-10-26）：实验室席位接管对局后要按席位生效；
+        不传的旧调用零变化（走 env 兜底，默认同旧值）。
         """
         self.base_url = (base_url or os.environ.get("LLM_BASE_URL", "")).rstrip("/")
         self.api_key = api_key or os.environ.get("LLM_API_KEY", "")
         self.model = model or os.environ.get("LLM_MODEL", "")
+        self.temperature = float(temperature if temperature is not None
+                                 else os.environ.get("LLM_TEMPERATURE", "0.8"))
+        self.thinking = str(thinking if thinking is not None
+                            else os.environ.get("LLM_THINKING", "0"))
         # 探针页沿用一个宽预算（与改动前一致，不动它的行为）。
         # 对局路径单独一个更短的预算：轮到某个 AI 说话时，桌上没人能等 60 秒，
         # 超时就退化成一句本地套话（见 agents.LlmAgent）。
@@ -92,7 +100,8 @@ class OpenAICompatLlm(Llm):
     def chat_messages(self, messages: list[dict], timeout: float | None = None) -> str:
         if not (self.base_url and self.api_key and self.model):
             raise RuntimeError("未配置 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL")
-        payload = {"model": self.model, "messages": messages, "temperature": 0.8}
+        payload = {"model": self.model, "messages": messages,
+                   "temperature": self.temperature}
         # 🔴 2026-10-05 用户定：**默认关掉模型自带思考**（thinking）。
         #    实测：问"1+1"，默认要烧 42 个 reasoning token 才吐一个"2"；
         #    关掉后 completion 从 44 掉到 1。而实局里一次投票的 reasoning 高达
@@ -100,7 +109,7 @@ class OpenAICompatLlm(Llm):
         #    thought 是它输出的正文，算普通 completion tokens）。
         #    ⚠️ 我们的 thought 范式已经承担"战术梳理"这个角色，模型再内部长考一遍
         #    是重复劳动。想 A/B 质量就设 LLM_THINKING=1 把它开回来。
-        if os.environ.get("LLM_THINKING", "0") != "1":
+        if self.thinking != "1":
             payload["thinking"] = {"type": "disabled"}
         attempts = max(1, int(os.environ.get("LLM_RETRIES", "3")))
         last: Exception | None = None

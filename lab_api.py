@@ -283,6 +283,56 @@ def register_session_lookup(fn: Callable[[str], Any]) -> None:
     _lookup = fn
 
 
+# ---- 第①列席位接管对局（2026-10-26）：key/model/baseUrl 全部走实验室配置 ----
+_AGENTS_PATH = os.path.join(LAB_DIR, "agents_runtime.json")
+_apply_agents_fn: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+
+
+def register_apply_agents(fn: Callable[[List[Dict[str, Any]]], None]) -> None:
+    """由 server.py 注册「席位数组 → 更新装配覆盖表」的回调。"""
+    global _apply_agents_fn
+    _apply_agents_fn = fn
+
+
+def _norm_agent(a: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "label": str(a.get("label") or "").strip(),
+        "baseUrl": str(a.get("baseUrl") or "").strip(),
+        "model": str(a.get("model") or "").strip(),
+        "apiKey": str(a.get("apiKey") or ""),
+        "temperature": float(a.get("temperature") or 0.8),
+        "timeout": float(a.get("timeout") or 60),
+        "thinking": "enabled" if str(a.get("thinking")) == "enabled" else "disabled",
+    }
+
+
+def set_agents_config(agents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """保存席位数组（第 1 个 AI 用第 1 个席位，依序循环）并立即生效于下一局。"""
+    norm = [_norm_agent(a) for a in (agents or []) if isinstance(a, dict)]
+    norm = [a for a in norm if a["baseUrl"] and a["model"]]
+    os.makedirs(LAB_DIR, exist_ok=True)
+    tmp = _AGENTS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"agents": norm}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _AGENTS_PATH)
+    if _apply_agents_fn:
+        try:
+            _apply_agents_fn(norm)
+        except Exception as e:                       # noqa: BLE001
+            print("[lab] 席位覆盖热应用失败（文件已存，下一局装配时重读）：" + repr(e),
+                  flush=True)
+    return {"ok": True, "count": len(norm)}
+
+
+def get_agents_config() -> List[Dict[str, Any]]:
+    try:
+        with open(_AGENTS_PATH, "r", encoding="utf-8") as f:
+            j = json.load(f)
+        return [a for a in (j.get("agents") or []) if isinstance(a, dict)]
+    except (OSError, ValueError):
+        return []
+
+
 def _sess_state(sess: Any) -> Dict[str, Any]:
     """与 game 推进深度耦合、必须**一起回退**的 Session 字段。
     漏回退任何一个都会重复播报 / 预案不再生成（审计列出的坑 #2）。"""
@@ -517,6 +567,23 @@ async def api_override(request: Request) -> dict:
 @router.get("/override")
 def api_override_status() -> dict:
     return {"pending": peek_override()}
+
+
+@router.post("/agents-config")
+async def api_agents_config(request: Request) -> dict:
+    """第①列席位 → 对局装配覆盖（key/model/baseUrl 全走第①列；下一局生效）。"""
+    try:
+        body = await request.json()
+    except Exception:                                    # noqa: BLE001
+        raise HTTPException(status_code=400, detail="body 必须是 JSON")
+    if not isinstance(body, dict) or not isinstance(body.get("agents"), list):
+        raise HTTPException(status_code=400, detail="body 需要 {agents: [...] }")
+    return set_agents_config(body["agents"])
+
+
+@router.get("/agents-config")
+def api_agents_config_get() -> dict:
+    return {"agents": get_agents_config()}
 
 
 @router.post("/rewind")

@@ -119,10 +119,14 @@
       <div class="sub">决策日志（本地试跑自动累加）</div>
       <div id="logWrap" style="max-height:16vh;overflow:auto"></div>
 
-      <div class="sub">连接</div>
+      <div class="sub">连接 · 席位接管</div>
       <div class="flexline">
         <input id="engine" class="grow" placeholder="对局服务地址（留空=同源）" onchange="setEngine(this.value)">
         <button title="刷新连接状态" onclick="engStatus()">连接</button>
+      </div>
+      <div class="flexline">
+        <button title="把第①列的 AI 席位（baseUrl/model/key/温度）推给对局服务：下一局开局的 AI 全部按这套配置装配（第 1 个 AI 用席位A，依序循环），key 也走第①列" onclick="pushAgents()">⤴ 把第①列席位应用到对局</button>
+        <span class="muted" id="agentsApplied"></span>
       </div>
       <div class="flexline">
         <label style="margin:0"><input type="checkbox" id="autopoll" onchange="togglePoll()" style="width:auto;vertical-align:middle"> 状态轮询（每 3 秒）</label>
@@ -312,7 +316,9 @@ function SAMPLE_AGENTS(){
   return [
     {label:'席位A · 主力', baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
      timeout:60, retries:3, thinking:'disabled', temperature:0.8},
-    {label:'席位B · 对照', baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus', apiKey:'',
+    /* 席位B：默认与主力同配置（对照用）。注：qwen-plus 是对话模型不是 ASR，
+       但默认统一成主力的 baseUrl/model，跨厂商时再手改（对照才有意义）。 */
+    {label:'席位B · 对照', baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
      timeout:60, retries:3, thinking:'disabled', temperature:0.8}
   ];
 }
@@ -400,7 +406,13 @@ function setBlock(id,v){ S.blocks[id].text=v; save(); }
 function toggleBlock(id){ S.blocks[id].on=!S.blocks[id].on; save(); render(); }
 function newSnapshot(){ S.snapshots.push({name:'新快照'+(S.snapshots.length+1),round:1,phase:'DAY_SPEECH',taskKind:'text',camp:'',identity:'',public:'',hardFacts:'',votes:'',timeline:'',allowed:'',task:'',output:''}); S.activeSnap=S.snapshots.length-1; save(); render(); }
 function delSnapshot(){ if(S.snapshots.length<=1){ alert('至少保留一个快照'); return; } S.snapshots.splice(S.activeSnap,1); S.activeSnap=0; save(); render(); }
-function newAgent(){ S.agents.push({label:'席位'+(S.agents.length+1),baseUrl:'',model:'',apiKey:'',timeout:60,retries:3,thinking:'disabled',temperature:0.8}); S.activeAgent=S.agents.length-1; save(); render(); }
+function newAgent(){
+  /* 2026-10-26：新增席位默认回填主力席位A的全部信息（含 key），改个名就能用 */
+  const base=S.agents[0]||{};
+  S.agents.push({label:'席位'+(S.agents.length+1)+' · 同主力',baseUrl:base.baseUrl||'',model:base.model||'',
+    apiKey:base.apiKey||'',timeout:base.timeout||60,retries:base.retries||3,
+    thinking:base.thinking||'disabled',temperature:base.temperature!=null?base.temperature:0.8});
+  S.activeAgent=S.agents.length-1; save(); render(); }
 function delAgent(){ if(S.agents.length<=1){ alert('至少保留一个席位'); return; } S.agents.splice(S.activeAgent,1); S.activeAgent=0; save(); render(); }
 function hint(msg){ const st=document.getElementById('status'); if(st) st.innerHTML='<span class="muted">'+esc(msg)+'</span>'; }
 function fillFromSnap(id){ const sn=S.snapshots[S.activeSnap]||{}; const map={identity:'identity',timeline:'timeline',task:'task',output:'output'};
@@ -514,7 +526,12 @@ async function chatTick(force){
   let j=null;
   try{ const r=await fetch(b+'/api/lab/live?limit=300'); if(r.ok) j=await r.json(); }catch(e){}
   const info=document.getElementById('chatInfo'); if(!info) return;
-  if(!j||!j.found){ info.innerHTML='<span class="muted">未连接（填右上/中栏的对局服务地址；开了对局自动出现）</span>'; return; }
+  if(!j||!j.found){
+    info.innerHTML='<span class="muted">未连接 —— 两条开局路：</span>'
+      +' <b>①配席位→点下方「⤴ 应用到对局」→ 开一局</b>（对局 AI 的模型与 key 全用第①列的）'
+      +'；或直接开一局后在这里围观/回退。也可以导入对局日志离线复盘。';
+    return;
+  }
   info.innerHTML=(j.paused?'<span class="badge b-warn">已暂停</span>':'<span class="badge b-ok">推进中</span>')
     + ' 第'+(j.round||'?')+'天 · '+esc(_phaseCn(j.phase))
     + (j.winner?(' · <b>'+esc(j.winner==='wolf'?'狼人胜':'好人胜')+'</b>'):'')
@@ -563,6 +580,23 @@ async function stepLab(){
     }catch(e){ hint('提示词覆盖设置失败：'+e.message+'（本次单步仍用服务端原 prompt）'); }
   }
   engStep(); chatSnapSoon();
+}
+
+/* 第①列席位 → 对局服务（key/model/baseUrl 全走第①列；下一局生效） */
+async function pushAgents(){
+  const b=engBase()||'';
+  const agents=S.agents.map(a=>({label:a.label,baseUrl:a.baseUrl,model:a.model,apiKey:a.apiKey,
+    temperature:Number(a.temperature)||0.8,timeout:Number(a.timeout)||60,thinking:a.thinking||'disabled'}));
+  const valid=agents.filter(a=>a.baseUrl&&a.model);
+  if(!valid.length){ hint('第①列还没有可用席位（要填接口地址+模型名）'); return; }
+  try{
+    const r=await fetch(b+'/api/lab/agents-config',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({agents:valid})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    document.getElementById('agentsApplied').textContent='已生效 ×'+j.count+'（下一局开局即用；对局中不受影响）';
+    hint('第①列席位已推给对局服务：'+valid.map(a=>a.model).join('、')+' —— 开一局，AI 的 key/模型全走这套配置');
+  }catch(e){ hint('推送失败：'+e.message); }
 }
 
 /* ---- 与第①②③列的联动 ---- */
