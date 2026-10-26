@@ -575,7 +575,29 @@ function show(id){
 function setLine(t){ /* no-op：字幕条已随顶栏删除 */ }
 function foot(t){ $('foot').textContent = t; }
 
+/* ============================================================
+   演示模式（2026-10-27）：play.html?demo=<场景名>
+   ── 前端同学**不依赖后端**看/改每个面板：页面 100% 真实（同一套渲染
+   管线），只有数据来自 frontend/demo_scenes.js 的内置场景，api() 被
+   拦截、轮询拉到的永远是场景静态数据。生产路径 DEMO=null，零影响。
+   场景清单见 dev_panels.html（iframe 墙，一页看全部场景）。
+   ============================================================ */
+var DEMO = null;
+
 async function api(path, opts){
+  if (DEMO){
+    var m = path.match(/\/seat\/(\d+)$/);
+    if (m){
+      var r = DEMO.roles ? DEMO.roles[Number(m[1])] : null;
+      var v = DEMO.public;
+      return Object.assign({ seat: Number(m[1]), role: r ? r.role : 'villager',
+        role_label: r ? r.role_label : '村民', alive: true, phase: v.phase,
+        round: v.round, players: v.players, speech: v.speech, timeline: v.timeline,
+        pending: v.pending, is_my_turn_to_speak: false, is_my_turn_to_vote: false },
+        r || {});
+    }
+    return DEMO.public;                    /* /public、/act、/arm… 全给场景静态数据 */
+  }
   var r = await fetch(path, opts);
   if (!r.ok){ throw new Error(r.status + ' ' + (await r.text()).slice(0, 120)); }
   return await r.json();
@@ -1143,7 +1165,41 @@ async function tryResume(){
   }
 }
 
+function loadScript(src){
+  return new Promise(function(res, rej){
+    var s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = function(){ rej(new Error('加载失败：' + src)); };
+    document.head.appendChild(s);
+  });
+}
+
 (async function start(){
+  /* 演示模式：?demo=<场景名> —— 不连服务、不 boot，直接进场景 */
+  var dm = /[?&]demo=([\w-]+)/.exec(location.search);
+  if (dm){
+    try {
+      await loadScript('/demo_scenes.js');
+    } catch (e) {
+      document.body.innerHTML = '<p style="padding:20px">演示场景脚本加载失败（'
+        + e.message + '）—— 请用服务打开（mock :5501 / 后端 :8000），别用 file://</p>';
+      return;
+    }
+    var sc = DEMO_SCENES[dm[1]];
+    if (!sc){
+      document.body.innerHTML = '<p style="padding:20px">未知场景「' + dm[1]
+        + '」。可用：' + Object.keys(DEMO_SCENES).join(' / ') + '</p>';
+      return;
+    }
+    if (sc.kind === 'cards'){
+      DEMO = sc; GID = 'DEMO'; PUBLIC = sc.public;
+      cardQueue = [0, 1, 2, 3];            /* 4 张身份牌轮着翻，翻完顺势进桌 */
+      showNextCard();
+    } else {
+      DEMO = sc; GID = 'DEMO'; PUBLIC = sc.public;
+      resumeInto('DEMO', sc.public);
+    }
+    return;
+  }
   boot();
   await tryResume();
   show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */

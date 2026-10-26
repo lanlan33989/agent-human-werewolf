@@ -1,237 +1,61 @@
 <!DOCTYPE html>
 <!-- ============================================================
-  前端面板画廊（2026-10-27，给黄子凡）：不开后端、不跑对局，
-  一页看全部 UI 状态 —— 身份牌（各角色）/ 夜晚各角色操作面板 /
-  真人发言 / 投票 / 票型大字 / 遗言 / 终局。
+  前端面板画廊（2026-10-27，给黄子凡）· iframe 墙版
+  ── 每一格都是**真的 play.html**（?demo=场景：内置假数据 + 真实渲染
+  管线，不连后端），所见即产品所得，不存在两份样式。
 
   用法：python mock/mock_server.py → 开 http://127.0.0.1:5501/dev_panels.html
-        （或后端服务 :8000/dev_panels.html）
+  改样式（table.css / play.html / tableui.js）后刷新本页即见全部场景。
 
-  样式同源：本页 <style> 是**运行时从 play.html 抽出来的**（fetch 同源）——
-  改 play.html / table.css 的样式，刷新本页立刻全部反映，不存在两份维护。
-
-  ⚠️ 画廊里的面板是**静态定格**（没有交互、不连服务）；
-     要练交互流转用 mock 假数据流（:5501/play.html），
-     要看真实全流程用 MOCK 真后端（MOCK=1 起服务开 /play）。
+  加新场景：在 frontend/demo_scenes.js 的 DEMO_SCENES 里加一项 +
+  下面 SCENES 里加一格。要练交互流转：:5501/play.html（mock 假数据）。
 ============================================================ -->
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>面板画廊 · dev_panels</title>
+<title>面板画廊 · demo 场景墙</title>
 <style>
-  /* 画廊自身的排版（面板内容的样式全部来自 play.html 注入 + table.css） */
   body{margin:0;background:#241a3f;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#fff;}
-  .gal-head{padding:18px 16px 8px;}
-  .gal-head h1{font-size:20px;margin:0 0 4px;}
-  .gal-head p{font-size:13px;color:#c9bfe8;margin:2px 0;}
-  .gal-card{margin:14px;padding:14px;border-radius:16px;background:rgba(255,255,255,.05);
-            border:1px solid rgba(255,255,255,.14);}
-  .gal-card>h2{font-size:15px;margin:0 0 2px;color:#ffd76a;}
-  .gal-card>.gal-note{font-size:12px;color:#b6abd8;margin:0 0 12px;}
-  /* 画廊里给面板一块固定舞台，组件类的绝对定位才有参照 */
-  .gal-stage{position:relative;width:340px;height:340px;margin:0 auto;}
-  .gal-stage.tall{height:420px;}
-  .gal-strip{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;}
-  .linkback{display:inline-block;margin:14px 16px 30px;color:#c9bfe8;font-size:13px;}
+  .head{padding:18px 16px 6px;}
+  .head h1{font-size:20px;margin:0 0 4px;}
+  .head p{font-size:13px;color:#c9bfe8;margin:2px 0;}
+  .wall{display:flex;flex-wrap:wrap;gap:20px;padding:14px 16px 40px;align-items:flex-start;}
+  .cell{width:390px;}
+  .cell>h2{font-size:15px;margin:0 0 2px;color:#ffd76a;}
+  .cell>.note{font-size:12px;color:#b6abd8;margin:0 0 8px;min-height:16px;}
+  .frame{width:390px;height:720px;border:1px solid rgba(255,255,255,.18);border-radius:14px;
+         background:#171029;overflow:hidden;}
+  .frame iframe{width:100%;height:100%;border:0;}
 </style>
 </head>
 <body>
-<div class="gal-head">
-  <h1>面板画廊（前端样式参照）</h1>
-  <p>样式运行时抽自 play.html —— 改 play.html / table.css 后刷新本页即见全部状态。</p>
-  <p>本页是静态定格；练交互用 :5501/play.html（假数据），看真实全流程用 MOCK 后端 /play。</p>
+<div class="head">
+  <h1>面板画廊（demo 场景墙）</h1>
+  <p>每一格都是真页面 play.html 的演示模式（内置假数据、真实渲染管线）—— 改样式刷新即见，所见即产品所得。</p>
+  <p>交互演练：:5501/play.html（mock 假数据）· 真实全流程：MOCK 后端 /play · 本页不连后端。</p>
 </div>
-
-<!-- ① 身份牌（各角色） -->
-<section class="gal-card">
-  <h2>① 身份牌（翻面态 · 各角色）</h2>
-  <p class="gal-note">结构：.cardarea > .bigcard.flip > .inner > .face.back > .r（身份名）+ .k（一句话技能）。</p>
-  <div class="gal-strip">
-    <div class="cardarea"><div class="bigcard flip"><div class="inner">
-      <div class="face back"><div class="r">狼人</div><div class="k">每晚与同伴一起刀一个人。假装好人，活到最后。</div></div>
-    </div></div><div class="cardhint">狼人 · 被怀疑时的自辩是重点</div></div>
-    <div class="cardarea"><div class="bigcard flip"><div class="inner">
-      <div class="face back"><div class="r">预言家</div><div class="k">每晚验一个人的阵营。你报出的查杀/金水是全场的锚。</div></div>
-    </div></div><div class="cardhint">预言家 · 报验要报座位号</div></div>
-    <div class="cardarea"><div class="bigcard flip"><div class="inner">
-      <div class="face back"><div class="r">女巫</div><div class="k">一瓶解药一瓶毒药。同一晚只能用一瓶。</div></div>
-    </div></div><div class="cardhint">女巫 · 空刀夜解药按钮置灰</div></div>
-    <div class="cardarea"><div class="bigcard flip"><div class="inner">
-      <div class="face back"><div class="r">守卫</div><div class="k">每晚守护一个人（可守自己）。被守的人当晚不会被刀死。</div></div>
-    </div></div><div class="cardhint">守卫</div></div>
-    <div class="cardarea"><div class="bigcard flip"><div class="inner">
-      <div class="face back"><div class="r">村民</div><div class="k">没有技能。用发言和投票把狼人投出去。</div></div>
-    </div></div><div class="cardhint">村民</div></div>
-  </div>
-</section>
-
-<!-- ② 夜 · 狼刀轮盘 -->
-<section class="gal-card">
-  <h2>② 夜 · 狼人刀人（轮盘 + 队友/刀口标记）</h2>
-  <p class="gal-note">.wnum：ai 红 / human 蓝 / pick 可选 / sel 已选 / dead 灰；.tag.wolfmate 🐺 队友、.tag.knife 🔪 已被队友点过。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs"></div></div>
-    <div class="g" id="bigIcon">🐺</div>
-    <div class="t" id="bigTitle">狼人</div>
-    <div class="who" id="bigWho">与 3 号共同行动：点号码 = 提议刀口，全员确认后生效</div>
-    <div id="cdNum"></div>
-  </div></div></div>
-</section>
-
-<!-- ③ 夜 · 女巫 -->
-<section class="gal-card">
-  <h2>③ 夜 · 女巫（✓ 用解药 / ✕ 不用 · 含空刀置灰态）</h2>
-  <p class="gal-note">被刀者标 .victim；空刀夜 #wheelYes.off 置灰不可点（2026-10-07 定）。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs2"></div></div>
-    <div class="g" id="bigIcon2">⚗️</div>
-    <div class="t" id="bigTitle2">女巫</div>
-    <div class="who" id="bigWho2">5 号被刀，是否使用解药？</div>
-    <div id="wheelBtns" class="on"><button id="wheelYes">✓</button><button id="wheelNo">✕</button></div>
-  </div></div></div>
-</section>
-
-<!-- ④ 夜 · 预言家 -->
-<section class="gal-card">
-  <h2>④ 夜 · 预言家（点号码验人 + 结果大字）</h2>
-  <p class="gal-note">#seerBig：验完显示 好人（绿）/ 坏人（红）大字。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs3"></div></div>
-    <div class="g" id="bigIcon3">🔮</div>
-    <div class="t" id="bigTitle3">预言家</div>
-    <div class="who" id="bigWho3">点一个号码 = 决定今晚验谁</div>
-    <div id="seerBig">好人</div>
-  </div></div></div>
-</section>
-
-<!-- ⑤ 白天 · 真人发言 -->
-<section class="gal-card">
-  <h2>⑤ 白天 · 真人发言（按住说话 / 识别中 / 打字兜底）</h2>
-  <p class="gal-note">#spkTip 提示行 + #hoSpeak 操作条（录音按钮 + #hoStatus 识别状态 + #hoText 打字兜底）。</p>
-  <div class="gal-stage tall"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs4"></div></div>
-    <div class="g" id="bigIcon4">🎤</div>
-    <div class="t" id="bigTitle4">到你发言</div>
-    <div class="who" id="bigWho4">按住下面说话，松手自动识别上桌</div>
-    <div id="spkTip">识别失败就用「打字」，发言照样上台</div>
-  </div></div>
-  <div id="handoff" class="on"><div class="sheet">
-    <div class="tip" id="hoTipX">轮到 2 号（你）发言</div>
-    <div id="hoSpeak">
-      <button id="hoSay">按住说话</button>
-      <input id="hoText" placeholder="或点这里打字发言…">
-      <div id="hoStatus">● 录音中 3.2s</div>
-    </div>
-    <div class="tip" id="hoErr"></div>
-  </div></div></div>
-</section>
-
-<!-- ⑥ 投票 -->
-<section class="gal-card">
-  <h2>⑥ 投票（点号码选中 → 圆心确认 · 可弃票）</h2>
-  <p class="gal-note">投票允许投自己；.sel = 已选中待确认。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs5"></div></div>
-    <div class="g" id="bigIcon5">⚖️</div>
-    <div class="t" id="bigTitle5">投票</div>
-    <div class="who" id="bigWho5">已选 3 号 —— 点圆心确认</div>
-  </div></div></div>
-</section>
-
-<!-- ⑦ 票型大字 -->
-<section class="gal-card">
-  <h2>⑦ 投票结果（票型大字）</h2>
-  <p class="gal-note">#voteBig：不显示 AI 文本，只把票型用大字摆出来（2026-10-02 定）。</p>
-  <div class="gal-stage tall"><div class="table"><div class="tcenter">
-    <div class="g" style="font-size:40px">⚖️</div>
-    <div class="t" style="font-size:22px">票型</div>
-    <div class="who">2号 3票 · 5号 1票 · 弃票 1</div>
-  </div></div>
-  <div id="voteBig" style="position:relative;margin-top:10px;text-align:center;font-size:18px;line-height:1.9">
-    1号 ─→ 投 3号<br>2号 ─→ 投 3号<br>4号 ─→ 投 1号<br>5号 ─→ 弃票
-  </div></div>
-</section>
-
-<!-- ⑧ 出局与遗言 -->
-<section class="gal-card">
-  <h2>⑧ 出局 / 遗言</h2>
-  <p class="gal-note">出局者标 .victim；猎人出局切到开枪面板（⑨ 同轮盘结构）。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs6"></div></div>
-    <div class="g" id="bigIcon6">💀</div>
-    <div class="t" id="bigTitle6">遗言</div>
-    <div class="who" id="bigWho6">3 号出局 —— 留一段遗言（30 秒）</div>
-  </div></div></div>
-</section>
-
-<!-- ⑨ 猎人开枪 -->
-<section class="gal-card">
-  <h2>⑨ 猎人开枪（可放弃）</h2>
-  <p class="gal-note">#wheelExtra：带枪走人 / 交回手机 等补充入口在此行。</p>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div id="wheelRot"><div class="acts" id="hoActs7"></div></div>
-    <div class="g" id="bigIcon7">🔫</div>
-    <div class="t" id="bigTitle7">猎人</div>
-    <div class="who" id="bigWho7">开枪带走一个人（或放弃）</div>
-    <div id="wheelExtra" class="on" style="display:flex"><button>不开枪</button></div>
-  </div></div></div>
-</section>
-
-<!-- ⑩ 终局 -->
-<section class="gal-card">
-  <h2>⑩ 终局（胜负 + 重新开一局）</h2>
-  <div class="gal-stage"><div class="table"><div class="tcenter">
-    <div class="g" style="font-size:44px">🎉</div>
-    <div class="t" style="font-size:24px">好人胜利</div>
-    <div class="who">狼人：2 号、6 号 —— 三天三夜，好人识破了所有伪装</div>
-  </div></div></div>
-</section>
-
-<a class="linkback" href="/play.html">← 回对局页</a>
-
+<div class="wall" id="wall"></div>
 <script>
-/* 样式同源：运行时从 play.html 抽 <style> 注入（改 play.html/table.css 刷新即见） */
-fetch('play.html').then(function(r){ return r.text(); }).then(function(t){
-  var m = t.match(/<style>[\s\S]*?<\/style>/gi) || [];
-  for (var i = 0; i < m.length; i++) document.head.insertAdjacentHTML('beforeend', m[i]);
-  buildDials();
-}).catch(function(){
-  document.body.insertAdjacentHTML('afterbegin',
-    '<div style="background:#b3261e;padding:8px 16px;font-size:13px">'
-    + '⚠️ 没抓到 play.html 的样式（要用服务打开：mock :5501 或后端 :8000，别用 file://）</div>');
-});
-
-/* 轮盘刻度：与 tableui.js 的生成公式一致（1 号在正上方，顺时针；AI 红/人类蓝） */
-function buildDials(){
-  var boxes = [['hoActs', true, true],  ['hoActs2', true, true],
-               ['hoActs3', true, false], ['hoActs4', true, false],
-               ['hoActs5', true, false], ['hoActs6', true, false],
-               ['hoActs7', true, false]];
-  for (var b = 0; b < boxes.length; b++){
-    var id = boxes[b][0], marks = boxes[b][1], picks = boxes[b][2];
-    var box = document.getElementById(id);
-    if (!box) continue;
-    var n = 9, step = 360 / n, h = '';
-    for (var i = 0; i < n; i++){
-      var a = i * step, rad = a * Math.PI / 180;
-      var x = 50 + 46 * Math.sin(rad), y = 50 - 46 * Math.cos(rad);
-      var ai = (i % 2 === 1);                       /* 逢双数座位画成 AI（演示用） */
-      var dead = (id === 'hoActs6' && i === 2);     /* 遗言场景：3 号已出局 */
-      h += '<button class="wnum ' + (ai ? 'ai' : 'human') + (dead ? ' dead' : '')
-         + (picks && !dead && i !== 2 ? ' pick' : '')
-         + (id === 'hoActs5' && i === 2 ? ' sel' : '')
-         + '" data-no="' + (i + 1) + '" style="left:' + x + '%;top:' + y + '%">' + (i + 1);
-      if (marks && i === 1) h += '<i class="tag wolfmate">🐺</i>';
-      if (marks && i === 4) h += '<i class="tag knife">🔪</i>';
-      if (id === 'hoActs2' && i === 4) h += '<i class="tag victim">☠️</i>';
-      if (id === 'hoActs6' && i === 2) h += '<i class="tag victim">☠️</i>';
-      h += '</button>';
-    }
-    box.innerHTML = h;
-  }
-  var yes = document.getElementById('wheelYes');
-  if (yes) { /* 演示空刀置灰：本格保持可点，另复制一个置灰样例？—— 保持简单：不置灰 */ }
+var SCENES = [
+  ['cards',       '身份牌 · 逐座位翻牌（狼/预/巫/守/民）', '翻面样式按座位轮换；卡片文案与狼队友提示来自 demo seat 数据'],
+  ['night_wolf',  '夜 · 狼人刀人',                '轮盘 + 🐺队友 + 🔪刀口标记；点号码即提议'],
+  ['night_witch', '夜 · 女巫（解药 ✓✕）',          '5 号被刀 ☠️ 标记；空刀夜把场景里 now.why 改「无人被刀」看按钮置灰'],
+  ['night_seer',  '夜 · 预言家（验人）',            '点号码验人；验完出好人/坏人大字'],
+  ['day_say',     '白天 · 轮到真人发言',            '按住说话 / 识别中 / 打字兜底；上一位 AI 的发言在播报里'],
+  ['vote',        '投票',                        '点号码选中 → 圆心确认；已投 AI 有标记'],
+  ['vote_result', '投票结果（票型大字）',            '#voteBig 只摆票型不显示 AI 文本'],
+  ['ended',       '终局（胜负 + 战报入口）',          'winner 非 null 即结束；局末出口此时才出现']
+];
+var wall = document.getElementById('wall');
+for (var i = 0; i < SCENES.length; i++){
+  var c = SCENES[i];
+  var d = document.createElement('div');
+  d.className = 'cell';
+  d.innerHTML = '<h2>' + (i + 1) + '. ' + c[1] + '</h2>'
+    + '<p class="note">' + c[2] + '</p>'
+    + '<div class="frame"><iframe src="play.html?demo=' + c[0] + '" loading="lazy"></iframe></div>';
+  wall.appendChild(d);
 }
 </script>
 </body>
