@@ -161,7 +161,7 @@ def main() -> int:
         #    不等得到取决于**时钟预算**（_adv_deadline），mock 局也会因此漂移
         #    个别调用的座位顺序 —— raw_output 逐字一致在并发预跑下不可保证。
         #    这里仍严格验证 rng/规则层确定性（胜负、行数、metrics）；raw 层面的
-        #    复现对比按 runs-sample/README 的口径：LLM_TEMPERATURE=0 + 真模型，
+        #    复现对比按 docs/存档与度量口径.md 的口径：LLM_TEMPERATURE=0 + 真模型，
         #    比"高度接近"而不是逐字相同。
         check("同 seed 复跑：调用行数一致", len(rows) == len(rows3),
               "%d vs %d" % (len(rows), len(rows3)))

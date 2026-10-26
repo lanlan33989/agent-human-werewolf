@@ -24,7 +24,7 @@
     2. 记录失败不中断对局 —— 本模块所有对外函数全部 try/except，错误攒进
        Archive.errs，局末写进 result.json；runs/ 不可写时对局照常跑完
     3. 局末强制 flush + close —— 每次写入都是 open/append/close，天然满足
-    4. runs/ 已进 .gitignore；脱敏样例与格式说明在 runs-sample/
+    4. runs/ 已进 .gitignore；存档格式与五个指标的口径写在 docs/存档与度量口径.md
     5. 温度/seed 从配置读 —— temperature 取自 layers_llm 实例实际值，
        seed 取自 Session 的 rng 种子；本模块零硬编码
 

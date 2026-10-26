@@ -52,8 +52,8 @@ git clone https://github.com/lanlan33989/agent-human-werewolf.git
 cd agent-human-werewolf
 
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # Linux/macOS
+.venv\Scripts\pip install -r backend/requirements.txt   # Windows
+# source .venv/bin/activate && pip install -r backend/requirements.txt  # Linux/macOS
 
 # 一键启动（自检端口 → 清理旧进程 → 单进程同听 http:8000 / https:8443）
 .venv\Scripts\python.exe start.py
@@ -73,19 +73,65 @@ python -m venv .venv
 
 冒烟测试均可在仓库根目录直接运行：`python tests/<脚本名>.py`。
 
+## 谁该看哪份（按角色进，别从头读）
+
+| 你是 | 第一件事 | 入口文档 |
+|---|---|---|
+| **前端负责人** | clone 完**不需要装任何环境、不需要起后端**，先把画廊跑起来看全部界面 | [frontend/README.md](frontend/README.md) · [docs/前端界面清单.md](docs/前端界面清单.md) |
+| **后端负责人** | 建 venv → 一键启动 → 跑回归 | [backend/README.md](backend/README.md) · [docs/contract.md](docs/contract.md) · [docs/openapi.json](docs/openapi.json) |
+| **调提示词 / 跑评测（工作台）** | 起服务后开 `/lab`（提示词实验室）与 `/board`（榜单与战报） | [docs/lab-README.md](docs/lab-README.md) · [docs/存档与度量口径.md](docs/存档与度量口径.md) |
+
+一张联接清单（写排期时直接贴）：**[docs/入口链接.md](docs/入口链接.md)**。
+
 ## 页面一览
 
-| 页面 | 用途 |
-|---|---|
-| `frontend/play.html` | 对局页面（根路径直落此页）：AI 发言播报（半双工）、按住说话、确认后提交 |
-| `board.html` | 榜单与战报 |
-| `admin.html` | 配置台 |
+| 页面（线上 URL） | 源码 | 用途 |
+|---|---|---|
+| `/play` | [frontend/play.html](frontend/play.html) | 对局页（根路径直落此页）：AI 发言播报、按住说话、夜间面板、投票 |
+| `/lab` | [frontend/promptlab.html](frontend/promptlab.html) | 提示词实验室：快照 / 回退 / 重跑 / 线上契约编辑 |
+| `/admin` | [frontend/admin.html](frontend/admin.html) | 配置台：key / 通道 / 音色 / prompt |
+| `/board` | [frontend/board.html](frontend/board.html) | 榜单与战报（只读，随便刷新） |
+| `/dev_panels.html` | [frontend/dev_panels.html](frontend/dev_panels.html) | **前端面板画廊**：不开后端、不跑对局，一页看全部 UI 状态 |
+| `/judge_voice.js` | [frontend/judge_voice.js](frontend/judge_voice.js) | 法官播报的本地合成通道（Web Speech） |
 
-## 项目结构（2026-10-26 前后端分离）
+> ⚠️ 本站静态资源是**一个文件一条路由**（不是 StaticFiles 挂目录）：
+> 前端**新增或拆分 js/html 时，必须同时在 `backend/server.py` 补一条路由**，
+> 否则浏览器 404、页面静默少一块。补完请跑一次下面的自检。
+
+## 前端怎么能完全不依赖后端迭代（本周的默认姿势）
+
+```bash
+# 1) 起假数据服务（只要标准库 python，不用装依赖）
+python frontend/mock/mock_server.py            # :5501
+
+# 2) 一页看全部界面（每一格都是真的 play.html）
+#    http://127.0.0.1:5501/dev_panels.html
+
+# 3) 想练交互流转（点号码 → 提交 → 下一屏）
+#    http://127.0.0.1:5501/play.html?demo=night_wolf
+```
+
+- 每一格都是**真页面 + 真渲染管线**，只有数据来自 [frontend/demo_scenes.js](frontend/demo_scenes.js)
+  的内置场景 ⇒ 改 `table.css` / `play.html` / `tableui.js` 后刷新画廊，所有场景一起变，**所见即所得**。
+- 加一个新界面 = 在 `demo_scenes.js` 里加一项，画廊**自动生成格子**（忘归类会弹红条提醒）。
+- 完整清单与"加页面的规矩"：[docs/前端界面清单.md](docs/前端界面清单.md)。
+
+## 改完之后，跑这个自检（30 秒）
+
+```bash
+.venv/Scripts/python.exe tests/_check-split-consistency.py
+```
+
+它查六类分离漂移：后端路由引用的静态文件是否真在 `frontend/`、前端调的接口后端有没有、
+后端有但前端没接的接口、`docs/openapi.json` 是否跟得上代码、目录归属、mock 服务路径。
+**全绿才算改完。**（还没挂 CI，现在是手跑。）
+
+## 项目结构（2026-10-26 前后端分离 · 2026-10-27 收拢）
 
 ```
 ├── start.py            # 一键启动器（自检/清进程/单进程双协议；py 模块在 backend/）
 ├── backend/            # ★ 后端：全部 Python
+│   ├── requirements.txt#   服务端依赖清单（README 的建环境命令指向这里）
 │   ├── server.py       #   FastAPI 服务端 + 页面路由 + 语音 + CORS（联调白名单）
 │   ├── game_api.py     #   对局 HTTP API
 │   ├── engine.py       #   狼人杀规则引擎（确定性逻辑，四层信息隔离）
@@ -93,13 +139,17 @@ python -m venv .venv
 │   ├── night_driver.py / night_pre.py / night_script.py   # 夜间流程
 │   ├── layers_asr/llm/tts.py          # ASR / LLM / TTS 适配层（可插拔）
 │   ├── lab_api.py / admin_api.py      # 提示词实验室 / 配置台
-│   ├── run_archive.py  #   对局自动存档（runs/）
+│   ├── run_archive.py  #   对局自动存档（runs/，不进 git）
 │   └── metrics.py / experience.py / report.py / summarize.py
-├── frontend/           # ★ 前端：页面与静态资源（play/promptlab/admin/board + js/css）
-├── docs/               # contract.md（接口契约）+ openapi.json + 设计文档
-├── mock/               # 前端联调假服务（fixtures 为实机抓的真实响应）
-├── runs-sample/        # 对局存档格式说明与脱敏样例（真实存档在 runs/，不进 git）
-├── tests/              # 冒烟测试与诊断脚本（tests/_smoke-*.py）
+├── frontend/           # ★ 前端：页面与静态资源，前端同学只在这动手
+│   ├── README.md       #   前端上手（画廊 / mock / 不碰后端的迭代方式）
+│   ├── play.html / tableui.js / speech_ui.js / table.js / rec.js / table.css
+│   ├── promptlab.html / admin.html / board.html / dev_panels.html
+│   ├── judge_voice.js  #   法官本地合成（2026-10-27 从仓库根归位到这里）
+│   ├── demo_scenes.js  #   画廊的全场景数据（加界面就加在这里）
+│   └── mock/           #   前端联调假服务（fixtures 为实机抓的真实响应），归前端管
+├── docs/               # contract.md（接口契约）+ openapi.json + 各角色入口 + 界面清单
+├── tests/              # 冒烟测试与自检脚本（_smoke-*.py / _check-split-consistency.py）
 └── lab/                # 实验室运行时产物（不进 git）
 ```
 

@@ -1,0 +1,41 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]: 面杀高手
+    - generic [ref=e6]:
+      - generic [ref=e7]: 定几个人
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - text: 真人
+          - spinbutton "真人" [ref=e10]: "2"
+        - generic [ref=e11]:
+          - text: AI
+          - spinbutton "AI" [ref=e12]: "2"
+        - generic [ref=e14]:
+          - button "恢复推荐排位" [ref=e15]
+          - text: 推荐 = 真人先发言、真人之间均匀隔 AI
+      - generic [ref=e16]: 玩多大
+      - generic [ref=e17]: AI 性格
+      - generic [ref=e18]: 规则开关
+      - generic [ref=e19]: —
+      - button "开始一局" [ref=e20]
+      - link "榜单与战报" [ref=e22] [cursor=pointer]:
+        - /url: /board
+      - generic [ref=e23]: 模型与语音 Key
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - text: 语音识别 ASR
+          - textbox "语音识别 ASR" [ref=e26]:
+            - /placeholder: ASR_API_KEY
+        - generic [ref=e27]:
+          - text: 大模型 LLM
+          - textbox "大模型 LLM" [ref=e28]:
+            - /placeholder: LLM_API_KEY
+        - generic [ref=e29]:
+          - text: 语音合成 TTS
+          - textbox "语音合成 TTS" [ref=e30]:
+            - /placeholder: DASHSCOPE_API_KEY
+      - button "应用 Key" [ref=e32]
+  - generic [ref=e33]:
+    - button "⏭" [ref=e34] [cursor=pointer]
+    - button "↻" [ref=e35] [cursor=pointer]
+  - button "🩺" [ref=e36]

@@ -43,7 +43,7 @@ result.json      胜负/票型/死亡/夜记录/metrics
 ```
 
 五个度量指标（发言合规率/投票有据率/自相矛盾率/信息引用率/越权率）**只看这些文件就能人工算**，
-口径表与脱敏样例：https://github.com/lanlan33989/agent-human-werewolf/tree/main/runs-sample
+口径表与字段说明：`docs/存档与度量口径.md`（原 `runs-sample/` 已于 2026-10-27 并入本文件，脱敏样例不再随仓库带）
 （`runs/` 不进 git；追加写、进程锁、runs 不可写时对局照常）
 
 ## 常用工作流（提示词负责人每天用的循环）

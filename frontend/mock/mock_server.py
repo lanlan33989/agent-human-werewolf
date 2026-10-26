@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-前端联调假服务（2026-09-26 前后端分离配套）：把 mock/fixtures/ 里的真实响应
+前端联调假服务（2026-09-26 前后端分离配套）：把 frontend/mock/fixtures/ 里的真实响应
 按路由返回，前端不碰后端也能把夜间面板/轮盘/倒计时全部开发完。
 
 用法（仓库根 h5/ 下）：
-    python mock/mock_server.py            # 默认 :5501
-    python mock/mock_server.py --port 5501 --delay 0.8
+    python frontend/mock/mock_server.py            # 默认 :5501（仓库根 h5/ 下执行）
+    python frontend/mock/mock_server.py --port 5501 --delay 0.8
 
 路由约定（fixtures 文件名即路由）：
     /api/health            → health.json
@@ -72,9 +72,11 @@ def _load(name: str):
 
 
 # 静态页面（2026-10-27）：同一端口直接吐 frontend/ 的页面与资源 ——
-# 黄子凡不需要再开第二个服务：:5501/play.html 就是"页面+假数据"全流程。
-_FRONTEND = os.path.join(os.path.dirname(HERE), "frontend")
-_ROOT = os.path.dirname(HERE)          # 仓库根：judge_voice.js 这类根级脚本
+# 前端同学不需要再开第二个服务：:5501/play.html 就是"页面+假数据"全流程。
+# ⚠️ 2026-10-27 搬家：本服务从 h5/mock/ 挪到了 h5/frontend/mock/
+#    （归到前端目录，免得被当作后端的一部分而没人管） ⇒ frontend/ 现在是
+#    HERE 的上一级，仓库根再上一级。
+_FRONTEND = os.path.dirname(HERE)
 _TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
           ".css": "text/css", ".png": "image/png", ".ico": "image/x-icon"}
 
@@ -88,10 +90,7 @@ def _static(path: str):
         return None
     fp = os.path.normpath(os.path.join(_FRONTEND, name))
     if not fp.startswith(_FRONTEND) or not os.path.isfile(fp):
-        # 兜底到仓库根（只允许根级单文件，杜绝路径穿越）
-        fp = os.path.normpath(os.path.join(_ROOT, name))
-        if not fp.startswith(_ROOT) or not os.path.isfile(fp):
-            return None
+        return None
     ext = os.path.splitext(fp)[1]
     with open(fp, "rb") as f:
         return _TYPES.get(ext, "application/octet-stream"), f.read()

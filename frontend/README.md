@@ -34,24 +34,54 @@
 
 **前端只渲染，不做裁决**：倒计时到 0 不自己判超时、面板不自己弹 —— 全听服务端。
 
-## 联调方式（不碰后端也能干活）
+## 迭代方式（2026-10-27 定稿：**完全不需要后端**）
 
 ```powershell
-# 仓库根下：起假服务（实机抓的真实响应）
-python mock/mock_server.py --port 5501
-# 前端用 Live Server 开 frontend/play.html（:5500），请求指向 :5501 或真后端 :8000
+# 1) 仓库根下，起假数据服务（只要标准库 python，不用建 venv、不用装依赖）
+python frontend/mock/mock_server.py            # :5501
+
+# 2) 面板画廊：不开后端、不跑对局，一页看全部界面
+#    http://127.0.0.1:5501/dev_panels.html
+
+# 3) 单场景练交互（点号码 → 提交 → 下一屏）
+#    http://127.0.0.1:5501/play.html?demo=night_wolf
+#    场景名见 frontend/demo_scenes.js
 ```
 
-- 后端已开 CORS 白名单（`backend/server.py` 的 CORSMiddleware，新端口去那里加）
-- 想演练异常序列（夜转昼 / `started` 翻转 / `until_left` 回退）：直接改 `mock/fixtures/*.json`
-- 语音链路最后两天再接真（`VOICE_ON` / 云 TTS），开发期静音
+三条路的差别：
+
+| 地址 | 数据 | 用来干什么 |
+|---|---|---|
+| `:5501/dev_panels.html` | 内置场景 | **改样式**：每格都是真 play.html，改完刷新全部场景一起变 |
+| `:5501/play.html?demo=<场景>` | 内置场景 | **练单屏交互**：可以点、可以提交（提交后按 next 链自动进下一场景） |
+| `:5501/play.html` | mock 假数据 | **跑完整流程**：开局 → 夜间 → 白天 → 终局，全部假数据 |
+
+### 加一个新界面（三步，不用改 gallery）
+
+1. 在 [`demo_scenes.js`](demo_scenes.js) 里加一项 `{title, note, public}`（`public` 照真实 `/public`
+   的字段抄，样例在 `mock/fixtures/public.json`）；
+2. 刷新画廊 —— 格子**自动生成**；没放进 `dev_panels.html` 的 `GROUPS` 也没关系，
+   底部会弹红条提醒你归类；
+3. 需要新接口/新字段 ⇒ 先在 [`docs/contract.md`](../docs/contract.md) 登记，再让后端同步到 mock。
+
+> 判断标准：demo 场景走的是**真渲染管线**（`resumeInto → enterTable → tick → renderNightDial`），
+> 所以画廊里长什么样，线上就是什么样；反过来，如果某屏只在 demo 里出现而真机没有，
+> 那是数据抄错了，不是画面对了。
+
+## 以前的做法（已废弃，别再用）
+
+- ~~前端用 Live Server 开 :5500 再跨端口打 :5501~~ —— mock 服务现在**同端口吐页面**，
+  一个 `:5501` 全解决，不再需要第二个服务、也不再需要加 CORS 白名单。
+- mock 服务已经从仓库根的 `mock/` 挪到 `frontend/mock/`（归前端管），路径别再按旧位置写。
 
 ## 已知坑（都踩过，别再踩）
 
-1. **新增 js/css/html 必须在 `backend/server.py` 补一条路由**——本站静态资源是一文件一路由（不是 StaticFiles 挂目录），不补路由浏览器 404、页面静默少一块；
-2. **静态资源一律禁缓存**（server 端 `no-store`）：改了没生效先怀疑缓存；
-3. 手机端麦克风必须 **HTTPS**（`start.py` 会自动生成自签证书并双协议启动）；
-4. 刷新/重开**永远落回封面**（"继续上一局"按钮会自己出现）——这是 2026-10-01 用户定的，不许改回自动进局。
+1. **新增 js/css/html 必须在 `backend/server.py` 补一条路由**——本站静态资源是一文件一路由（不是 StaticFiles 挂目录），不补路由浏览器 404、页面静默少一块（`judge_voice.js` 就这么失联过一次，2026-10-27 修）；
+2. **demo 场景的数据必须抄真值**：`phase` 结束是小写 `ended`、`winner` 是 `wolf`/`good` —— 写成大写或整句，局末那排出口（本局战报/导出复盘）会**悄悄不出现**；
+3. `renderWheelAct` 里夜间与投票已被统一短路到**拨号盘**（`renderNightDial`），白天发言才是大圆；女巫 ✓✕ 大圆、狼队共屏那两段现在是死代码，别照着它们设计；
+4. **静态资源一律禁缓存**（server 端 `no-store`）：改了没生效先怀疑缓存；
+5. 手机端麦克风必须 **HTTPS**（`start.py` 会自动生成自签证书并双协议启动）；
+6. 刷新/重开**永远落回封面**（"继续上一局"按钮会自己出现）——这是 2026-10-01 用户定的，不许改回自动进局。
 
 ## 本冲刺（10/27–11/7）前端任务落点
 

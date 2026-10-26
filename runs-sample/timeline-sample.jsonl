@@ -1,5 +1,0 @@
-{"round": null, "seq": 0, "seat": null, "is_ai": null, "type": "sys", "text": "天黑请闭眼。", "target": null, "claimed_role": null}
-{"round": 1, "seq": 1, "seat": null, "is_ai": null, "type": "sys", "text": "天亮了。昨夜是平安夜。", "target": null, "claimed_role": null}
-{"round": 1, "seq": 2, "seat": 0, "is_ai": true, "type": "speech", "text": "我昨晚验了 2 号，是好人。", "target": null, "claimed_role": null}
-{"round": 1, "seq": 3, "seat": 1, "is_ai": true, "type": "vote", "text": "投票结果：1 号 2 票，2 号 1 票。", "target": null, "claimed_role": null}
-{"round": 1, "seq": 4, "seat": null, "is_ai": null, "type": "death", "text": "1 号出局。", "target": null, "claimed_role": null}

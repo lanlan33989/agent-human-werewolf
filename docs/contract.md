@@ -5,8 +5,8 @@
 >
 > 配套文件：
 > - `docs/openapi.json` —— FastAPI 自动生成的全量端点描述（`python -c "import sys; sys.path.insert(0,'backend'); from server import app; import json; print(json.dumps(app.openapi()))" > docs/openapi.json` 重新生成）
-> - `mock/fixtures/*.json` —— **实机抓的**真实响应样例，前端 mock 直接喂这些
-> - `mock/mock_server.py` —— 50 行假服务，把 fixtures 当 API 返回
+> - `frontend/mock/fixtures/*.json` —— **实机抓的**真实响应样例，前端 mock 直接喂这些
+> - `frontend/mock/mock_server.py` —— 50 行假服务，把 fixtures 当 API 返回
 
 ## 0. 基址与形态
 
@@ -17,7 +17,7 @@
 
 ## 1. 轮询协议（唯一强耦合点）：`GET /api/game/{gid}/public`
 
-前端**每 1~1.5s 轮询**这一个接口驱动整个界面。完整真实样例：`mock/fixtures/public.json`。
+前端**每 1~1.5s 轮询**这一个接口驱动整个界面。完整真实样例：`frontend/mock/fixtures/public.json`。
 
 顶层字段（实机样例抓取，2026-10-26）：
 
@@ -94,7 +94,7 @@
 
 | 端点 | 说明 | 样例 |
 |---|---|---|
-| `POST /api/game/new` | 开局。body：`{humans, ais, level?, personality?, seed?, layout?}`；**seed 传了就能复现** | `mock/fixtures/new_game.json` |
+| `POST /api/game/new` | 开局。body：`{humans, ais, level?, personality?, seed?, layout?}`；**seed 传了就能复现** | `frontend/mock/fixtures/new_game.json` |
 | `POST /api/game/{gid}/arm` | 面板 arm（播报念完的确认）；**不延长窗口** | |
 | `GET /api/game/rules` / `settings` | 档位表 / 规则开关表（前端控件**由它生成**，不写死） | `rules.json` / `settings.json` |
 | `GET /api/health` | 服务与各层真假 | `health.json` |
@@ -105,10 +105,10 @@
 
 ## 4. 前端这周怎么干活（不碰后端）
 
-1. `python mock/mock_server.py`（默认 :5501）——把 `fixtures/*.json` 按路由返回；
+1. `python frontend/mock/mock_server.py`（默认 :5501）——把 `fixtures/*.json` 按路由返回；
 2. 夜间面板 / 轮盘 / 倒计时 / 播报队列全部对着假数据开发；用假 timeline 练**所有**状态：
    夜转昼、多人抢答、`started=false→true`、`until_left` 回退、`pending: working` 卡住 3 拍；
-3. 要新状态？先在 `mock/fixtures/` 加样例 + 在本文件登记字段，再写代码；
+3. 要新状态？先在 `frontend/mock/fixtures/` 加样例 + 在本文件登记字段，再写代码；
 4. 语音最后两天再接真链路（`/api/tts` 与 `/ws/asr`）。
 
 ## 5. 后端这周怎么干活（不碰前端）

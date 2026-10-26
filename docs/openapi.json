@@ -1,1757 +1,1775 @@
 {
- "openapi": "3.1.0",
- "info": {
-  "title": "P0-talk",
-  "version": "0.1.0"
- },
- "paths": {
-  "/api/game/rules": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Rules",
-    "description": "自动组局的规则。界面用它把「你选的 N 人 = 几狼几神几民」直接显示给玩家。\n\n放在服务端而不是前端写死：规则只有一份，改的时候两边不会漂移。",
-    "operationId": "rules_api_game_rules_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Rules Api Game Rules Get"
-        }
-       }
-      }
-     }
-    }
-   }
+  "openapi": "3.1.0",
+  "info": {
+    "title": "P0-talk",
+    "version": "0.1.0"
   },
-  "/api/game/{gid}/scoreboard": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Scoreboard",
-    "description": "这一局的**六维指标 + 人机对比**（测量层，批四）。\n\n⚠️ 它读的是**全知状态**（含所有人的身份），所以只给复盘/指标/榜单看 ——\n   **绝不能**把它塞进任何 AI 的 prompt（那等于把 L3 交给 AI）。\n还没打完的局也能查（就是\"截至此刻\"的快照），`outcome.ended` 说明它完没完。",
-    "operationId": "scoreboard_api_game__gid__scoreboard_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Scoreboard Api Game  Gid  Scoreboard Get"
+  "paths": {
+    "/api/game/rules": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Rules",
+        "description": "自动组局的规则。界面用它把「你选的 N 人 = 几狼几神几民」直接显示给玩家。\n\n放在服务端而不是前端写死：规则只有一份，改的时候两边不会漂移。",
+        "operationId": "rules_api_game_rules_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Rules Api Game Rules Get"
+                }
+              }
+            }
+          }
         }
-       }
       }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/stats": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Stats",
-    "description": "跨局聚合（榜单 v0）。**按档分组** —— 不分档的胜率没有意义：\n不同档的 AI 根本不是一回事（赌注措辞、说话要求都不同）。\n\n诚实边界：只统计**内存里还在**的局（探针阶段不做持久化）。\n真正的榜单要等结构化日志落盘（批次 5/6）。",
-    "operationId": "stats_api_game_stats_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Stats Api Game Stats Get"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/settings": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Settings Get",
-    "description": "规则开关（G9 的\"可配\"那一半）：**整张表 + 当前值**。\n\n为什么返回整张表而不是只返回值：前端不该自己写死\"有哪几个开关、\n哪个是布尔哪个是单选\" —— 那样加一个开关要改两处，漏改的表现是那一项永远调不到。",
-    "operationId": "settings_get_api_game_settings_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Settings Get Api Game Settings Get"
-        }
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Settings Set",
-    "description": "设置规则开关。未知键或非法值一律 400，**不静默忽略**。",
-    "operationId": "settings_set_api_game_settings_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/SettingsReq"
-       }
-      }
-     },
-     "required": true
     },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Settings Set Api Game Settings Post"
+    "/api/game/{gid}/scoreboard": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Scoreboard",
+        "description": "这一局的**六维指标 + 人机对比**（测量层，批四）。\n\n⚠️ 它读的是**全知状态**（含所有人的身份），所以只给复盘/指标/榜单看 ——\n   **绝不能**把它塞进任何 AI 的 prompt（那等于把 L3 交给 AI）。\n还没打完的局也能查（就是\"截至此刻\"的快照），`outcome.ended` 说明它完没完。",
+        "operationId": "scoreboard_api_game__gid__scoreboard_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scoreboard Api Game  Gid  Scoreboard Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
         }
-       }
       }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/games": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Games",
-    "description": "已结束的对局清单（榜单页要它）。\n\n**只列已结束的**：局中那几局的身份还没公开，列出来会让人点进战报\n看到不该看的东西（战报接口本身也会拦，这是第二道）。",
-    "operationId": "games_api_game_games_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Games Api Game Games Get"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/report.md": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Report Md",
-    "description": "本局战报（G6，Markdown）。**和复盘日志同理：只在局末给** ——\n战报会揭示所有人的身份，局中给出去等于把答案塞给还在打的人。",
-    "operationId": "report_md_api_game__gid__report_md_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/replay": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Replay",
-    "description": "结构化对局日志（G5）。**只在局末给** —— 它是全知视角（含所有人的身份），\n局中返回等于把身份透给还在打的人。",
-    "operationId": "replay_api_game__gid__replay_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Replay Api Game  Gid  Replay Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/experience": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Experience List",
-    "description": "经验候选 + 已入库清单（G3）。\n\n⚠️ **候选 ≠ 生效**：只有复核入库（approve）的才会进下一局的 prompt，\n而且只在该档开启（硬核/地狱）时、且只给对应角色的座位。",
-    "operationId": "experience_list_api_game_experience_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Experience List Api Game Experience Get"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/experience/review": {
-   "post": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Experience Review",
-    "description": "复核一条候选：approve=true 入库，false 丢弃。",
-    "operationId": "experience_review_api_game_experience_review_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/ReviewReq"
-       }
-      }
-     },
-     "required": true
     },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Experience Review Api Game Experience Review Post"
+    "/api/game/stats": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Stats",
+        "description": "跨局聚合（榜单 v0）。**按档分组** —— 不分档的胜率没有意义：\n不同档的 AI 根本不是一回事（赌注措辞、说话要求都不同）。\n\n诚实边界：只统计**内存里还在**的局（探针阶段不做持久化）。\n真正的榜单要等结构化日志落盘（批次 5/6）。",
+        "operationId": "stats_api_game_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Stats Api Game Stats Get"
+                }
+              }
+            }
+          }
         }
-       }
       }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/new": {
-   "post": {
-    "tags": [
-     "game"
-    ],
-    "summary": "New Game",
-    "operationId": "new_game_api_game_new_post",
-    "requestBody": {
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/NewGameReq"
-       }
-      }
-     },
-     "required": true
     },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response New Game Api Game New Post"
+    "/api/game/settings": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Settings Get",
+        "description": "规则开关（G9 的\"可配\"那一半）：**整张表 + 当前值**。\n\n为什么返回整张表而不是只返回值：前端不该自己写死\"有哪几个开关、\n哪个是布尔哪个是单选\" —— 那样加一个开关要改两处，漏改的表现是那一项永远调不到。",
+        "operationId": "settings_get_api_game_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Settings Get Api Game Settings Get"
+                }
+              }
+            }
+          }
         }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/arm": {
-   "post": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Arm Countdown",
-    "description": "前端：法官念完该角色「请睁眼」那句 + 2 秒后调用 —— **倒计时此刻才开始**\n（2026-10-06 晚用户定：15/20 秒从播完起算，不是从 pending 出现起算）。\n幂等：已 arm 就忽略。仅夜间 / 猎人相位生效。\n\n🔴 2026-10-07 第三期：带了 `node`（节点 id）。节点时钟**只认当前节点**的 arm ——\n否则会有这一类竞态：一个节点刚结束、下一个节点刚开，而上一屏的 arm 还在路上\n⇒ 新节点的窗口被提前/错位起算（女巫两问是**同一个人的两个节点**，最容易踩）。\n`node` 为空（老页面 / 猎人开枪——它不在剧本节点里）时按旧行为放行。",
-    "operationId": "arm_countdown_api_game__gid__arm_post",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     },
-     {
-      "name": "node",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "string",
-       "default": "",
-       "title": "Node"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/pending_seats": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Pending Seats",
-    "operationId": "pending_seats_api_game__gid__pending_seats_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Pending Seats Api Game  Gid  Pending Seats Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/public": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Public",
-    "description": "⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。\n\n为什么必须这样：AI 的决策要调模型，大人数局一次跑不完一个回合。\n如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。\n让它在这里推，开局就能立刻返回、桌面自己长出来。\n（`pending == \"working\"` 就表示\"还在推进\"，前端照常继续轮询即可。）",
-    "operationId": "public_api_game__gid__public_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Public Api Game  Gid  Public Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/seat/{seat}": {
-   "get": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Seat View",
-    "operationId": "seat_view_api_game__gid__seat__seat__get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     },
-     {
-      "name": "seat",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "integer",
-       "title": "Seat"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Seat View Api Game  Gid  Seat  Seat  Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/game/{gid}/act": {
-   "post": {
-    "tags": [
-     "game"
-    ],
-    "summary": "Act",
-    "operationId": "act_api_game__gid__act_post",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Gid"
-      }
-     }
-    ],
-    "requestBody": {
-     "required": true,
-     "content": {
-      "application/json": {
-       "schema": {
-        "$ref": "#/components/schemas/ActionReq"
-       }
-      }
-     }
-    },
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Act Api Game  Gid  Act Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/status": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Status",
-    "operationId": "api_status_api_lab_status_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Api Status Api Lab Status Get"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/pause": {
-   "post": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Pause",
-    "operationId": "api_pause_api_lab_pause_post",
-    "parameters": [
-     {
-      "name": "value",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "boolean",
-       "default": true,
-       "title": "Value"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Pause Api Lab Pause Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/step": {
-   "post": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Step",
-    "operationId": "api_step_api_lab_step_post",
-    "parameters": [
-     {
-      "name": "n",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 1,
-       "title": "N"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Step Api Lab Step Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/steps": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Steps",
-    "operationId": "api_steps_api_lab_steps_get",
-    "parameters": [
-     {
-      "name": "limit",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 500,
-       "title": "Limit"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Steps Api Lab Steps Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   },
-   "delete": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Clear",
-    "operationId": "api_clear_api_lab_steps_delete",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Clear Api Lab Steps Delete"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/steps/{index}": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Step One",
-    "operationId": "api_step_one_api_lab_steps__index__get",
-    "parameters": [
-     {
-      "name": "index",
-      "in": "path",
-      "required": true,
-      "schema": {
-       "type": "integer",
-       "title": "Index"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Step One Api Lab Steps  Index  Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/live": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Live",
-    "description": "实验室群聊面板的数据源：最近的时间线条目 + 当前局面 + 门状态。\n只读公开层（timeline 的 sys/say 本来就是全桌可见的东西），无泄露面。",
-    "operationId": "api_live_api_lab_live_get",
-    "parameters": [
-     {
-      "name": "limit",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 150,
-       "title": "Limit"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Live Api Lab Live Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/export": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Export",
-    "description": "对局完整导出（2026-10-26）：时间线（含真人发言与主持人播报）+ 上帝视角 +\n模型调用步骤 —— /play 封面的「导出对局文件」下载的就是这个；\n实验室「导入对局日志」识别该格式后在直播间完整重放。",
-    "operationId": "api_export_api_lab_export_get",
-    "parameters": [
-     {
-      "name": "gid",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "string",
-       "default": "",
-       "title": "Gid"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Export Api Lab Export Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/snapshots": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Snapshots",
-    "operationId": "api_snapshots_api_lab_snapshots_get",
-    "parameters": [
-     {
-      "name": "limit",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 200,
-       "title": "Limit"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Snapshots Api Lab Snapshots Get"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/override": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Override Status",
-    "operationId": "api_override_status_api_lab_override_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Api Override Status Api Lab Override Get"
-        }
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Override",
-    "description": "实验室 → 对局：把实验室组装好的 prompt 设为一次性覆盖（下一次模型调用）。",
-    "operationId": "api_override_api_lab_override_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Api Override Api Lab Override Post"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/agents-config": {
-   "get": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Agents Config Get",
-    "operationId": "api_agents_config_get_api_lab_agents_config_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Api Agents Config Get Api Lab Agents Config Get"
-        }
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Agents Config",
-    "description": "第①列席位 → 对局装配覆盖（key/model/baseUrl 全走第①列；下一局生效）。",
-    "operationId": "api_agents_config_api_lab_agents_config_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "additionalProperties": true,
-         "type": "object",
-         "title": "Response Api Agents Config Api Lab Agents Config Post"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/lab/rewind": {
-   "post": {
-    "tags": [
-     "lab"
-    ],
-    "summary": "Api Rewind",
-    "operationId": "api_rewind_api_lab_rewind_post",
-    "parameters": [
-     {
-      "name": "i",
-      "in": "query",
-      "required": true,
-      "schema": {
-       "type": "integer",
-       "title": "I"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {
-         "type": "object",
-         "additionalProperties": true,
-         "title": "Response Api Rewind Api Lab Rewind Post"
-        }
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/rec.js": {
-   "get": {
-    "summary": "Rec Js",
-    "description": "共享录音模块。\n\n抽出来是因为两个页面都要用（语音探针 + 对局界面），\n复制两份必然漂移 —— 上一轮那个「阈值用了 16k 去比 48k」的 bug\n就是分散实现的典型后果。",
-    "operationId": "rec_js_rec_js_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/table.css": {
-   "get": {
-    "summary": "Table Css",
-    "description": "牌桌样式。与 demo/index.html 同源 —— 是从它的 <style> 原样提取的（见文件头）。",
-    "operationId": "table_css_table_css_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/table.js": {
-   "get": {
-    "summary": "Table Js",
-    "description": "牌桌渲染 / 椭圆排座 / 座位特效。同样提取自 demo/index.html，未改动一个字符。",
-    "operationId": "table_js_table_js_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/speech_ui.js": {
-   "get": {
-    "summary": "Speech Ui Js",
-    "description": "播报队列 + 夜间门控（2026-10-07 从 `tableui.js` 拆出）。\n\n⚠️ 本站的静态资源是**一个文件一条路由**（不是 StaticFiles 挂目录）——\n所以**拆出/新增 js/html 时，必须同时在 server.py 里补一条路由**，\n否则浏览器拿到 404、页面静默少一块（这次差点让整块播报队列消失）。",
-    "operationId": "speech_ui_js_speech_ui_js_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/judge_voice.js": {
-   "get": {
-    "summary": "Judge Voice Js",
-    "description": "法官播报本地合成通道（2026-10-22 双通道改造）。\n\n法官台词（sys）在 speech_ui 播报队列里优先走浏览器 speechSynthesis 本地合成\n（零 HTTP 往返，夜间相位切换不再被云端链路拖住）；AI 发言仍走云端。\n本通道不可用（无 speechSynthesis / 无中文音色）时由播报队列逐句回落云端。",
-    "operationId": "judge_voice_js_judge_voice_js_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/tableui.js": {
-   "get": {
-    "summary": "Tableui Js",
-    "description": "大屏 UI 状态机（2026-10-02 从 play.html 抽出）：\n单个大圆 / 座位小圆 + 行动光标 / 票型大字 / 大圆发言模式。\n只被对局页用（demo 不共享），抽出去是 play.html 超行数红线的直接后果。",
-    "operationId": "tableui_js_tableui_js_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/play": {
-   "get": {
-    "summary": "Play Page",
-    "description": "对局页：**界面形式以 demo/index.html 为绝对参照**，但由真引擎驱动。\n\n与 `/game` 的分工：`/game` 是早期那版功能型界面（信息密度高、样式朴素）；\n这一页复用 demo 的竖屏列 + 椭圆排座 + 字幕区，目的是「打开就能体验」。\n两者都只通过 `get_view_for(seat)` 取私有信息，隔离没有区别。",
-    "operationId": "play_page_play_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "text/html": {
-        "schema": {
-         "type": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/board": {
-   "get": {
-    "summary": "Board Page",
-    "description": "榜单与战报入口（G7）。\n\n纯展示页：只读 `/api/game/stats`（按档聚合）与 `/api/game/games`（已结束清单）。\n它**不碰任何对局状态**，也不含游戏逻辑 —— 所以它可以随便刷新，\n不存在\"刷新把别人那一局搞坏\"的可能。",
-    "operationId": "board_page_board_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "text/html": {
-        "schema": {
-         "type": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/lab": {
-   "get": {
-    "summary": "Lab Page",
-    "description": "提示词实验室（2026-10-26）：快照 / 回退 / 重跑 / 线上契约编辑。\n\n为什么由引擎同源服务：页面要直连 `/api/admin/prompts`（改提示词契约）\n与 `/api/lab/*`（步骤落盘与暂停门）—— 同源就没有 CORS 问题，\n也不用把配置台的鉴权面暴露给别的域。",
-    "operationId": "lab_page_lab_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "text/html": {
-        "schema": {
-         "type": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/tts": {
-   "get": {
-    "summary": "Tts",
-    "description": "合成一句话，返回 WAV。\n\n对局界面用它播报：法官台词（rate 偏慢、稳重）与 AI 发言（rate 正常）。\n\n`voice`：**云端 TTS 的音色**（2026-09-19 起可用）—— 法官一个音色、\n每个 AI 座位各自一个，这才让\"9 种人格\"在**听感上**也能区分开。\n本地 SAPI 只有一个中文音色，传了它会被 `**kw` 吞掉（不报错、静默忽略）——\n所以前端可以照传，切到云端就自动生效，不用改前端。",
-    "operationId": "tts_api_tts_get",
-    "parameters": [
-     {
-      "name": "text",
-      "in": "query",
-      "required": true,
-      "schema": {
-       "type": "string",
-       "title": "Text"
-      }
-     },
-     {
-      "name": "rate",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 0,
-       "title": "Rate"
-      }
-     },
-     {
-      "name": "volume",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "integer",
-       "default": 100,
-       "title": "Volume"
-      }
-     },
-     {
-      "name": "voice",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "string",
-       "default": "",
-       "title": "Voice"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/health": {
-   "get": {
-    "summary": "Health",
-    "operationId": "health_api_health_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/net": {
-   "get": {
-    "summary": "Net",
-    "description": "\"手机该用哪个地址打开\" —— 页面的诊断面板要显示它。\n\n为什么必须在服务端算：页面只知道**自己被谁访问**，不知道该从哪个地址去访问 ——\n它在电脑上打开时看到的是 localhost:8000，那个地址在手机上指向手机自己。\n\n⚠️ 手机必须走 **https**：`http://<局域网IP>:8000` **不是安全上下文**，\n浏览器会直接把麦克风接口收走（连授权弹窗都不给，看着就像\"页面坏了\"）。\nlocalhost 是唯一豁免的 http 地址 —— 但手机上要走到本机的 localhost，\n得先做端口转发（adb reverse），比直接用局域网 https 麻烦。",
-    "operationId": "net_api_net_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/utter": {
-   "post": {
-    "summary": "Utter",
-    "description": "接收 16k 单声道 WAV，返回 {text, reply, audio_b64, timings, input_audio}。\n\n`only=\"asr\"` 时**只跑 ASR**，跳过 LLM 与 TTS。\n\n为什么需要这一档：对局界面（`play.html`）的录音只要转写结果 ——\n识别完直接提交。它先前借用的这条链路会顺带跑一次 LLM + 一次 TTS，\n然后把结果整个丢掉。LLM 现在是 mock 所以看不出来；接真模型后，\n每按一次「按住说话」就会白花一次模型调用 + 一次语音合成。\n（原探针页 index.html 走完整链路不带这个参数——该页已于 2026-10-23 删除。）",
-    "operationId": "utter_api_utter_post",
-    "parameters": [
-     {
-      "name": "only",
-      "in": "query",
-      "required": false,
-      "schema": {
-       "type": "string",
-       "default": "",
-       "title": "Only"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     },
-     "422": {
-      "description": "Validation Error",
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/admin/play-keys": {
-   "get": {
-    "summary": " Pk Get",
-    "operationId": "_pk_get_api_admin_play_keys_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "summary": " Pk Set",
-    "operationId": "_pk_set_api_admin_play_keys_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/admin/config": {
-   "get": {
-    "summary": "Admin Config",
-    "operationId": "admin_config_api_admin_config_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "summary": "Admin Set Config",
-    "operationId": "admin_set_config_api_admin_config_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/admin/prompts": {
-   "get": {
-    "summary": "Admin Prompts",
-    "operationId": "admin_prompts_api_admin_prompts_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   },
-   "post": {
-    "summary": "Admin Set Prompts",
-    "operationId": "admin_set_prompts_api_admin_prompts_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/api/admin/reload": {
-   "post": {
-    "summary": "Admin Reload",
-    "operationId": "admin_reload_api_admin_reload_post",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      }
-     }
-    }
-   }
-  },
-  "/admin": {
-   "get": {
-    "summary": "Admin Page",
-    "description": "配置台页面**本身不含任何密钥**：密钥只在服务端，页面通过带口令的 API 读写。",
-    "operationId": "admin_page_admin_get",
-    "responses": {
-     "200": {
-      "description": "Successful Response",
-      "content": {
-       "text/html": {
-        "schema": {
-         "type": "string"
-        }
-       }
-      }
-     }
-    }
-   }
-  }
- },
- "components": {
-  "schemas": {
-   "ActionReq": {
-    "properties": {
-     "seat": {
-      "type": "integer",
-      "title": "Seat"
-     },
-     "action": {
-      "type": "string",
-      "title": "Action",
-      "default": "pass"
-     },
-     "target": {
-      "anyOf": [
-       {
-        "type": "integer"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Target"
-     },
-     "text": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Text"
-     }
-    },
-    "type": "object",
-    "required": [
-     "seat"
-    ],
-    "title": "ActionReq"
-   },
-   "HTTPValidationError": {
-    "properties": {
-     "detail": {
-      "items": {
-       "$ref": "#/components/schemas/ValidationError"
       },
-      "type": "array",
-      "title": "Detail"
-     }
-    },
-    "type": "object",
-    "title": "HTTPValidationError"
-   },
-   "NewGameReq": {
-    "properties": {
-     "humans": {
-      "anyOf": [
-       {
-        "type": "integer"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Humans"
-     },
-     "ais": {
-      "anyOf": [
-       {
-        "type": "integer"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Ais"
-     },
-     "seed": {
-      "anyOf": [
-       {
-        "type": "integer"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Seed"
-     },
-     "level": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Level"
-     },
-     "personality": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Personality"
-     },
-     "layout": {
-      "anyOf": [
-       {
-        "items": {
-         "type": "string"
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Settings Set",
+        "description": "设置规则开关。未知键或非法值一律 400，**不静默忽略**。",
+        "operationId": "settings_set_api_game_settings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsReq"
+              }
+            }
+          },
+          "required": true
         },
-        "type": "array"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "title": "Layout"
-     }
-    },
-    "type": "object",
-    "title": "NewGameReq"
-   },
-   "ReviewReq": {
-    "properties": {
-     "id": {
-      "type": "integer",
-      "title": "Id"
-     },
-     "approve": {
-      "type": "boolean",
-      "title": "Approve",
-      "default": true
-     }
-    },
-    "type": "object",
-    "required": [
-     "id"
-    ],
-    "title": "ReviewReq",
-    "description": "复核一条经验候选（G3 离线评审入库）。"
-   },
-   "SettingsReq": {
-    "properties": {
-     "settings": {
-      "additionalProperties": true,
-      "type": "object",
-      "title": "Settings",
-      "default": {}
-     }
-    },
-    "type": "object",
-    "title": "SettingsReq",
-    "description": "规则开关（G9 可配那一半）。**只影响新开的局**，不动已在打的对局。"
-   },
-   "ValidationError": {
-    "properties": {
-     "loc": {
-      "items": {
-       "anyOf": [
-        {
-         "type": "string"
-        },
-        {
-         "type": "integer"
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Settings Set Api Game Settings Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
         }
-       ]
-      },
-      "type": "array",
-      "title": "Location"
-     },
-     "msg": {
-      "type": "string",
-      "title": "Message"
-     },
-     "type": {
-      "type": "string",
-      "title": "Error Type"
-     }
+      }
     },
-    "type": "object",
-    "required": [
-     "loc",
-     "msg",
-     "type"
-    ],
-    "title": "ValidationError"
-   }
+    "/api/game/games": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Games",
+        "description": "已结束的对局清单（榜单页要它）。\n\n**只列已结束的**：局中那几局的身份还没公开，列出来会让人点进战报\n看到不该看的东西（战报接口本身也会拦，这是第二道）。",
+        "operationId": "games_api_game_games_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Games Api Game Games Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/report.md": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Report Md",
+        "description": "本局战报（G6，Markdown）。**和复盘日志同理：只在局末给** ——\n战报会揭示所有人的身份，局中给出去等于把答案塞给还在打的人。",
+        "operationId": "report_md_api_game__gid__report_md_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/replay": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Replay",
+        "description": "结构化对局日志（G5）。**只在局末给** —— 它是全知视角（含所有人的身份），\n局中返回等于把身份透给还在打的人。",
+        "operationId": "replay_api_game__gid__replay_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Replay Api Game  Gid  Replay Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/experience": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Experience List",
+        "description": "经验候选 + 已入库清单（G3）。\n\n⚠️ **候选 ≠ 生效**：只有复核入库（approve）的才会进下一局的 prompt，\n而且只在该档开启（硬核/地狱）时、且只给对应角色的座位。",
+        "operationId": "experience_list_api_game_experience_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Experience List Api Game Experience Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/experience/review": {
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Experience Review",
+        "description": "复核一条候选：approve=true 入库，false 丢弃。",
+        "operationId": "experience_review_api_game_experience_review_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Experience Review Api Game Experience Review Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/new": {
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "New Game",
+        "operationId": "new_game_api_game_new_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewGameReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response New Game Api Game New Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/arm": {
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Arm Countdown",
+        "description": "前端：法官念完该角色「请睁眼」那句 + 2 秒后调用 —— **倒计时此刻才开始**\n（2026-10-06 晚用户定：15/20 秒从播完起算，不是从 pending 出现起算）。\n幂等：已 arm 就忽略。仅夜间 / 猎人相位生效。\n\n🔴 2026-10-07 第三期：带了 `node`（节点 id）。节点时钟**只认当前节点**的 arm ——\n否则会有这一类竞态：一个节点刚结束、下一个节点刚开，而上一屏的 arm 还在路上\n⇒ 新节点的窗口被提前/错位起算（女巫两问是**同一个人的两个节点**，最容易踩）。\n`node` 为空（老页面 / 猎人开枪——它不在剧本节点里）时按旧行为放行。",
+        "operationId": "arm_countdown_api_game__gid__arm_post",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "node",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Node"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/pending_seats": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Pending Seats",
+        "operationId": "pending_seats_api_game__gid__pending_seats_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pending Seats Api Game  Gid  Pending Seats Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/public": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Public",
+        "description": "⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。\n\n为什么必须这样：AI 的决策要调模型，大人数局一次跑不完一个回合。\n如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。\n让它在这里推，开局就能立刻返回、桌面自己长出来。\n（`pending == \"working\"` 就表示\"还在推进\"，前端照常继续轮询即可。）",
+        "operationId": "public_api_game__gid__public_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Public Api Game  Gid  Public Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/seat/{seat}": {
+      "get": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Seat View",
+        "operationId": "seat_view_api_game__gid__seat__seat__get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "seat",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Seat"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Seat View Api Game  Gid  Seat  Seat  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/game/{gid}/act": {
+      "post": {
+        "tags": [
+          "game"
+        ],
+        "summary": "Act",
+        "operationId": "act_api_game__gid__act_post",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionReq"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Act Api Game  Gid  Act Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/status": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Status",
+        "operationId": "api_status_api_lab_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Api Status Api Lab Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/pause": {
+      "post": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Pause",
+        "operationId": "api_pause_api_lab_pause_post",
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Value"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Pause Api Lab Pause Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/step": {
+      "post": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Step",
+        "operationId": "api_step_api_lab_step_post",
+        "parameters": [
+          {
+            "name": "n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "N"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Step Api Lab Step Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/steps": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Steps",
+        "operationId": "api_steps_api_lab_steps_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Steps Api Lab Steps Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Clear",
+        "operationId": "api_clear_api_lab_steps_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Clear Api Lab Steps Delete"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/steps/{index}": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Step One",
+        "operationId": "api_step_one_api_lab_steps__index__get",
+        "parameters": [
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Step One Api Lab Steps  Index  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/live": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Live",
+        "description": "实验室群聊面板的数据源：最近的时间线条目 + 当前局面 + 门状态。\n只读公开层（timeline 的 sys/say 本来就是全桌可见的东西），无泄露面。",
+        "operationId": "api_live_api_lab_live_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 150,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Live Api Lab Live Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/export": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Export",
+        "description": "对局完整导出（2026-10-26）：时间线（含真人发言与主持人播报）+ 上帝视角 +\n模型调用步骤 —— /play 封面的「导出对局文件」下载的就是这个；\n实验室「导入对局日志」识别该格式后在直播间完整重放。",
+        "operationId": "api_export_api_lab_export_get",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Gid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Export Api Lab Export Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/snapshots": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Snapshots",
+        "operationId": "api_snapshots_api_lab_snapshots_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Snapshots Api Lab Snapshots Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/override": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Override Status",
+        "operationId": "api_override_status_api_lab_override_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Api Override Status Api Lab Override Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Override",
+        "description": "实验室 → 对局：把实验室组装好的 prompt 设为一次性覆盖（下一次模型调用）。",
+        "operationId": "api_override_api_lab_override_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Api Override Api Lab Override Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/agents-config": {
+      "get": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Agents Config Get",
+        "operationId": "api_agents_config_get_api_lab_agents_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Api Agents Config Get Api Lab Agents Config Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Agents Config",
+        "description": "第①列席位 → 对局装配覆盖（key/model/baseUrl 全走第①列；下一局生效）。",
+        "operationId": "api_agents_config_api_lab_agents_config_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Api Agents Config Api Lab Agents Config Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/lab/rewind": {
+      "post": {
+        "tags": [
+          "lab"
+        ],
+        "summary": "Api Rewind",
+        "operationId": "api_rewind_api_lab_rewind_post",
+        "parameters": [
+          {
+            "name": "i",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "I"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Api Rewind Api Lab Rewind Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rec.js": {
+      "get": {
+        "summary": "Rec Js",
+        "description": "共享录音模块。\n\n抽出来是因为两个页面都要用（语音探针 + 对局界面），\n复制两份必然漂移 —— 上一轮那个「阈值用了 16k 去比 48k」的 bug\n就是分散实现的典型后果。",
+        "operationId": "rec_js_rec_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/table.css": {
+      "get": {
+        "summary": "Table Css",
+        "description": "牌桌样式。与 demo/index.html 同源 —— 是从它的 <style> 原样提取的（见文件头）。",
+        "operationId": "table_css_table_css_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/table.js": {
+      "get": {
+        "summary": "Table Js",
+        "description": "牌桌渲染 / 椭圆排座 / 座位特效。同样提取自 demo/index.html，未改动一个字符。",
+        "operationId": "table_js_table_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/speech_ui.js": {
+      "get": {
+        "summary": "Speech Ui Js",
+        "description": "播报队列 + 夜间门控（2026-10-07 从 `tableui.js` 拆出）。\n\n⚠️ 本站的静态资源是**一个文件一条路由**（不是 StaticFiles 挂目录）——\n所以**拆出/新增 js/html 时，必须同时在 server.py 里补一条路由**，\n否则浏览器拿到 404、页面静默少一块（这次差点让整块播报队列消失）。",
+        "operationId": "speech_ui_js_speech_ui_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/judge_voice.js": {
+      "get": {
+        "summary": "Judge Voice Js",
+        "description": "法官播报本地合成通道（2026-10-22 双通道改造）。\n\n法官台词（sys）在 speech_ui 播报队列里优先走浏览器 speechSynthesis 本地合成\n（零 HTTP 往返，夜间相位切换不再被云端链路拖住）；AI 发言仍走云端。\n本通道不可用（无 speechSynthesis / 无中文音色）时由播报队列逐句回落云端。",
+        "operationId": "judge_voice_js_judge_voice_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dev_panels.html": {
+      "get": {
+        "summary": "Dev Panels",
+        "description": "前端面板画廊（2026-10-27）：不开后端、不跑对局，一页看全部 UI 状态的静态定格。\n样式运行时抽自 play.html（同源），给前端同学迭代样式用 —— 生产玩家不会碰到。",
+        "operationId": "dev_panels_dev_panels_html_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tableui.js": {
+      "get": {
+        "summary": "Tableui Js",
+        "description": "大屏 UI 状态机（2026-10-02 从 play.html 抽出）：\n单个大圆 / 座位小圆 + 行动光标 / 票型大字 / 大圆发言模式。\n只被对局页用（demo 不共享），抽出去是 play.html 超行数红线的直接后果。",
+        "operationId": "tableui_js_tableui_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/play": {
+      "get": {
+        "summary": "Play Page",
+        "description": "对局页：**界面形式以 demo/index.html 为绝对参照**，但由真引擎驱动。\n\n与 `/game` 的分工：`/game` 是早期那版功能型界面（信息密度高、样式朴素）；\n这一页复用 demo 的竖屏列 + 椭圆排座 + 字幕区，目的是「打开就能体验」。\n两者都只通过 `get_view_for(seat)` 取私有信息，隔离没有区别。",
+        "operationId": "play_page_play_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/board": {
+      "get": {
+        "summary": "Board Page",
+        "description": "榜单与战报入口（G7）。\n\n纯展示页：只读 `/api/game/stats`（按档聚合）与 `/api/game/games`（已结束清单）。\n它**不碰任何对局状态**，也不含游戏逻辑 —— 所以它可以随便刷新，\n不存在\"刷新把别人那一局搞坏\"的可能。",
+        "operationId": "board_page_board_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/lab": {
+      "get": {
+        "summary": "Lab Page",
+        "description": "提示词实验室（2026-10-26）：快照 / 回退 / 重跑 / 线上契约编辑。\n\n为什么由引擎同源服务：页面要直连 `/api/admin/prompts`（改提示词契约）\n与 `/api/lab/*`（步骤落盘与暂停门）—— 同源就没有 CORS 问题，\n也不用把配置台的鉴权面暴露给别的域。",
+        "operationId": "lab_page_lab_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tts": {
+      "get": {
+        "summary": "Tts",
+        "description": "合成一句话，返回 WAV。\n\n对局界面用它播报：法官台词（rate 偏慢、稳重）与 AI 发言（rate 正常）。\n\n`voice`：**云端 TTS 的音色**（2026-09-19 起可用）—— 法官一个音色、\n每个 AI 座位各自一个，这才让\"9 种人格\"在**听感上**也能区分开。\n本地 SAPI 只有一个中文音色，传了它会被 `**kw` 吞掉（不报错、静默忽略）——\n所以前端可以照传，切到云端就自动生效，不用改前端。",
+        "operationId": "tts_api_tts_get",
+        "parameters": [
+          {
+            "name": "text",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Text"
+            }
+          },
+          {
+            "name": "rate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Rate"
+            }
+          },
+          {
+            "name": "volume",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Volume"
+            }
+          },
+          {
+            "name": "voice",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Voice"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/net": {
+      "get": {
+        "summary": "Net",
+        "description": "\"手机该用哪个地址打开\" —— 页面的诊断面板要显示它。\n\n为什么必须在服务端算：页面只知道**自己被谁访问**，不知道该从哪个地址去访问 ——\n它在电脑上打开时看到的是 localhost:8000，那个地址在手机上指向手机自己。\n\n⚠️ 手机必须走 **https**：`http://<局域网IP>:8000` **不是安全上下文**，\n浏览器会直接把麦克风接口收走（连授权弹窗都不给，看着就像\"页面坏了\"）。\nlocalhost 是唯一豁免的 http 地址 —— 但手机上要走到本机的 localhost，\n得先做端口转发（adb reverse），比直接用局域网 https 麻烦。",
+        "operationId": "net_api_net_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/utter": {
+      "post": {
+        "summary": "Utter",
+        "description": "接收 16k 单声道 WAV，返回 {text, reply, audio_b64, timings, input_audio}。\n\n`only=\"asr\"` 时**只跑 ASR**，跳过 LLM 与 TTS。\n\n为什么需要这一档：对局界面（`play.html`）的录音只要转写结果 ——\n识别完直接提交。它先前借用的这条链路会顺带跑一次 LLM + 一次 TTS，\n然后把结果整个丢掉。LLM 现在是 mock 所以看不出来；接真模型后，\n每按一次「按住说话」就会白花一次模型调用 + 一次语音合成。\n（原探针页 index.html 走完整链路不带这个参数——该页已于 2026-10-23 删除。）",
+        "operationId": "utter_api_utter_post",
+        "parameters": [
+          {
+            "name": "only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Only"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/play-keys": {
+      "get": {
+        "summary": " Pk Get",
+        "operationId": "_pk_get_api_admin_play_keys_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": " Pk Set",
+        "operationId": "_pk_set_api_admin_play_keys_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/config": {
+      "get": {
+        "summary": "Admin Config",
+        "operationId": "admin_config_api_admin_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Admin Set Config",
+        "operationId": "admin_set_config_api_admin_config_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/prompts": {
+      "get": {
+        "summary": "Admin Prompts",
+        "operationId": "admin_prompts_api_admin_prompts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Admin Set Prompts",
+        "operationId": "admin_set_prompts_api_admin_prompts_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/reload": {
+      "post": {
+        "summary": "Admin Reload",
+        "operationId": "admin_reload_api_admin_reload_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin": {
+      "get": {
+        "summary": "Admin Page",
+        "description": "配置台页面**本身不含任何密钥**：密钥只在服务端，页面通过带口令的 API 读写。",
+        "operationId": "admin_page_admin_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionReq": {
+        "properties": {
+          "seat": {
+            "type": "integer",
+            "title": "Seat"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action",
+            "default": "pass"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seat"
+        ],
+        "title": "ActionReq"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "NewGameReq": {
+        "properties": {
+          "humans": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Humans"
+          },
+          "ais": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ais"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personality"
+          },
+          "layout": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout"
+          }
+        },
+        "type": "object",
+        "title": "NewGameReq"
+      },
+      "ReviewReq": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "approve": {
+            "type": "boolean",
+            "title": "Approve",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "ReviewReq",
+        "description": "复核一条经验候选（G3 离线评审入库）。"
+      },
+      "SettingsReq": {
+        "properties": {
+          "settings": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Settings",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "title": "SettingsReq",
+        "description": "规则开关（G9 可配那一半）。**只影响新开的局**，不动已在打的对局。"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
   }
- },
- "servers": [
-  {
-   "url": "http://127.0.0.1:8000",
-   "description": "本机对局服务"
-  }
- ]
 }

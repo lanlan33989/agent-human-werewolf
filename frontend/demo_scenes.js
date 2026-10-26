@@ -1,13 +1,13 @@
 /* ============================================================
    前端演示场景（2026-10-27）：play.html?demo=<场景名> 用。
-   数据结构照实机 /public 抓包（mock/fixtures/public.json）改字段，
+   数据结构照实机 /public 抓包（frontend/mock/fixtures/public.json）改字段，
    所以渲染管线走的是**真实页面代码** —— 画廊所见即产品所得。
 
    加新场景：在 DEMO_SCENES 里加一项即可；场景数据尽量从真实
    对局的 /public 响应拷贝再改，不要凭空造字段。
    ============================================================ */
 
-/* 实机抓包的底版（6 人局夜晚，见 mock/fixtures/public.json） */
+/* 实机抓包的底版（6 人局夜晚，见 frontend/mock/fixtures/public.json） */
 function _basePub() {
   return {
     gid: "DEMO",
