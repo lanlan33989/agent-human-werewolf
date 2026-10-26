@@ -596,6 +596,7 @@ async function api(path, opts){
         pending: v.pending, is_my_turn_to_speak: false, is_my_turn_to_vote: false },
         r || {});
     }
+    if (path.indexOf('/pending_seats') > 0) return DEMO.ps || { seats: [] };
     return DEMO.public;                    /* /public、/act、/arm… 全给场景静态数据 */
   }
   var r = await fetch(path, opts);
@@ -1191,11 +1192,14 @@ function loadScript(src){
       return;
     }
     if (sc.kind === 'cards'){
-      DEMO = sc; GID = 'DEMO'; PUBLIC = sc.public;
+      DEMO = { public: sc.public, roles: sc.roles, ps: { seats: [] } };
+      GID = 'DEMO'; PUBLIC = sc.public;
       cardQueue = [0, 1, 2, 3];            /* 4 张身份牌轮着翻，翻完顺势进桌 */
-      showNextCard();
+      nextCard();
     } else {
-      DEMO = sc; GID = 'DEMO'; PUBLIC = sc.public;
+      DEMO = { public: sc.public, roles: sc.roles, ps: sc.public._ps || { seats: [] } };
+      GID = 'DEMO'; PUBLIC = sc.public;
+      VOICE_ON = false;                    /* 演示模式关语音：播报门（voicedUp）恒过，面板直接出 */
       resumeInto('DEMO', sc.public);
     }
     return;
