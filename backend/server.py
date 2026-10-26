@@ -485,6 +485,13 @@ def judge_voice_js() -> Response:
     return _asset("judge_voice.js", "application/javascript")
 
 
+@app.get("/dev_panels.html")
+def dev_panels() -> Response:
+    """前端面板画廊（2026-10-27）：不开后端、不跑对局，一页看全部 UI 状态的静态定格。
+    样式运行时抽自 play.html（同源），给前端同学迭代样式用 —— 生产玩家不会碰到。"""
+    return _page("dev_panels.html")
+
+
 @app.get("/tableui.js")
 def tableui_js() -> Response:
     """大屏 UI 状态机（2026-10-02 从 play.html 抽出）：
