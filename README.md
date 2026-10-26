@@ -87,6 +87,11 @@ python -m venv .venv
 
 一张联接清单（写排期时直接贴）：**[docs/入口链接.md](docs/入口链接.md)**。
 
+> **后端同学第一天必读**：[backend/README.md](backend/README.md) 里的**冒烟表**列了哪些红是
+> **历史遗留的失败**（不是你改坏的，也不要在这一周里去背）—— 跑回归前先看那张表，
+> 免得把力气花在早已记录在案的坑上。前端同学同理，第一天看
+> [frontend/README.md](frontend/README.md) 顶上的"不装环境也能迭代"。
+
 ## 页面一览
 
 | 页面（线上 URL） | 源码 | 用途 |
