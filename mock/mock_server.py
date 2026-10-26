@@ -96,7 +96,13 @@ class H(BaseHTTPRequestHandler):
         if self.delay:
             import time
             time.sleep(self.delay)
-        if path == f"/api/game/{GID}/act":
+        if path == "/api/game/new":
+            # 🔴 2026-10-27 修复：开局是 POST，之前只配了 GET 侧 → 点"开始一局"404
+            data = _load("new_game.json")
+            data["gid"] = GID
+            return self._send(data)
+        if path == f"/api/game/{GID}/act" or path.endswith("/arm") \
+                or path.endswith("/tick"):
             n = int(self.headers.get("Content-Length") or 0)
             req = json.loads(self.rfile.read(n) or b"{}") if n else {}
             return self._send({"ok": True, "echo": req})
