@@ -75,7 +75,8 @@ var DEMO_SCENES = {
     kind: "cards",
     title: "身份牌（逐座位翻牌）",
     note: "翻面样式按座位轮换：狼人/预言家/女巫/守卫/村民。看完 4 张会顺势进桌。",
-    roles: DEMO_ROLES
+    roles: DEMO_ROLES,
+    public: _pub(null)
   },
 
   /* 夜 · 狼刀：轮盘 + 队友/刀口标记 */
@@ -179,6 +180,89 @@ var DEMO_SCENES = {
       p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
       p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
       p.players[2].alive = false; p.players[2].lives = 0;
+      p.now = { kind: "none", seat: null, node: null, need: null, started: false };
+    })
+  },
+
+  /* 夜 · 守卫（拨号盘） */
+  night_guard: {
+    title: "夜 · 守卫（拨号盘守人）",
+    note: "大数字键盘：点号码 = 守他（可守自己）。",
+    public: _pub(function (p) {
+      p.night_node = "guard";
+      p.pending = "human_night:guard";
+      p.timeline.push({ t: "sys", s: "守卫请睁眼，请选择今晚你要守护的人", voice: "Neil", delay: 0, stage: "guard", node: "guard", at: 1793034401 });
+      var need = { seat: 0, node: "guard", actions: ["guard"], seconds_left: 15 };
+      p.now = { kind: "wheel", seat: 0, node: "guard", need: need,
+                until: Date.now() / 1000 + 15, until_left: 15,
+                started: true, why: "点号码 = 今晚守护他" };
+      p._ps = { seats: [need] };
+    })
+  },
+
+  /* 夜 · 女巫毒药问 */
+  witch_poison: {
+    title: "夜 · 女巫（毒药问）",
+    note: "解药答完后同一晚的第二问；拨号盘选毒药目标。",
+    public: _pub(function (p) {
+      p.night_node = "witch_poison";
+      p.pending = "human_night:witch_poison";
+      p.timeline.push({ t: "sys", s: "你要使用毒药吗？", voice: "Neil", delay: 0, stage: "witch_poison", node: "witch_poison", at: 1793034406 });
+      var need = { seat: 0, node: "witch_poison", actions: ["poison", "pass"], seconds_left: 15 };
+      p.now = { kind: "wheel", seat: 0, node: "witch_poison", need: need,
+                until: Date.now() / 1000 + 15, until_left: 15,
+                started: true, why: "要不要用毒药？点号码 = 毒他" };
+      p._ps = { seats: [need] };
+    })
+  },
+
+  /* 夜 · 狼刀确认（多狼：第二狼 confirm） */
+  wolf_confirm: {
+    title: "夜 · 狼刀确认（多狼共屏第二步）",
+    note: "队友已提议刀口 🔪，你点圆心 = 确认本夜刀口。",
+    public: _pub(function (p) {
+      p.night_node = "wolf";
+      p.pending = "human_night:wolf";
+      p.wolf_points = { "0": 2, "4": 2 };   /* 1 号(人狼)与 5 号都点了 3 号 */
+      p.wolf_confirmed = [4];               /* 5 号(AI 狼)已确认 */
+      p.timeline.push({ t: "sys", s: "狼人请睁眼，请选择今晚你们要击杀的人", voice: "Neil", delay: 0, stage: "wolf", node: "wolf", at: 1793034402 });
+      var need = { seat: 0, node: "wolf", actions: ["confirm"], seconds_left: 12 };
+      p.now = { kind: "wheel", seat: 0, node: "wolf", need: need,
+                until: Date.now() / 1000 + 12, until_left: 12,
+                started: true, why: "刀口已定（3 号），点圆心确认" };
+      p._ps = { seats: [need] };
+    })
+  },
+
+  /* 猎人开枪（轮盘形态） */
+  hunter: {
+    title: "猎人开枪（轮盘 · 可放弃）",
+    note: "shoot 不在拨号盘清单里 —— 走大圆轮盘；wheelExtra 有「不开枪」。",
+    public: _pub(function (p) {
+      p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
+      p.pending = "human_night:shoot";
+      p.timeline.push({ t: "sys", s: "2 号出局。", voice: "Neil", ts: 1793034600 });
+      p.timeline.push({ t: "sys", s: "2 号是猎人，可以开枪。", voice: "Neil", ts: 1793034602 });
+      p.players[1].alive = false; p.players[1].lives = 0;
+      var need = { seat: 1, node: "shoot", actions: ["shoot", "pass"], seconds_left: 20 };
+      p.now = { kind: "shoot", seat: 1, node: "shoot", need: need,
+                until: Date.now() / 1000 + 20, until_left: 20,
+                started: true, why: "开枪带走一个人（或放弃）" };
+      p._ps = { seats: [need] };
+    })
+  },
+
+  /* 遗言 + AI 白天播报 */
+  last_words: {
+    title: "出局遗言（AI 发言播报中）",
+    note: "无面板：法官播报 + AI 遗言逐句上屏（pending=working，看播报队列节奏）。",
+    public: _pub(function (p) {
+      p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
+      p.pending = "working";
+      p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
+      p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
+      p.players[2].alive = false; p.players[2].lives = 0;
+      p.timeline.push({ t: "say", s: "我是好人……昨天投我的人今天盯紧 4 号，他的发言太滑了。", seat: 2, voice: "Grace", spoken: false });
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
     })
   },

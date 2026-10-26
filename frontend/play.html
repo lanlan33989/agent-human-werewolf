@@ -589,12 +589,24 @@ async function api(path, opts){
     var m = path.match(/\/seat\/(\d+)$/);
     if (m){
       var r = DEMO.roles ? DEMO.roles[Number(m[1])] : null;
-      var v = DEMO.public;
-      return Object.assign({ seat: Number(m[1]), role: r ? r.role : 'villager',
+      var v = DEMO.public || {};
+      /* 🔴 2026-10-27：夜间真面板是**拨号盘**（renderNightDial），它认
+         MYVIEW.can_act —— demo 的 seat 视图必须带上（本场景待办座位给
+         actions，其余座位空数组），否则认领后 acts=[] → 空转关屏。 */
+      var need = (DEMO.ps && DEMO.ps.seats && DEMO.ps.seats[0]) || null;
+      var mine = need && need.seat === Number(m[1]);
+      var out = { seat: Number(m[1]), role: r ? r.role : 'villager',
         role_label: r ? r.role_label : '村民', alive: true, phase: v.phase,
         round: v.round, players: v.players, speech: v.speech, timeline: v.timeline,
-        pending: v.pending, is_my_turn_to_speak: false, is_my_turn_to_vote: false },
-        r || {});
+        pending: v.pending, is_my_turn_to_speak: false, is_my_turn_to_vote: false,
+        can_act: mine ? (need.actions || []) : [],
+        team_mates: (r && r.team_mates) || [] };
+      if ((r && r.role) === 'witch') out.potions = { heal: true, poison: true };
+      if (v.wolf_points) out.wolf_points = v.wolf_points;
+      if (v.wolf_confirmed) out.wolf_confirmed = v.wolf_confirmed;
+      if (v.night_victim != null) out.night_victim = v.night_victim;
+      if (v.investigations) out.investigations = v.investigations;
+      return out;
     }
     if (path.indexOf('/pending_seats') > 0) return DEMO.ps || { seats: [] };
     return DEMO.public;                    /* /public、/act、/arm… 全给场景静态数据 */
