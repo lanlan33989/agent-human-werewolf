@@ -44,15 +44,21 @@ def _load(name: str):
 # 静态页面（2026-10-27）：同一端口直接吐 frontend/ 的页面与资源 ——
 # 黄子凡不需要再开第二个服务：:5501/play.html 就是"页面+假数据"全流程。
 _FRONTEND = os.path.join(os.path.dirname(HERE), "frontend")
+_ROOT = os.path.dirname(HERE)          # 仓库根：judge_voice.js 这类根级脚本
 _TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
           ".css": "text/css", ".png": "image/png", ".ico": "image/x-icon"}
 
 
 def _static(path: str):
     name = "play.html" if path in ("/", "/play") else path.lstrip("/")
+    if "/" in name:
+        return None
     fp = os.path.normpath(os.path.join(_FRONTEND, name))
     if not fp.startswith(_FRONTEND) or not os.path.isfile(fp):
-        return None
+        # 兜底到仓库根（只允许根级单文件，杜绝路径穿越）
+        fp = os.path.normpath(os.path.join(_ROOT, name))
+        if not fp.startswith(_ROOT) or not os.path.isfile(fp):
+            return None
     ext = os.path.splitext(fp)[1]
     with open(fp, "rb") as f:
         return _TYPES.get(ext, "application/octet-stream"), f.read()
@@ -96,6 +102,13 @@ class H(BaseHTTPRequestHandler):
                 "players": [{"seat": i, "display": f"{i + 1}号", "kind": "human" if i == n else "ai", "alive": True}
                             for i in range(4)],
             })
+        # 静态空路由（2026-10-27）：页面每次加载都会 ping 的两个口 —— 不给就
+        # 每个 iframe 刷一条 404 刷屏控制台。/api/net 是诊断面板的手机列表，
+        # play-keys 是封面的 key 回填（mock 不存 key，回空串即可）。
+        if path == "/api/net":
+            return self._send({"phones": []})
+        if path == "/api/admin/play-keys":
+            return self._send({"asr": "", "llm": "", "tts": ""})
         st = _static(path)
         if st is not None:
             mime, body = st
