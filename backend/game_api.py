@@ -924,8 +924,16 @@ def games() -> Dict[str, Any]:
     for s in SESSIONS.values():
         if s.game.winner not in ("wolf", "good"):
             continue
+        # 2026-10-27：带出**留档编号**（runs/ 下的目录名，含日期+局号+版本短哈希）。
+        # 这是提示词/度量同学每天要记的那串 —— 以前只能翻服务端日志找。
+        try:
+            import run_archive as _ra_dir                      # noqa: PLC0415
+            _arc = _ra_dir.dir_for(s.id)
+        except Exception:                                      # noqa: BLE001
+            _arc = None
         out.append({"gid": s.id, "board": s.game.board.label, "level": s.level,
                     "winner": s.game.winner, "rounds": s.game.round,
+                    "archive": _arc,
                     "report": f"/api/game/{s.id}/report.md",
                     "replay": f"/api/game/{s.id}/replay"})
     out.sort(key=lambda x: x["gid"], reverse=True)      # 新的在前

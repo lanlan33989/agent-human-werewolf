@@ -1,4 +1,8 @@
-# 前后端接口契约（v1 · 2026-10-26 冻结）
+# 前后端接口契约（v1.1 · 2026-10-26 冻结，2026-10-27 小修）
+
+> **v1.1（2026-10-27，纯加法不破坏）**：`GET /api/game/games` 的行里增加 `archive` 字段
+> （留档目录名）—— 榜单页要给出"这一局存到哪儿了"。另：§0 的推荐开发形态改为
+> `frontend/mock/mock_server.py` 单端口方案，并新增 §0.1 并行五步。
 
 > **规矩**：所有协议字段以本文件为准。谁想加/改字段，先改本文 + commit，另一方跟进 ——
 > 不许口头说"我这边加了个字段你适配一下"。每次破坏性改动把 `v` 加一并在此记录。
@@ -11,9 +15,31 @@
 ## 0. 基址与形态
 
 - 生产形态：页面由后端同源服务（`http://<主机>:8000/play`），**无 CORS 问题**。
-- 联调形态：前端用 Live Server（`:5500`）开发，直调 `http://localhost:8000` 的 API
+- **推荐的开发形态（2026-10-27 起）**：`python frontend/mock/mock_server.py`（`:5501`）
+  —— 这个假服务**同端口吐页面**，一个端口给全套：`http://127.0.0.1:5501/dev_panels.html`
+  （面板画廊）/ `.../play.html?demo=<场景>`（单场景）/ `.../play.html`（假数据全流程）。
+  前端不需要装依赖、不需要起后端、不需要第二个静态服务器。
+- 备用形态（要连真后端调才会用）：前端用 Live Server（`:5500`）↔ `http://localhost:8000` 的 API
   —— 后端已开 CORS 白名单（`server.py` 里 CORSMiddleware，要加端口改那里）。
 - 语音链路开发期可全关：环境变量 `MOCK_TTS=1`（服务端不真合成）；前端自己静音即可。
+
+## 0.1 这一周两边都要加东西时，怎么并行（2026-10-27 定，五步）
+
+1. **契约先行**：后端要加接口/字段 ⇒ 先在**本文件**贴一份**真实返回样例 JSON**（不是文字描述），
+   commit 并 @ 前端。加法字段不必升版本，破坏性改动才把顶部 `v` 加一。
+2. **前端不等后端**：拿这份样例在 [`frontend/demo_scenes.js`](../frontend/demo_scenes.js)
+   里加一个场景 —— 刷新 [`frontend/dev_panels.html`](../frontend/dev_panels.html)
+   立刻能看能改样式（画廊**自动读场景文件生成格子**，不用改画廊）。
+3. **mock 同步**：后端同时把样例塞进 `frontend/mock/`（fixtures 或路由），
+   于是 `:5501/play.html` 的假数据全流程也能跑通同一屏，两条路看到的字段一致。
+4. **联调只换数据源**：真后端就绪后，前端把 `?demo=` 去掉即可 —— **渲染分支一行都不用改**
+   （demo 场景走的就是真实渲染管线：`resumeInto → enterTable → tick → renderNightDial`）。
+5. **每周两次（周一 / 周四）**一起滚一遍画廊，只问一句："产品里有、画廊里没有的是哪一屏"。
+
+> 完整的界面清单（每屏的触发数据 / 场景 key / 代码位置）与"加一个新界面三步"见
+> [`docs/前端界面清单.md`](前端界面清单.md)；全员可点的链接总表见
+> [`docs/入口链接.md`](入口链接.md)。
+> 改完记得跑一次自检：`.venv/Scripts/python.exe tests/_check-split-consistency.py`。
 
 ## 1. 轮询协议（唯一强耦合点）：`GET /api/game/{gid}/public`
 
@@ -97,6 +123,7 @@
 | `POST /api/game/new` | 开局。body：`{humans, ais, level?, personality?, seed?, layout?}`；**seed 传了就能复现** | `frontend/mock/fixtures/new_game.json` |
 | `POST /api/game/{gid}/arm` | 面板 arm（播报念完的确认）；**不延长窗口** | |
 | `GET /api/game/rules` / `settings` | 档位表 / 规则开关表（前端控件**由它生成**，不写死） | `rules.json` / `settings.json` |
+| `GET /api/game/games` | 已结束清单（榜单页 `/board` 用）。行内含 `archive`=**留档编号**（`runs/<日期时间>_<局号>_v<git短哈希>`，2026-10-27 增） | |
 | `GET /api/health` | 服务与各层真假 | `health.json` |
 | `GET /api/tts?…`、`WS /ws/tts` | 云端 TTS 音频；`VOICE_ON=0` 时走浏览器本地合成（Web Speech） | |
 | `POST /api/asr`、`WS /ws/asr` | 语音识别（16k WAV body / 流式） | |

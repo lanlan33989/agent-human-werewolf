@@ -100,7 +100,12 @@ async function load(){
     var h2 = '<table><tr><th>局号</th><th>板子</th><th>档位</th><th>结果</th>'
            + '<th></th></tr>';
     list.forEach(function(g){
-      h2 += '<tr><td><code>' + g.gid + '</code></td>'
+      h2 += '<tr><td><code>' + g.gid + '</code>'
+          /* 2026-10-27：留档编号（runs/ 下的目录名：日期+局号+版本短哈希）。
+             提示词/度量同学每天要记的就是这串 —— 以前只能去服务端日志里翻。 */
+          + (g.archive ? '<div class="sub" style="margin:2px 0 0;font-size:11px">留档 '
+                         + '<code>' + g.archive + '</code></div>' : '')
+          + '</td>'
           + '<td>' + g.board + '</td>'
           + '<td>' + (g.level || '—') + '</td>'
           + '<td class="' + (g.winner === 'wolf' ? 'win' : '') + '">'

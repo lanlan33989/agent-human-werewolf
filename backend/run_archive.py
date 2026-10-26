@@ -300,6 +300,10 @@ class Archive:
 _active_seed: Dict[str, Any] = {}
 _active_kinds: Dict[str, Dict[int, str]] = {}
 _ACTIVE: Dict[str, Archive] = {}
+# 2026-10-27：局号 → 留档目录名（留档编号）。finalize 会把活跃局从 _ACTIVE
+# 摘掉，之后再没人答得出"这一局存到哪个目录了"（只能翻服务端日志）—— 而
+# 提示词/度量两位同学每天要记的就是这个编号 ⇒ 这里留一份，供对外查询。
+_LAST: Dict[str, str] = {}
 
 # 追加写全局锁（进程级）：多线程（预跑池 + 驱动器）同时写同一个 jsonl 时防交错
 _APPEND_LOCK = threading.Lock()
@@ -316,6 +320,7 @@ def begin(sess: Any) -> None:
         _active_seed[gid] = getattr(sess, "seed", None)
         _active_kinds[gid] = {p.seat: p.kind for p in sess.game.players}
         if arch.ok:
+            _LAST[gid] = os.path.basename(arch.dir)
             print("[runs] 建档 " + arch.dir, flush=True)
         else:
             print("[runs] 建档失败（对局继续）：" + "; ".join(arch.errs[:2]),
@@ -360,6 +365,19 @@ def on_drive_end(sess: Any) -> None:
         arch.finalize(sess, sess.replay())
     except Exception as e:                               # noqa: BLE001
         print("[runs] 局末落盘失败（对局已正常结束）：" + repr(e), flush=True)
+
+
+def dir_for(gid: Optional[str]) -> Optional[str]:
+    """留档编号（= `runs/` 下的目录名）。（2026-10-27：给 `/api/game/games`
+    与榜单页用 —— 那一屏要能一眼看到"这一局存到哪儿了"，别让大家翻日志。）"""
+    try:
+        if gid and _LAST.get(gid):
+            return _LAST[gid]
+        if gid and gid in _ACTIVE:
+            return os.path.basename(_ACTIVE[gid].dir)
+    except Exception:                                    # noqa: BLE001
+        pass
+    return None
 
 
 def on_evict(sess: Any) -> None:

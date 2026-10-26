@@ -166,10 +166,12 @@ class H(BaseHTTPRequestHandler):
             return self._send({"games": [
                 {"gid": "MOCKGID", "board": "6 人 · 2 狼 1 巫 1 预 2 民",
                  "level": "认真", "winner": "good", "rounds": 3,
+                 "archive": "20261027-104522_MOCKGID_v4ae1564",
                  "report": "/api/game/MOCKGID/report.md",
                  "replay": "/api/game/MOCKGID/replay"},
                 {"gid": "OLDGID1", "board": "9 人 · 3 狼 3 神 3 民",
                  "level": "娱乐", "winner": "wolf", "rounds": 4,
+                 "archive": "20261026-201137_OLDGID1_v666ebca",
                  "report": "/api/game/OLDGID1/report.md",
                  "replay": "/api/game/OLDGID1/replay"}]})
         # 战报正文（真后端是 text/markdown 纯文本，这里同格式）—— 局末那一排
