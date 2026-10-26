@@ -117,6 +117,17 @@ PROMPT_STATIC = (
     ("agents", "HEAD_TASK", "段落标题（user 消息）", "任务段标题"),
     ("agents", "SPEAK_RULES_REMINDER", "任务文案（speak）",
      "发言任务末尾的【全场规则提醒】整段；{round} 是轮数占位符，**别删**"),
+    # 2026-10-26 合并 backup 分支（夜间面板/防撞句/防捏造移植）后守门抓到的：
+    ("agents", "NO_FABRICATION_BLOCK", "防捏造 / 心理隔离",
+     "信息必须有出处、不确定就说不知道 —— 防「模型自己编」（评价没发言的人、引用没发生的票型）"),
+    ("agents", "HIDE_WOLF_SPEAK_BLOCK", "防捏造 / 心理隔离",
+     "狼白天发言前的心理隔离：狼队商量那场对话从未发生过 —— 给 leak_check 减负"),
+    ("agents", "HARD_INFO_RULE", "防捏造 / 心理隔离",
+     "性格只管怎么说不管说不全：报验人等硬信息不能被惜字如金类人格吞掉"),
+    ("agents", "SPOT_UNSENT_LINE", "任务文案（speak）",
+     "发言进度里「标 ○ 的人还没开口，不要替他们编」那一句"),
+    ("agents", "ANTI_REPEAT_BLOCK", "任务文案（speak）",
+     "发言防撞句整段：列出最近开口者的开场 + 要求换切入点；{recent} 是数据占位符，**别删**"),
 )
 
 # （模块, 表名, 分组, 说明, 叶子名元组（None = 表本身就是 dict[str,str]））

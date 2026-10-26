@@ -759,6 +759,14 @@ HIDE_WOLF_SPEAK_BLOCK = """【重要 · 你现在在公开场合说话】
 HARD_INFO_RULE = """另外：性格只决定你怎么说，不决定你说不说全。
 该报的硬信息（验的是几号、金水还是查杀、第几晚验的）一个都不能省。"""
 
+# 🔴 2026-10-26 合并 backup 分支后守门抓到的存量欠账：下面两段原来在函数体内
+#    拼接（配置台看不见）。抽成常量进契约；{...} 是数据占位符，**别删**。
+SPOT_UNSENT_LINE: str = (
+    "（标 ○ 的人一句都还没开口——不要评价、转述或替他们编任何发言。）\n\n")
+ANTI_REPEAT_BLOCK: str = (
+    "\n\n【别跟前面的发言撞句】最近开口的人是这样开头的：\n{recent}"
+    "\n你的开场必须和他们每一个人都不一样（换切入点，不是换同义词）。")
+
 SYSTEM_TEMPLATE = """你是 {seat} 号。你们这些人被关在同一间屋里，其中有几个是披着人皮的狼。
 每个夜晚它们会咬死一个人；每个白天，你们要投票把一个人扔出去。
 
@@ -1244,7 +1252,7 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
         # 🔴 2026-10-22 移植（队友 timelineBlock 的核心思想：把"哪些还没发生"
         #    点名，而不是笼统说"别编"）：
         if any(_s not in (_sp.get("spoken") or []) for _s in _sp["order"]):
-            _sp_line += "（标 ○ 的人一句都还没开口——不要评价、转述或替他们编任何发言。）\n\n"
+            _sp_line += SPOT_UNSENT_LINE
     # 发言只有一轮（2026-10-02 用户加）：FACT_ONE_ROUND（模块级，配置台可改）。
     user = (
         f"{hard_facts(view)}\n\n"
@@ -1549,9 +1557,7 @@ class Agent:
                     h.split("：", 1)[0].strip() + "「"
                     + h.split("：", 1)[1].strip()[:10] + "」"
                     for h in _recent)
-                task += ("\n\n【别跟前面的发言撞句】最近开口的人是这样开头的：\n"
-                         + _frag
-                         + "\n你的开场必须和他们每一个人都不一样（换切入点，不是换同义词）。")
+                task += ANTI_REPEAT_BLOCK.format(recent=_frag)
         try:
             import run_archive as _ra
             _ra.set_ask_ctx(task_key, view)
