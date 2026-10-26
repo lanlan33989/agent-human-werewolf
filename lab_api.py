@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter(prefix="/api/lab", tags=["lab"])
 
@@ -220,6 +220,42 @@ def step_done() -> None:
                 _write_control(d)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- 提示词覆盖（实验室 → 对局）
+# 🔴 2026-10-26 用户要"AI 玩家的提示词跟着第①②列走"：实验室里改好的 prompt
+#    （第②列块 + 选中步局面），单步重跑时直接替换服务端组装的那份。
+#    一次性消费（下一次模型调用用完即弃）；key 仍是服务端的 —— 实验室席位
+#    的 key 只用于本地试跑对比，不进对局（密钥不过进程边界）。
+_override: Optional[Dict[str, str]] = None
+_OVERRIDE_TTL = 120.0     # 秒：超时自动作废 —— 单步放行的那步可能是不调模型的
+                          # 补播 continue，覆盖若无限期留着会落到之后错误的调用上
+
+
+def set_override(system: str, user: str) -> Dict[str, str]:
+    """实验室设置一次性 prompt 覆盖：下一次模型调用（不管哪个座位）用它，120 秒内有效。"""
+    global _override
+    with _lock:
+        _override = {"system": str(system or ""), "user": str(user or ""),
+                     "ts": time.time()}
+    return {"ok": True, "note": "下一次模型调用生效（120 秒内），用完即弃"}
+
+
+def consume_override() -> Optional[Dict[str, str]]:
+    """agents._build 组装完 messages 后问一次：有覆盖就整体替换。取走即清。"""
+    global _override
+    with _lock:
+        ov = _override
+        _override = None
+        if ov and time.time() - float(ov.get("ts") or 0) > _OVERRIDE_TTL:
+            ov = None                       # 过期作废，不让旧覆盖污染后续调用
+    return ov
+
+
+def peek_override() -> bool:
+    with _lock:
+        ov = _override
+    return bool(ov) and time.time() - float(ov.get("ts") or 0) <= _OVERRIDE_TTL
 
 
 # ---------------------------------------------------------------- 局面快照 / 回退
@@ -464,6 +500,23 @@ def api_live(limit: int = 150) -> dict:
 @router.get("/snapshots")
 def api_snapshots(limit: int = 200) -> dict:
     return {"count": len(_snaps), "snapshots": list_snaps(limit)}
+
+
+@router.post("/override")
+async def api_override(request: Request) -> dict:
+    """实验室 → 对局：把实验室组装好的 prompt 设为一次性覆盖（下一次模型调用）。"""
+    try:
+        body = await request.json()
+    except Exception:                                    # noqa: BLE001
+        raise HTTPException(status_code=400, detail="body 必须是 JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body 必须是对象")
+    return set_override(str(body.get("system") or ""), str(body.get("user") or ""))
+
+
+@router.get("/override")
+def api_override_status() -> dict:
+    return {"pending": peek_override()}
 
 
 @router.post("/rewind")

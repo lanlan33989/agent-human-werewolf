@@ -1273,10 +1273,17 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
     if extra:
         user += "\n" + extra
 
-    return [
+    msgs = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+    # 实验室覆盖（有才替换；字段缺省时沿用本侧组装的那份）
+    if _ov and (_ov.get("system") or _ov.get("user")):
+        msgs = [
+            {"role": "system", "content": _ov.get("system") or system},
+            {"role": "user", "content": _ov.get("user") or user},
+        ]
+    return msgs
 
 
 # ================================================================ 输出侧校验
@@ -1474,6 +1481,13 @@ class Agent:
         而且隔离边界会出现第二个拼装点（见 07a 里"唯一入口"那条）。
         """
         task = TASKS[task_key] + _format_hint(task_key)
+        # 实验室的一次性 prompt 覆盖（2026-10-26）：有覆盖就整体替换组装结果。
+        # 没有覆盖时零开销、零行为变化；覆盖用完即弃（见 lab_api.set_override）。
+        try:
+            import lab_api as _lab
+            _ov = _lab.consume_override()
+        except Exception:
+            _ov = None
         # 实验室落盘打点（2026-10-26）：night_driver 只打 round/phase，座位/角色
         # 只有这里知道 —— 没有它，归因列分不清"这一步是谁的调用"。
         try:

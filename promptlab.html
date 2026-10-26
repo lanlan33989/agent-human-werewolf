@@ -19,7 +19,7 @@
   button:hover{border-color:var(--accent)}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   button.go{background:var(--ok);border-color:var(--ok);color:#0b2019;font-weight:600}
-  main{display:grid;grid-template-columns:300px 280px 1fr 390px;gap:10px;padding:10px;height:calc(100vh - 50px)}
+  main{display:grid;grid-template-columns:340px 300px 1fr;gap:10px;padding:10px;height:calc(100vh - 50px)}
   .col{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
   .col h2{margin:0;padding:8px 12px;font-size:12.5px;font-weight:600;color:var(--dim);border-bottom:1px solid var(--line);background:var(--panel2)}
   .body{padding:10px;overflow:auto;flex:1}
@@ -74,39 +74,68 @@
 </header>
 
 <main>
-  <!-- 最左：对局直播（群聊式） -->
+  <!-- 最左：对局直播 + 运行（2026-10-26 三列重构：原第③列并入这里） -->
   <section class="col">
-    <h2>⓪ 对局直播（群聊式）</h2>
+    <h2>⓪ 对局直播 · 运行</h2>
     <div class="body">
       <div class="flexline" id="chatHead"><span class="muted" id="chatInfo">未连接</span></div>
       <div id="chatBox" class="empty"></div>
       <div class="flexline">
         <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
         <button title="取消暂停，对局继续自动推进" onclick="engPause(false)">▶ 继续</button>
-        <button title="暂停状态下再往前走一步，走完自动停住" onclick="engStep();chatSnapSoon()">⏭ 单步</button>
+        <button title="暂停状态下再往前走一步，走完自动停住。勾选下方「用实验室提示词」时，这一步的第一个模型调用会用第②列块+选中步局面组装的 prompt" onclick="stepLab();chatSnapSoon()">⏭ 单步</button>
         <button title="刷新直播" onclick="chatTick(true)">⟳</button>
       </div>
       <div class="flexline">
-        <select id="chatSnapSel" class="grow" title="局面快照：每一步开始前的完整引擎状态（deepcopy）">
-          <option value="">— 回退到哪一步之前 —</option>
+        <select id="chatSnapSel" class="grow" title="局面快照：每一步开始前的完整引擎状态。选中即把该步局面填入第①列（作为试跑的局面来源）" onchange="chatSnapPick()">
+          <option value="">— 回退到哪一步之前（=选定局面）—</option>
         </select>
         <button title="把整局退回所选快照：引擎状态、播报、游标全部回退，过期预跑决策作废，然后自动暂停 —— 改完提示词从那里重跑（重跑整步，规则等价但模型输出会有差异）" onclick="chatRewind()">⏪ 回退</button>
       </div>
-      <div class="muted" style="font-size:11px">回退是<b>真回退</b>：引擎状态整体恢复到那一步之前；重跑的是整步（一步可能含几次模型调用）。回退后自动暂停。</div>
+      <div class="flexline">
+        <label style="margin:0" title="勾选后，⏭ 单步的下一步模型调用改用第②列块+选中步局面组装的 prompt（一次性，用完即弃）。注意：调用仍走服务端配置的 key——第①列席位的 key 只用于本地试跑对比">
+          <input type="checkbox" id="ovr" style="width:auto;vertical-align:middle"> 单步用实验室提示词
+        </label>
+      </div>
+      <div class="muted" style="font-size:11px">回退是<b>真回退</b>（对局结束后依然可用：把 winner 一起退回去就能接着跑）。重跑的是整步。</div>
+
+      <div class="sub">选中步详情（点上面的气泡或选回退步后自动更新）</div>
+      <div id="stepDetail" class="muted">在直播里点一条 AI 发言，或在上面的下拉里选一步。</div>
+
+      <div class="flexline">
+        <button class="go" title="用第①列席位 × 第②列块 × 选中步局面，本地组装并调用模型（不进对局）" onclick="runOnce(false)">▶ 试跑这一步</button>
+        <button title="用另一个席位同时跑同一个局面，并排对比" onclick="runOnce(true)">⇄ 双席位对比</button>
+        <span id="status" class="muted">尚未运行</span>
+      </div>
+      <div class="flexline">
+        <span class="muted">对比席位：</span>
+        <select id="cmpAgent" class="grow" title="双席位对比时使用的另一个席位"></select>
+      </div>
+      <div class="sub">模型原始输出（试跑结果 / 选中步当时的一字不改输出）</div>
+      <div id="out"></div>
+      <div class="sub">解析与归因</div>
+      <div id="parse"></div>
+
+      <div class="sub">决策日志（本地试跑自动累加）</div>
+      <div id="logWrap" style="max-height:16vh;overflow:auto"></div>
+
+      <div class="sub">连接</div>
+      <div class="flexline">
+        <input id="engine" class="grow" placeholder="对局服务地址（留空=同源）" onchange="setEngine(this.value)">
+        <button title="刷新连接状态" onclick="engStatus()">连接</button>
+      </div>
+      <div class="flexline">
+        <label style="margin:0"><input type="checkbox" id="autopoll" onchange="togglePoll()" style="width:auto;vertical-align:middle"> 状态轮询（每 3 秒）</label>
+        <span class="muted" id="engInfo">未连接</span>
+      </div>
     </div>
   </section>
 
-  <!-- 左 -->
+  <!-- 中左：AI 席位（试跑用） -->
   <section class="col">
-    <h2>① 局面快照</h2>
+    <h2>① AI 席位（试跑用）</h2>
     <div class="body">
-      <div id="snapList"></div>
-      <div class="flexline">
-        <button title="新建一个空白局面快照，手动填写身份/场上情况/时间线等字段" onclick="newSnapshot()">+ 新建快照</button>
-        <button title="删除当前选中的快照" onclick="delSnapshot()">删除</button>
-      </div>
-      <div class="sub">编辑当前快照</div>
-      <div id="snapEdit"></div>
+      <div class="muted" style="font-size:11px">局面来自列0选中的步（点气泡或选回退步自动填入）；这些席位只用于<b>本地试跑对比</b> —— 对局里的 AI 用的是服务端配置的模型与 key（在 /admin 配置台改）。</div>
 
       <div class="sub">AI 席位 · 各自独立配置</div>
       <div id="agentList"></div>
@@ -179,57 +208,6 @@
     </div>
   </section>
 
-  <!-- 右 -->
-  <section class="col">
-    <h2>③ 运行 · 原始输出 · 归因 · 对局时间轴</h2>
-    <div class="body">
-      <div class="flexline">
-        <button class="go" title="用当前席位配置跑这一次决策，显示模型原始输出与归因结论" onclick="runOnce(false)">▶ 跑这一次决策</button>
-        <button title="用另一个席位配置同时跑同一个局面，并排对比两个模型的表现" onclick="runOnce(true)">⇄ 双配置对比</button>
-      </div>
-      <div class="flexline">
-        <span class="muted">对比席位：</span>
-        <select id="cmpAgent" class="grow" title="双配置对比时使用的另一个席位"></select>
-      </div>
-      <div class="sub">状态</div>
-      <div id="status" class="muted">尚未运行</div>
-      <div class="sub">模型原始输出（一字不改 —— 归因的唯一依据）</div>
-      <div id="out"></div>
-      <div class="sub">解析与归因</div>
-      <div id="parse"></div>
-
-      <div class="sub">引擎连接 · 实时对局（边玩 / 暂停 / 单步 / 取快照）</div>
-      <div class="row">
-        <div><label>对局服务地址</label><input id="engine" placeholder="http://127.0.0.1:8000" onchange="setEngine(this.value)"></div>
-      </div>
-      <div class="flexline">
-        <button title="连上对局服务，读取它的暂停状态与已落盘的步骤数" onclick="engStatus()">连接 / 刷新状态</button>
-        <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
-        <button title="取消暂停，对局继续自动推进" onclick="engPause(false)">▶ 继续</button>
-        <button title="暂停状态下再往前走一步，走完自动停住" onclick="engStep()">⏭ 单步</button>
-        <button title="从对局服务拉取已落盘的步骤，生成时间轴" onclick="engPull()">拉取步骤</button>
-      </div>
-      <div class="flexline">
-        <label style="margin:0"><input type="checkbox" id="autopoll" onchange="togglePoll()" style="width:auto;vertical-align:middle"> 自动刷新（每 3 秒）</label>
-        <span class="muted" id="engInfo">未连接</span>
-      </div>
-
-      <div class="sub">对局时间轴（导入日志 → 回退到任意一步 → 重跑）</div>
-      <div class="flexline">
-        <button title="导入对局日志 JSONL，生成可回退的时间轴" onclick="document.getElementById('impLog').click()">导入对局日志</button>
-        <input id="impLog" type="file" accept=".jsonl,.json,.txt" hidden onchange="importLog(this)">
-        <button title="跳到上一步" onclick="step(-1)">← 上一步</button>
-        <button title="跳到下一步" onclick="step(1)">下一步 →</button>
-        <button title="把当前这一步的局面载入为快照，便于改提示词后重跑与对比" onclick="loadStep()">载入为快照</button>
-      </div>
-      <div id="gameInfo" class="muted">尚未导入对局日志</div>
-      <div id="gameList" style="max-height:18vh;overflow:auto"></div>
-      <div class="muted">说明：边玩边暂停/回退需要连接真实对局引擎（由后端提供日志与快照接口）；本工具负责导入日志后的逐步重放与重跑。</div>
-
-      <div class="sub">决策日志（自动累加）</div>
-      <div id="logWrap" style="max-height:20vh;overflow:auto"></div>
-    </div>
-  </section>
 </main>
 
 <script>
@@ -327,56 +305,6 @@ const DEFAULT_USER=`{{rules}}
 {{task}}
 {{output}}`;
 
-const SAMPLE=[
- {name:'S1 第1夜·狼刀',round:1,phase:'NIGHT',taskKind:'json',camp:'狼人',
-  identity:'【你的身份】座位：3 号\n角色：狼人\n阵营：狼人\n你的狼队友：7号、11号（只有你们互相知道，好人不知道）',
-  public:'存活：1 2 3 4 5 7 8 9 10 11 12\n还没有人出局\n警长：还没选出来',
-  hardFacts:'（无）',votes:'（本轮还没有投票）',
-  timeline:'- 现在是第 1 夜，天还没亮\n- 本轮还没有人发过言，你不能评价任何人的发言\n- 今晚的结果还没揭晓',
-  allowed:'1,2,4,5,8,9,10,12',
-  task:'你是狼人，今晚要和队友一起刀一个人。优先刀看起来像神职（预言家 / 女巫 / 守卫 / 猎人）或者威胁大的好人。\n注意：狼队今晚是各自选，最后按"选的人最多"的算，平票随机挑一个。除非有更强的理由，否则跟着队友已经选的那个走。',
-  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
- {name:'S2 第1夜·预言家验人',round:1,phase:'NIGHT',taskKind:'json',camp:'好人',
-  identity:'【你的身份】座位：5 号\n角色：预言家\n阵营：好人\n技能：每晚可查验一名玩家的阵营',
-  public:'存活：1 2 3 4 5 7 8 9 10 11 12\n还没有人出局',
-  hardFacts:'（你还没有验过人）',votes:'（本轮还没有投票）',
-  timeline:'- 现在是第 1 夜，天还没亮\n- 本轮还没有人发过言',
-  allowed:'1,2,3,4,7,8,9,10,11,12',
-  task:'你是预言家，今晚要查验一个人。优先查你还不确定身份、且发言有问题的玩家。',
-  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
- {name:'S3 第1夜·女巫用药',round:1,phase:'NIGHT',taskKind:'json',camp:'好人',
-  identity:'【你的身份】座位：8 号\n角色：女巫\n阵营：好人\n你的药水：解药还在，毒药还在\n今晚 5 号 被狼人刀了（解药没用过，所以你看得到刀口）',
-  public:'存活：1 2 3 4 5 7 8 9 10 11 12',
-  hardFacts:'你还没救过人（没有银水）',votes:'（本轮还没有投票）',
-  timeline:'- 现在是第 1 夜\n- 本轮还没有人发过言',
-  allowed:'1,2,3,4,7,9,10,11,12',
-  task:'你是女巫，每晚最多只能用一瓶药。可选：SAVE（用解药救回 5 号）/ POISON（毒死一人）/ NONE（不用药）。\n毒错一个好人可能直接葬送整局；第一晚用解药救人是常见的保守打法。如果有人跟你**对跳女巫**，那只狼就是你最该毒的目标。',
-  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"choice": "SAVE" 或 "POISON" 或 "NONE", "target": 号码或null}'},
- {name:'S4 第2天·白天发言',round:2,phase:'DAY_SPEECH',taskKind:'text',camp:'好人',
-  identity:'【你的身份】座位：9 号\n角色：平民\n阵营：好人',
-  public:'存活：1 2 3 4 7 8 9 10 11 12\n已出局：5号(第1天)、6号(第1天)\n警长：还没选出来\n【发言记录】\n1号：我先过，听后面的。\n3号：5号昨晚死了，我觉得该听听归票位的意见。\n7号：我认 3 号是好人，他第一轮没乱踩。',
-  hardFacts:'（无）',votes:'（本轮还没有投票）',
-  timeline:'- 本轮已经发过言的是：1号、3号、7号\n- 2号、4号、8号、10号、11号、12号 还没开口\n- 本轮还没有人投过票',
-  allowed:'',
-  task:'轮到你发言。点号码、说理由，不要空话，控制在 150 字以内。',
-  output:'直接输出你要说的话，不要加引号、不要加任何前缀。'},
- {name:'S5 第2天·放逐投票',round:2,phase:'DAY_VOTE',taskKind:'json',camp:'好人',
-  identity:'【你的身份】座位：2 号\n角色：猎人\n阵营：好人',
-  public:'存活：1 2 3 4 7 8 9 10 11 12\n【发言记录】\n3号：我怀疑 4 号，他全程没给过实质判断。\n7号：我也觉得 4 号有问题。\n4号：我只是低调，别因为话少就投我。',
-  hardFacts:'（无）',votes:'（本轮还没有投票）',
-  timeline:'- 本轮发过言：3号、7号、4号\n- 本轮还没有人投过票，不要引用票型',
-  allowed:'3,4,7,8,9,10,11,12',
-  task:'你要投票放逐一名玩家。结合所有人的发言和投票行为，投给你最怀疑是狼的人。\n本轮焦点位：4号（3号、7号 说他有问题）。优先从焦点位里选，除非你有明确说得出口的更好理由。',
-  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
- {name:'S6 第3天·被查杀后辩解',round:3,phase:'DAY_SPEECH',taskKind:'text',camp:'好人',
-  identity:'【你的身份】座位：4 号\n角色：平民\n阵营：好人',
-  public:'存活：2 3 4 7 9 10 11 12\n【发言记录】\n3号：我是预言家，第 2 晚我验的 4 号，是查杀。\n7号：那我信 3 号，4 号你怎么说？',
-  hardFacts:'你是平民，3 号的查杀是错的',votes:'（本轮还没有投票）',
-  timeline:'- 本轮已经发过言的是：3号、7号\n- 2号、4号、9号、10号、11号、12号 还没开口',
-  allowed:'',
-  task:'你是被查杀的平民，轮到你辩解。可以说清自己的视角、指认你怀疑的人，但不要编造没发生的事。控制在 150 字以内。',
-  output:'直接输出你要说的话，不要加引号、不要加任何前缀。'}
-];
 
 /* ================= 状态 ================= */
 const KEY='promptlab.v2';
@@ -392,7 +320,7 @@ function blank(){
   const blocks={}; BLOCK_DEFS.forEach(b=>blocks[b.id]={text:DEFAULT_BLOCK[b.id]||'',on:!!b.on});
   return {
     version:'lab-2.0', proxy:'', engine:'',
-    snapshots:SAMPLE.map(s=>Object.assign({camp:'',hardFacts:'',votes:''},s)),
+    snapshots:[{name:'（对局列0选步后自动填入）',round:1,phase:'',taskKind:'text',camp:'',identity:'',public:'',hardFacts:'',votes:'',timeline:'',allowed:'',task:'',output:''}],
     activeSnap:0,
     agents:SAMPLE_AGENTS(), activeAgent:0,
     blocks,
@@ -403,7 +331,8 @@ function blank(){
   };
 }
 let S=load();
-function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const o=JSON.parse(raw); if(o&&o.version) return o; } }catch(e){} return blank(); }
+function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const o=JSON.parse(raw); if(o&&o.version){ // 2026-10-26 手写示例快照（S0~S6）退役：老数据裁成 1 个，局面一律从列0选步自动填入
+if(Array.isArray(o.snapshots)&&o.snapshots.length>1){ o.snapshots=[o.snapshots[0]]; } if(!Array.isArray(o.snapshots)||!o.snapshots.length){ o=blank(); } o.activeSnap=0; return o; } } }catch(e){} return blank(); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
 
 /* ================= 渲染 ================= */
@@ -411,21 +340,8 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;',
 function fp(k){ return k && k.length>10 ? k.slice(0,6)+'…'+k.slice(-4) : (k?'••••':''); }
 
 function render(){
-  document.getElementById('snapList').innerHTML=S.snapshots.map((s,i)=>
-    `<div class="list-item ${i===S.activeSnap?'active':''}" onclick="pickSnap(${i})">
-       <div class="nm">${esc(s.name)}</div>
-       <div class="meta">${esc(s.phase||'')} · ${s.taskKind==='json'?'结构化决策':'自由发言'} · ${esc(s.camp||'')}</div>
-     </div>`).join('');
-
-  const sn=S.snapshots[S.activeSnap]||{};
-  const f=(k,ph)=>`<label>${k}</label><input value="${esc(sn[k]||'')}" oninput="setSnap('${k}',this.value)" placeholder="${ph||''}">`;
-  const t=(k,r)=>`<label>${k}</label><textarea rows="${r}" oninput="setSnap('${k}',this.value)">${esc(sn[k]||'')}</textarea>`;
-  document.getElementById('snapEdit').innerHTML=
-      f('name','快照名')
-    + '<div class="row"><div>'+f('round','第几天')+'</div><div>'+f('phase','NIGHT/DAY_SPEECH/DAY_VOTE')+'</div></div>'
-    + '<div class="row"><div>'+f('taskKind','json 或 text')+'</div><div>'+f('camp','狼人 / 好人')+'</div></div>'
-    + t('identity',4) + t('public',4) + t('hardFacts',2) + t('votes',2)
-    + t('timeline',3) + f('allowed','合法号码，逗号分隔') + t('task',3) + t('output',2);
+  /* 2026-10-26 手写快照 UI（S0~S6 列表 + 编辑表单）退役：局面一律从列0选步
+     自动填入 S.snapshots[0]（applyStepSnap）；快照仍存在 S 里供试跑/对比用。 */
 
   document.getElementById('agentList').innerHTML=S.agents.map((a,i)=>
     `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
@@ -510,6 +426,7 @@ function importLog(inp){
 }
 function renderGame(){
   const gi=document.getElementById('gameInfo'), gl=document.getElementById('gameList');
+  if(!gi||!gl) return;   // 2026-10-26 时间轴 UI 并入列0（气泡即时间轴），这两个元素已不存在
   if(!S.game||!S.game.steps){ gi.textContent='尚未导入对局日志'; gl.innerHTML=''; return; }
   gi.textContent=`${esc(S.game.name)} · 共 ${S.game.steps.length} 步 · 当前第 ${S.gameIdx+1} 步`;
   gl.innerHTML=S.game.steps.map((s,i)=>
@@ -620,6 +537,34 @@ async function chatTick(force){
   if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); chatSyncSteps(); }
 }
 
+/* 回退下拉选步 = 选定局面：把该步填入第①列（不回退，只看） */
+function chatSnapPick(){
+  const i=parseInt(document.getElementById('chatSnapSel').value,10);
+  if(!i) return;
+  if(!_liveRows||!_liveRows.length){ chatSyncSteps().then(()=>chatSnapPick.apply(null,[])); return; }
+  const row=_liveRows.find(r=>Number(r.snap)===i) ||
+            _liveRows.find(r=>Number(r.snap)>i) || _liveRows[_liveRows.length-1];
+  applyStepSnap(row, _liveRows.indexOf(row));
+  hint('已把第 '+i+' 步的局面填入第①列（试跑会用到）；要真的回退请点 ⏪ 回退');
+}
+
+/* 单步（可选：用实验室提示词覆盖下一步的第一个模型调用） */
+async function stepLab(){
+  const ovrEl=document.getElementById('ovr');
+  if(ovrEl&&ovrEl.checked){
+    try{
+      const p=buildPrompt();
+      const b=engBase()||'';
+      const r=await fetch(b+'/api/lab/override',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({system:p.system,user:p.user})});
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      hint('已设置一次性提示词覆盖（第②列块+选中步局面）—— 下方第一步的模型调用将改用它');
+    }catch(e){ hint('提示词覆盖设置失败：'+e.message+'（本次单步仍用服务端原 prompt）'); }
+  }
+  engStep(); chatSnapSoon();
+}
+
 /* ---- 与第①②③列的联动 ---- */
 let _liveRows=null;   // 落盘步骤缓存（与第③列"拉取步骤"同源：/api/lab/steps）
 async function chatSyncSteps(){
@@ -632,7 +577,7 @@ async function chatSyncSteps(){
     engPull();          // 贴尾跟随：新步骤自动进时间轴并保持选中最后一步
   }
 }
-/* 点直播里的某句发言 → 第③列定位到那一步（prompt+原始输出），第①列可一键载入为快照 */
+/* 点直播里的某句发言 → 定位到那一步：局面填入第①列（试跑用），详情显示在列0底部 */
 async function chatPick(seat, ts){
   if(!_liveRows||!_liveRows.length) await chatSyncSteps();
   if(!_liveRows||!_liveRows.length){ hint('还没有落盘步骤（对局在跑就会自动有）'); return; }
@@ -643,7 +588,28 @@ async function chatPick(seat, ts){
     if(r.seat!=null && r.seat!=='' && Number(r.seat)!==seat) continue;
     idx=k; break;
   }
-  if(idx<0){ hint('没找到对应的落盘步骤（太早的步骤已被日志滚动淘汰）'); return; }
+  if(idx<0){
+    const d=document.getElementById('stepDetail');
+    if(d) d.innerHTML='<span class="badge b-warn">没找到这句发言的落盘记录</span><br>'
+      +'<span class="muted" style="font-size:11px">MOCK 对局（服务端没配真模型 key）的决策不走落盘通道，点气泡没有可看的内容 —— 用 /admin 配置台开真模型再跑一局即可。另外太早的步骤也会被日志滚动淘汰。</span>';
+    return;
+  }
+  applyStepSnap(_liveRows[idx], idx);
+  hint('已定位到「'+((Number(seat)||0)+1)+' 号」这句发言的步骤：局面已填入第①列，详情见下方');
+}
+
+/* 把一步落盘行变成"当前快照"（第①列局面来源）并显示详情 —— 回退下拉选步与点气泡共用 */
+function applyStepSnap(row, idx){
+  const sys=(row.prompt&&row.prompt.system)||'';
+  const usr=(row.prompt&&row.prompt.user)||'';
+  S.snapshots[0]={
+    name:'对局·第'+(row.round||'?')+'天 '+((row.phase||'')||'')+' · '+(row.seat!=null&&row.seat!==''?(Number(row.seat)+1)+' 号':'?'),
+    round:row.round||1, phase:row.phase||'', taskKind:'text',
+    camp:(row.role||'')==='wolf'?'狼人':'好人',
+    identity:sys, public:usr, hardFacts:'', votes:'', timeline:'', allowed:'',
+    task:'（按下方提示词块+此局面重跑）', output:(row.raw||'')
+  };
+  S.activeSnap=0;
   if(!S.game||S.game.name!=='引擎实时对局'||S.game.steps.length!==_liveRows.length){
     const rows=_liveRows.map((s,i)=>({
       _i:i, round:s.round, phase:s.phase, seat:s.seat, role:s.role,
@@ -654,8 +620,24 @@ async function chatPick(seat, ts){
     }));
     S.game={name:'引擎实时对局', steps:rows};
   }
-  pickStep(idx);
-  hint('已定位到「'+(seat||'?')+' 号」这句发言的落盘步骤（第③列）—— 要改这块局面请点回退下拉');
+  S.gameIdx=(idx!=null)?idx:S.game.steps.length-1;
+  save(); render();
+  showStepDetail(row);
+}
+/* 选中步详情（列0底部）：归因表 + 当时输出 + 当时 prompt（折叠） */
+function showStepDetail(row){
+  const d=document.getElementById('stepDetail'); if(!d) return;
+  d.innerHTML='<table>'
+    +'<tr><th>座位 / 角色</th><td>'+(row.seat!=null&&row.seat!==''?(Number(row.seat)+1)+' 号 '+esc(row.role||''):'（旧日志没记）')+'</td></tr>'
+    +'<tr><th>局面</th><td>第'+esc(row.round||'?')+'天 '+esc(_phaseCn(row.phase||''))+'</td></tr>'
+    +'<tr><th>耗时 / 模型</th><td>'+esc(String(row.ms||'?'))+' ms · '+esc(row.model||'?')+'</td></tr>'
+    +'<tr><th>当时判定</th><td>'+(row.fallback?'<span class="badge b-bad">兜底</span>':'<span class="badge b-ok">正常</span>')+'</td></tr>'
+    +'</table>'
+    +'<details style="margin-top:4px"><summary style="cursor:pointer">当时的 prompt（system / user）</summary>'
+    +'<pre style="white-space:pre-wrap;font-size:11px;max-height:22vh;overflow:auto;background:#0f1218;padding:6px;border-radius:4px">'
+    +esc(((row.prompt&&row.prompt.system)||'')+'\n────────\n'+((row.prompt&&row.prompt.user)||''))+'</pre></details>';
+  const out=document.getElementById('out');
+  if(out) out.textContent=row.raw?('【这一步当时的输出（一字不改）】\n'+row.raw):'（这一步没有记录原始输出）';
 }
 async function chatSnap(){
   _chatSnapAt=Date.now();
