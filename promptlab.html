@@ -54,6 +54,10 @@
   .agentRefNote{margin:16px 0 6px;padding:5px 8px;font-size:11px;line-height:1.6;
                 color:#9a937f;border:1px dashed var(--line);border-radius:6px;background:#141820}
   .list-item.ref{border-style:dashed;opacity:.92}
+  .who-role{display:inline-block;margin-left:4px;padding:0 5px;border-radius:6px;font-size:10px;line-height:1.5}
+  .who-role.wolf{background:#5b1d1d;color:#ff9b9b}
+  .who-role.god{background:#1d3a5b;color:#9bc8ff}
+  .godline{padding:1px 0}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
   th{color:var(--dim);font-weight:500}
@@ -83,6 +87,15 @@
     <h2>⓪ 对局直播 · 运行</h2>
     <div class="body">
       <div class="flexline" id="chatHead"><span class="muted" id="chatInfo">未连接</span></div>
+      <div class="flexline">
+        <label style="margin:0" title="旁观的人类是上帝视角：AI 不知道的（身份、狼刀、女巫药、守卫挡刀、验人结果）这里全部可见。关掉则只看公开信息">
+          <input type="checkbox" id="godOn" checked style="width:auto;vertical-align:middle" onchange="renderGod()"> 👁 上帝视角（身份 + 每晚动作）
+        </label>
+        <button id="btnExitImport" title="导入的对局日志占住了直播间；点这里回到在线直播" onclick="exitImport()" hidden>回在线直播</button>
+      </div>
+      <details open id="godWrap" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:11.5px;color:#9a937f">上帝视角 · 每晚动作明细（谁刀了谁 / 女巫救没救 / 守卫挡刀 / 验人结果）</summary>
+        <div id="godBox" style="max-height:20vh;overflow:auto;font-size:11.5px;line-height:1.8;color:#8d867a;padding:4px 8px;background:#0f1218;border-radius:6px"></div>
+      </details>
       <div id="chatBox" class="empty"></div>
       <div class="flexline">
         <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
@@ -139,6 +152,11 @@
         <span class="muted" id="agentsApplied"></span>
       </div>
       <div class="flexline">
+        <button title="导入 /play 封面导出的对局文件（.json，含时间线+上帝视角+步骤）或旧的模型调用日志（.jsonl）：导入后在直播间完整重放" onclick="document.getElementById('impLog').click()">⤓ 导入对局文件</button>
+        <input id="impLog" type="file" accept=".json,.jsonl,.txt" hidden onchange="importLog(this)">
+        <span class="muted" style="font-size:11px">多人类多 AI 的局导出后也能完整重放（真人发言与播报都在时间线里）</span>
+      </div>
+      <div class="flexline">
         <label style="margin:0"><input type="checkbox" id="autopoll" onchange="togglePoll()" style="width:auto;vertical-align:middle"> 状态轮询（每 3 秒）</label>
         <span class="muted" id="engInfo">未连接</span>
       </div>
@@ -151,12 +169,18 @@
     <div class="body">
       <div class="muted" style="font-size:11px">局面来自列0选中的步（点气泡或选回退步自动填入）；这些席位只用于<b>本地试跑对比</b> —— 对局里的 AI 用的是服务端配置的模型与 key（在 /admin 配置台改）。</div>
 
-      <div class="sub">AI 席位 · 各自独立配置</div>
+      <div class="sub">AI 席位 · 各自独立配置（进对局）</div>
       <div id="agentList"></div>
       <div class="flexline">
         <button title="新增一个 AI 席位，可配不同的接口地址、模型名与密钥" onclick="newAgent()">+ 新增席位</button>
         <button title="删除当前选中的席位" onclick="delAgent()">删除</button>
       </div>
+
+      <!-- 对照席位独立区块（2026-10-26 用户定）：只试跑，不进对局 -->
+      <div class="sub" style="margin-top:18px">对照席位（只试跑对比 · 不进对局）</div>
+      <div class="muted" style="font-size:11px">下方席位<b>永远不会被装配进对局</b> —— 它只在「试跑这一步 / 双席位对比」时对同一个局面各调一次模型，用来对比不同模型/参数的表现。</div>
+      <div id="refAgentList" style="margin-top:6px"></div>
+
       <div class="sub">编辑当前席位</div>
       <div id="agentEdit"></div>
 
@@ -369,11 +393,8 @@ function render(){
   /* 2026-10-26 手写快照 UI（S0~S6 列表 + 编辑表单）退役：局面一律从列0选步
      自动填入 S.snapshots[0]（applyStepSnap）；快照仍存在 S 里供试跑/对比用。 */
 
-  document.getElementById('agentList').innerHTML=S.agents.map((a,i)=>
-    `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
-       <div class="nm">${esc(a.label)} <span class="meta">${esc(a.model||'未设模型')}</span></div>
-       <div class="meta">key ${a.apiKey?esc(fp(a.apiKey)):'<span class="badge b-warn">未填</span>'} · ${esc(a.baseUrl||'')}</div>
-     </div>`).join('');
+  renderAgentList();   /* 🔴 席位列表渲染收口到 renderAgentList（含对照席位独立区块）——
+                          之前这里还有一份内联渲染，导致 ref 过滤"看起来没生效" */
   const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}</option>`).join('');
   document.getElementById('cmpAgent').innerHTML=opts;
   try{ document.getElementById('cmpAgent').value=Math.min(1,S.agents.length-1); }catch(e){}
@@ -421,16 +442,22 @@ function setAgent(k,v){
 }
 function renderAgentList(){
   const el=document.getElementById('agentList'); if(!el) return;
-  // 对照席位（ref）永远排末尾、断开距离 —— 对局装配会跳过它们（2026-10-26 用户定）
-  const order=S.agents.map((a,i)=>i).sort((x,y)=>(S.agents[x].ref?1:0)-(S.agents[y].ref?1:0));
-  el.innerHTML=order.map(i=>{
-    const a=S.agents[i], ref=!!a.ref;
-    return (ref?'<div class="agentRefNote">⬇ 对照席位：只用于「试跑 / 双席位对比」各调一次同一个 prompt，<b>不会进入对局</b>（对局装配跳过它们）</div>':'')
-      + `<div class="list-item ${i===S.activeAgent?'active':''} ${ref?'ref':''}" onclick="pickAgent(${i})">
+  const item=(i)=>{
+    const a=S.agents[i];
+    return `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
        <div class="nm">${esc(a.label)} <span class="meta">${esc(a.model||'未设模型')}</span></div>
        <div class="meta">key ${a.apiKey?esc(fp(a.apiKey)):'<span class="badge b-warn">未填</span>'} · ${esc(a.baseUrl||'')}</div>
      </div>`;
-  }).join('');
+  };
+  // 🔴 对照席位（ref）独立区块渲染（2026-10-26 用户定）：不再混在席位列表里
+  el.innerHTML=S.agents.map((a,i)=>({i,a})).filter(x=>!x.a.ref).map(x=>item(x.i)).join('');
+  const rel=document.getElementById('refAgentList');
+  if(rel){
+    const refs=S.agents.map((a,i)=>({i,a})).filter(x=>x.a.ref);
+    rel.innerHTML=refs.length
+      ? refs.map(x=>item(x.i)).join('')
+      : '<div class="muted" style="font-size:11px">（没有对照席位 —— 在编辑当前席位时把「对照席位」开关拨到「是」即可创建）</div>';
+  }
   const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}${a.ref?'（只试跑）':''}</option>`).join('');
   const cmp=document.getElementById('cmpAgent'); if(cmp){ const cur=cmp.value; cmp.innerHTML=opts; cmp.value=cur||String(S.agents.findIndex(a=>a.ref)>=0?S.agents.findIndex(a=>a.ref):Math.min(1,S.agents.length-1)); }
 }
@@ -460,13 +487,44 @@ function resetBlocks(){ if(!confirm('把所有提示词块恢复为方案预填�
 function importLog(inp){
   const f=inp.files[0]; if(!f) return; const r=new FileReader();
   r.onload=()=>{
-    const lines=String(r.result).split(/\r?\n/).filter(x=>x.trim());
+    const text=String(r.result);
+    // ① 新格式：/play 封面导出的 lab-export（时间线 + 上帝视角 + 步骤）→ 直播间完整重放
+    try{
+      const o=JSON.parse(text);
+      if(o&&o.kind==='lab-export'){ ingestExport(o, f.name); inp.value=''; return; }
+    }catch(e){}
+    // ② 旧格式：每行一个 JSON 的模型调用日志
+    const lines=text.split(/\r?\n/).filter(x=>x.trim());
     const steps=[];
     lines.forEach((ln,i)=>{ try{ steps.push(Object.assign({_i:i}, JSON.parse(ln))); }catch(e){} });
     if(!steps.length){ alert('没解析出任何步骤，请确认是每行一个 JSON 的日志'); return; }
     S.game={name:f.name, steps}; S.gameIdx=0; save(); render();
+    hint('已导入 '+steps.length+' 步（旧格式：只有模型调用，没有播报流）');
   };
   r.readAsText(f); inp.value='';
+}
+/* lab-export 完整重放（2026-10-26）：多人类多 AI 的局也能在直播间完整回看 ——
+   真人发言与主持人播报都在 timeline 里；夜晚动作与身份走上帝视角。 */
+function ingestExport(o, name){
+  _importMode=true;
+  const b=document.getElementById('btnExitImport'); if(b) b.hidden=false;
+  _godRoles=o.roles||null; _godNights=o.night_records||[];
+  const tl=o.timeline||[];
+  const box=document.getElementById('chatBox');
+  box.innerHTML=''; box.classList.remove('empty');
+  tl.forEach(m=>box.insertAdjacentHTML('beforeend', chatBubble(m)));
+  _chatN=tl.length;
+  if(!tl.length) box.innerHTML='<div class="chat-sys">（这个导出文件里没有时间线）</div>';
+  renderGod(o);
+  const info=document.getElementById('chatInfo');
+  if(info) info.innerHTML='<span class="badge b-ok">导入重放</span> '+esc(name||'')
+    +' · '+tl.length+' 条 · '+(o.winner?('· '+(o.winner==='wolf'?'狼人胜':'好人胜')+' · '):'')
+    +(o.round?('第'+o.round+'天 '+esc(_phaseCn(o.phase||''))):'');
+  // 模型调用步骤照旧进第①列/试跑链路
+  const steps=(o.steps||[]).map((s,i)=>Object.assign({_i:i}, s));
+  if(steps.length){ S.game={name:name||'导入对局', steps}; S.gameIdx=0; save(); render(); }
+  chatSnap();
+  hint('导入完成：直播间完整重放（含真人发言与夜晚动作）；'+steps.length+' 步模型调用可点气泡查看。点「回在线直播」切回实时');
 }
 function renderGame(){
   const gi=document.getElementById('gameInfo'), gl=document.getElementById('gameList');
@@ -542,18 +600,32 @@ async function liveSave(){
 let _chatN=0;                      // 已渲染的时间线条数（增量渲染游标）
 let _chatSnapped=false;            // 单步后等快照列表更新
 let _chatSnapAt=0;                 // 快照下拉上次刷新时刻（限频）
+let _godRoles=null;                // 上帝视角：seat(0基) → role value
+let _godNights=[];                 // 导入的逐夜记录（在线模式用 live 接口实时取）
+let _importMode=false;             // 导入对局日志占住直播间时，暂停在线轮询
 const PHASE_CN={night:'夜晚',dawn:'天亮',discuss:'白天发言',vote:'投票',exile:'结算',setup:'准备',ended:'结束'};
 function _phaseCn(p){ return PHASE_CN[p]||p||''; }
+const ROLE_CN={wolf:'狼人',seer:'预言家',witch:'女巫',guard:'守卫',hunter:'猎人',
+               villager:'平民',idiot:'白痴',werewolf:'狼人'};
+function roleBadge(seat){
+  const on=document.getElementById('godOn');
+  if(!on||!on.checked||!_godRoles) return '';
+  const r=_godRoles[String(seat)];
+  if(!r) return '';
+  const wolf=r==='wolf'||r==='werewolf';
+  return ' <span class="who-role '+(wolf?'wolf':'god')+'">'+esc(ROLE_CN[r]||r)+'</span>';
+}
 function chatBubble(m){
   if(m.t==='say'){
-    return '<div class="chat-msg chat-pick" title="点击：在第③列查看这句发言背后的完整 prompt 与模型原始输出"'
+    return '<div class="chat-msg chat-pick" title="点击：在下方「模型原始输出」区查看这句发言背后的完整 prompt 与模型原始输出"'
          + ' onclick="chatPick('+Number(m.seat)+','+(Number(m.ts)||0)+')">'
-         + '<span class="who">'+esc(String(m.seat!=null?(Number(m.seat)+1):'?'))+' 号</span>'
+         + '<span class="who">'+esc(String(m.seat!=null?(Number(m.seat)+1):'?'))+' 号'+roleBadge(m.seat)+'</span>'
          + esc(m.s||'')+'</div>';
   }
   return '<div class="chat-sys">'+esc(m.s||'')+'</div>';
 }
 async function chatTick(force){
+  if(_importMode) return;           // 导入的对局占住直播间，别被在线数据冲掉
   const b=engBase()||'';
   let j=null;
   try{ const r=await fetch(b+'/api/lab/live?limit=300'); if(r.ok) j=await r.json(); }catch(e){}
@@ -581,9 +653,67 @@ async function chatTick(force){
   }
   _chatN=tl.length;
   if(tl.length) box.classList.remove('empty');
-  box.scrollTop=box.scrollHeight;
+  // 🔴 2026-10-26 修：别把人拽回底部 —— 只有用户本来就贴在底部（距底 < 40px）
+  // 才自动跟随；他往上滑看历史时，新消息不顶走他（对局结束没新消息更不该动）。
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  if(nearBottom) box.scrollTop=box.scrollHeight;
+  if(j.god){ _godRoles=j.god.roles||null; _godNights=j.god.night_records||[]; }
+  renderGod(j.god);
   // 步数变了就顺手刷新回退下拉（限频 5 秒，别每拍都拉）
   if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); chatSyncSteps(); }
+}
+
+/* 上帝视角渲染：身份开关关掉 = 气泡不显示角色徽标 + 这块整个隐藏 */
+function renderGod(god){
+  const on=document.getElementById('godOn');
+  const wrap=document.getElementById('godWrap');
+  if(!on||!wrap) return;
+  wrap.style.display=on.checked?'block':'none';
+  const box=document.getElementById('godBox'); if(!box) return;
+  const nrs=(god&&god.night_records)||_godNights||[];
+  const seatName=s=>s==null||s===-1?'空刀':(Number(s)+1)+' 号';
+  let html='';
+  (nrs||[]).forEach(n=>{
+    const parts=[];
+    parts.push('狼刀 → '+seatName(n.kill));
+    if(n.heal!=null&&n.heal!==-1) parts.push('女巫救 '+seatName(n.heal));
+    else parts.push('女巫没救');
+    if(n.poison!=null&&n.poison!==-1) parts.push('毒 '+seatName(n.poison));
+    if(n.guard!=null&&n.guard!==-1) parts.push('守卫守 '+seatName(n.guard));
+    if(n.investigate!=null&&n.investigate!==-1&&_godRoles){
+      const t=_godRoles[String(n.investigate)];
+      parts.push('预言家验 '+seatName(n.investigate)+'（'+((t==='wolf'||t==='werewolf')?'狼人':'好人')+'）');
+    }
+    if(n.pierced) parts.push('奶穿（同守同救仍死）');
+    let tail;
+    if(n.peaceful) tail='平安夜';
+    else if(n.saved_by_heal) tail='解药救回';
+    else if(n.saved_by_guard) tail='守卫挡刀';
+    else tail='倒牌';
+    html+='<div class="godline">🌙 第'+esc(n.round||'?')+'夜：'+esc(parts.join(' · '))+' ⇒ <b>'+esc(tail)+'</b></div>';
+  });
+  const nn=god&&god.night_now;
+  if(nn&&Object.keys(nn).length){
+    const pts=nn.wolf_points||{};
+    const line=[];
+    if(nn.kill_settled) line.push('刀口已定 → '+seatName(nn.kill));
+    else if(Object.keys(pts).length) line.push('狼队正在点人（'
+      +Object.keys(pts).map(s=>(Number(s)+1)+'号→'+seatName(pts[s])).join('，')+'）');
+    if(nn.heal!=null&&nn.heal!==-1) line.push('女巫已救 '+seatName(nn.heal));
+    if(nn.poison!=null&&nn.poison!==-1) line.push('已毒 '+seatName(nn.poison));
+    if(nn.guard!=null&&nn.guard!==-1) line.push('守卫已守 '+seatName(nn.guard));
+    if(nn.investigate!=null&&nn.investigate!==-1) line.push('已验 '+seatName(nn.investigate));
+    if(line.length) html+='<div class="godline" style="color:#b9a44c">⏳ 当前夜（进行中）：'+esc(line.join(' · '))+'</div>';
+  }
+  if(!html) html='<div class="godline">（还没有夜晚记录 —— 夜晚结束一晚这里就多一行）</div>';
+  box.innerHTML=html;
+}
+function exitImport(){
+  _importMode=false;
+  const b=document.getElementById('btnExitImport'); if(b) b.hidden=true;
+  _chatN=0;
+  const box=document.getElementById('chatBox'); if(box){ box.innerHTML=''; box.classList.add('empty'); }
+  hint('已回到在线直播'); chatTick(true);
 }
 
 /* 回退下拉选步 = 选定局面：把该步填入第①列（不回退，只看） */

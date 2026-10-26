@@ -855,19 +855,22 @@ function resetEndLinks(){
   if (a) a.removeAttribute('href');
 }
 
-/* 导出对局落盘日志（2026-10-26）：每次 AI 决策一行的 JSONL，
-   提示词实验室「导入对局日志」直接吃这个文件 → 生成可回退时间轴。 */
+/* 导出对局完整文件（2026-10-26）：时间线（含真人发言/主持人播报）+ 上帝视角
+   （身份/每晚动作）+ 模型调用步骤 —— 实验室导入后在直播间完整重放。 */
 async function exportLabFile(ev){
   ev.preventDefault();
   try{
-    var r = await fetch('/api/lab/steps?limit=0');
+    var r = await fetch('/api/lab/export');
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    var txt = await r.text();
-    if (!txt.trim()) { alert('还没有对局落盘记录：先开一局（配了真模型 key 的局才会记录每次决策）'); return; }
-    var blob = new Blob([txt], {type: 'application/jsonl'});
+    var j = await r.json();
+    var txt = JSON.stringify(j);
+    if (!(j.timeline || []).length) {
+      alert('还没有可导出的对局：先开一局（进行中或已结束都可以）'); return;
+    }
+    var blob = new Blob([txt], {type: 'application/json'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'lab-steps-' + new Date().toISOString().slice(0,16).replace(/[:T]/g,'') + '.jsonl';
+    a.download = 'lab-export-' + (j.gid || '') + '-' + new Date().toISOString().slice(0,16).replace(/[:T]/g,'') + '.json';
     document.body.appendChild(a); a.click(); a.remove();
   }catch(e){ alert('导出失败：' + e.message); }
 }

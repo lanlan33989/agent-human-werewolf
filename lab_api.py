@@ -544,6 +544,51 @@ def api_live(limit: int = 150) -> dict:
         "players": [{"seat": p.seat + 1, "kind": p.kind, "alive": p.alive,
                      "lives": p.lives} for p in getattr(g, "players", [])],
     })
+    # 👁 上帝视角（2026-10-26 用户要的）：看直播的人类是旁观者，AI 不知道的
+    # （身份、狼刀、女巫药、守卫挡刀、验人结果）人类全都能看 —— 有开关可折叠。
+    # 数据全来自引擎已有记录，不新增泄漏面（接口本来就在本机）。
+    try:
+        roles = {}
+        for p in getattr(g, "players", []):
+            roles[str(p.seat)] = str(getattr(p.role, "value", "") or "")
+        nr = list(getattr(g, "night_records", None) or [])
+        cur = getattr(g, "night", None) or {}
+        out["god"] = {
+            "roles": roles,
+            "night_records": nr,
+            "night_now": {k: cur.get(k) for k in
+                          ("kill", "heal", "poison", "guard", "investigate",
+                           "wolf_points", "wolf_confirm", "kill_settled")},
+        }
+    except Exception:                                    # noqa: BLE001
+        pass
+    return out
+
+
+@router.get("/export")
+def api_export(gid: str = "") -> dict:
+    """对局完整导出（2026-10-26）：时间线（含真人发言与主持人播报）+ 上帝视角 +
+    模型调用步骤 —— /play 封面的「导出对局文件」下载的就是这个；
+    实验室「导入对局日志」识别该格式后在直播间完整重放。"""
+    target = gid or _last_gid
+    sess = _lookup(target) if (_lookup and target) else None
+    out: Dict[str, Any] = {"kind": "lab-export", "gid": target or "",
+                           "timeline": [], "public_log": [], "steps": [],
+                           "roles": {}, "night_records": []}
+    if sess is not None:
+        g = getattr(sess, "game", None)
+        if g is not None:
+            out.update({
+                "round": getattr(g, "round", 0),
+                "phase": getattr(getattr(g, "phase", None), "value", ""),
+                "winner": getattr(g, "winner", None),
+                "public_log": [str(x) for x in (getattr(g, "public_log", None) or [])],
+                "timeline": list(getattr(sess, "timeline", None) or []),
+                "roles": {str(p.seat): str(getattr(p.role, "value", "") or "")
+                          for p in getattr(g, "players", [])},
+                "night_records": list(getattr(g, "night_records", None) or []),
+            })
+    out["steps"] = read_steps(limit=0)
     return out
 
 
