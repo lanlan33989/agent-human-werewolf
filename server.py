@@ -396,6 +396,17 @@ def board_page() -> Response:
     return _page("board.html")
 
 
+@app.get("/lab", response_class=HTMLResponse)
+def lab_page() -> Response:
+    """提示词实验室（2026-10-26）：快照 / 回退 / 重跑 / 线上契约编辑。
+
+    为什么由引擎同源服务：页面要直连 `/api/admin/prompts`（改提示词契约）
+    与 `/api/lab/*`（步骤落盘与暂停门）—— 同源就没有 CORS 问题，
+    也不用把配置台的鉴权面暴露给别的域。
+    """
+    return _page("promptlab.html")
+
+
 DS_REALTIME_URL = os.environ.get("DASHSCOPE_REALTIME_URL",
                                  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime")
 DS_REALTIME_MODEL = os.environ.get("DASHSCOPE_REALTIME_MODEL", "qwen3-asr-flash-realtime")

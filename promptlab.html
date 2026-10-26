@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>提示词实验室 · 纯文本对局可快照</title>
+<link rel="icon" href="data:," />
+<style>
+  :root{
+    --bg:#12141a; --panel:#1a1d26; --panel2:#20242f; --line:#2c3140;
+    --fg:#dfe3ec; --dim:#8b93a7; --accent:#5b8def; --ok:#4ec9a0; --warn:#e3b341; --bad:#f2777a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+  header{display:flex;align-items:center;gap:10px;padding:9px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;font-weight:600}
+  header .hint{font-size:12px;color:var(--dim)}
+  .top-actions{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12.5px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.go{background:var(--ok);border-color:var(--ok);color:#0b2019;font-weight:600}
+  main{display:grid;grid-template-columns:300px 1fr 390px;gap:10px;padding:10px;height:calc(100vh - 50px)}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
+  .col h2{margin:0;padding:8px 12px;font-size:12.5px;font-weight:600;color:var(--dim);border-bottom:1px solid var(--line);background:var(--panel2)}
+  .body{padding:10px;overflow:auto;flex:1}
+  .sub{font-size:12px;color:var(--dim);margin:12px 0 5px;border-top:1px dashed var(--line);padding-top:9px}
+  label{display:block;font-size:11.5px;color:var(--dim);margin:6px 0 3px}
+  textarea,input,select{width:100%;background:#0f1218;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px 8px;font:12.5px/1.6 "Cascadia Mono",Consolas,"Microsoft YaHei",monospace}
+  textarea{resize:vertical}
+  .row{display:flex;gap:6px;align-items:center}
+  .row>*{flex:1}
+  .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;background:#2b3244;color:var(--dim);margin-left:4px}
+  .list-item{padding:6px 9px;border:1px solid var(--line);border-radius:6px;margin-bottom:5px;cursor:pointer;background:var(--panel2)}
+  .list-item.active{border-color:var(--accent);background:#1d2740}
+  .list-item .nm{font-size:12.5px}
+  .list-item .meta{font-size:11px;color:var(--dim)}
+  .badge{font-size:11px;padding:1px 6px;border-radius:9px}
+  .b-ok{background:#14432f;color:var(--ok)} .b-warn{background:#463612;color:var(--warn)} .b-bad{background:#4a1f21;color:var(--bad)}
+  #out{white-space:pre-wrap;background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px;font:12.5px/1.7 "Cascadia Mono",Consolas,monospace;min-height:110px;max-height:30vh;overflow:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+  th{color:var(--dim);font-weight:500}
+  .flexline{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+  .grow{flex:1}
+  .muted{color:var(--dim);font-size:11.5px}
+  .pill{border:1px solid var(--line);border-radius:20px;padding:2px 9px;font-size:11.5px;cursor:pointer;display:inline-block}
+  .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+</style>
+</head>
+<body>
+<header>
+  <h1>提示词实验室 <span class="tag">纯文本对局 · 可快照 · 每 AI 独立模型/密钥</span></h1>
+  <span class="hint">数据只存本机 localStorage；密钥不上传任何第三方</span>
+  <div class="top-actions">
+    <button title="把当前全部快照、提示词块、席位配置、日志打包成一个 JSON 文件，交给后端同学对接线上" onclick="exportAll()">导出全部</button>
+    <button title="导入之前导出的 JSON，恢复全部快照与提示词配置" onclick="document.getElementById('imp').click()">导入</button>
+    <input id="imp" type="file" accept=".json" hidden onchange="importAll(this)">
+    <button title="把每次试跑的记录（原始输出/是否兜底/耗时）导出为 JSONL，用于批量回归与归因分析" onclick="exportLog()">导出决策日志</button>
+    <button title="把本机实验室恢复为初始状态（内置示例快照、默认提示词块、空席位配置、空日志），你自己改的内容会丢失，不可恢复" onclick="wipe()">重置为默认</button>
+  </div>
+</header>
+
+<main>
+  <!-- 左 -->
+  <section class="col">
+    <h2>① 局面快照</h2>
+    <div class="body">
+      <div id="snapList"></div>
+      <div class="flexline">
+        <button title="新建一个空白局面快照，手动填写身份/场上情况/时间线等字段" onclick="newSnapshot()">+ 新建快照</button>
+        <button title="删除当前选中的快照" onclick="delSnapshot()">删除</button>
+      </div>
+      <div class="sub">编辑当前快照</div>
+      <div id="snapEdit"></div>
+
+      <div class="sub">AI 席位 · 各自独立配置</div>
+      <div id="agentList"></div>
+      <div class="flexline">
+        <button title="新增一个 AI 席位，可配不同的接口地址、模型名与密钥" onclick="newAgent()">+ 新增席位</button>
+        <button title="删除当前选中的席位" onclick="delAgent()">删除</button>
+      </div>
+      <div class="sub">编辑当前席位</div>
+      <div id="agentEdit"></div>
+
+      <div class="sub">代理（解决浏览器跨域）</div>
+      <label>本地代理地址（留空=直连，可能被 CORS 拦）</label>
+      <input id="proxy" placeholder="http://127.0.0.1:8788/v1" onchange="save()">
+      <div class="muted">直连报 CORS 时，运行同目录 <code>promptlab_proxy.py</code>，再填上面这个地址。</div>
+    </div>
+  </section>
+
+  <!-- 中 -->
+  <section class="col">
+    <h2>② 线上提示词契约（改完下一局生效）</h2>
+    <div class="body">
+      <div class="flexline">
+        <button title="从对局服务 /api/admin/prompts 拉取全部可改的提示词条目（按分组展示）" onclick="liveLoad()">载入线上契约</button>
+        <button title="把改动过的条目保存回对局服务（只提交你改过的项），下一局开始生效" onclick="liveSave()">保存到线上</button>
+        <span class="muted" id="liveInfo">未载入</span>
+      </div>
+      <div id="liveBlocks" class="muted">载入后这里按分组列出全部可改条目；只读守卫项也会列出来（不可改）。对局服务地址留空 = 直连当前同源。</div>
+
+      <div class="sub">离线沙盒（下面这些块与线上契约<b>不同源</b>，只用于快速试验；要改线上请用上面那组按钮）</div>
+      <div class="sub">槽位 —— 结构与线上一致，<b>文本已清空</b>，由提示词负责人填写</div>
+      <div class="row">
+        <div><label>{seat} 座位</label><input id="sl_seat" oninput="save()"></div>
+        <div><label>{role_label} 角色名</label><input id="sl_role_label" oninput="save()"></div>
+      </div>
+      <div class="row">
+        <div><label>{personality} 人格</label><input id="sl_personality" oninput="save()"></div>
+        <div><label>{stake} 档位</label><input id="sl_stake" oninput="save()"></div>
+      </div>
+      <label>{experiences} 跨局经验回灌</label><textarea id="sl_experiences" rows="2" oninput="save()"></textarea>
+      <label>{anti_injection} 防注入（结构必留，勿删）</label><textarea id="sl_anti_injection" rows="2" oninput="save()"></textarea>
+      <label>{anti_bomb} 防逻辑炸弹（结构必留，勿删）</label><textarea id="sl_anti_bomb" rows="2" oninput="save()"></textarea>
+
+      <div class="sub">提示词块 —— 勾选即生效，一项一块便于 A/B</div>
+      <div id="blockList"></div>
+
+      <div class="sub">组装模板（{{...}} 为占位符）</div>
+      <label>system 模板</label><textarea id="tmplSystem" rows="6" oninput="save()"></textarea>
+      <label>user 模板</label><textarea id="tmplUser" rows="10" oninput="save()"></textarea>
+
+      <div class="sub">预设片段（参考用，建议改写后再用）</div>
+      <div class="flexline">
+        <select id="presetTarget" class="grow" title="选择要插入的目标块"></select>
+        <select id="presetPick" class="grow" title="选择参考片段">
+          <option value="">— 选一个参考片段 —</option>
+          <option value="rules">规则要点（精简版）</option>
+          <option value="hardInfo">硬信息优先于性格</option>
+          <option value="nofab">绝对不能编造</option>
+          <option value="style">说话方式</option>
+          <option value="timeline">时间线：上面没提就是没发生</option>
+          <option value="claim">跳身份规则</option>
+          <option value="wolf">狼队共同原则</option>
+          <option value="angle">本轮切入角度</option>
+          <option value="output">结构化输出（决策类）</option>
+        </select>
+      </div>
+      <div class="flexline">
+        <button title="把选中的参考片段插入目标块，并自动启用该块" onclick="applyPreset()">插入到目标块</button>
+        <button title="把所有块恢复为方案里预填的默认文本" onclick="resetBlocks()">恢复默认块文本</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右 -->
+  <section class="col">
+    <h2>③ 运行 · 原始输出 · 归因 · 对局时间轴</h2>
+    <div class="body">
+      <div class="flexline">
+        <button class="go" title="用当前席位配置跑这一次决策，显示模型原始输出与归因结论" onclick="runOnce(false)">▶ 跑这一次决策</button>
+        <button title="用另一个席位配置同时跑同一个局面，并排对比两个模型的表现" onclick="runOnce(true)">⇄ 双配置对比</button>
+      </div>
+      <div class="flexline">
+        <span class="muted">对比席位：</span>
+        <select id="cmpAgent" class="grow" title="双配置对比时使用的另一个席位"></select>
+      </div>
+      <div class="sub">状态</div>
+      <div id="status" class="muted">尚未运行</div>
+      <div class="sub">模型原始输出（一字不改 —— 归因的唯一依据）</div>
+      <div id="out"></div>
+      <div class="sub">解析与归因</div>
+      <div id="parse"></div>
+
+      <div class="sub">引擎连接 · 实时对局（边玩 / 暂停 / 单步 / 取快照）</div>
+      <div class="row">
+        <div><label>对局服务地址</label><input id="engine" placeholder="http://127.0.0.1:8000" onchange="setEngine(this.value)"></div>
+      </div>
+      <div class="flexline">
+        <button title="连上对局服务，读取它的暂停状态与已落盘的步骤数" onclick="engStatus()">连接 / 刷新状态</button>
+        <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
+        <button title="取消暂停，对局继续自动推进" onclick="engPause(false)">▶ 继续</button>
+        <button title="暂停状态下再往前走一步，走完自动停住" onclick="engStep()">⏭ 单步</button>
+        <button title="从对局服务拉取已落盘的步骤，生成时间轴" onclick="engPull()">拉取步骤</button>
+      </div>
+      <div class="flexline">
+        <label style="margin:0"><input type="checkbox" id="autopoll" onchange="togglePoll()" style="width:auto;vertical-align:middle"> 自动刷新（每 3 秒）</label>
+        <span class="muted" id="engInfo">未连接</span>
+      </div>
+
+      <div class="sub">对局时间轴（导入日志 → 回退到任意一步 → 重跑）</div>
+      <div class="flexline">
+        <button title="导入对局日志 JSONL，生成可回退的时间轴" onclick="document.getElementById('impLog').click()">导入对局日志</button>
+        <input id="impLog" type="file" accept=".jsonl,.json,.txt" hidden onchange="importLog(this)">
+        <button title="跳到上一步" onclick="step(-1)">← 上一步</button>
+        <button title="跳到下一步" onclick="step(1)">下一步 →</button>
+        <button title="把当前这一步的局面载入为快照，便于改提示词后重跑与对比" onclick="loadStep()">载入为快照</button>
+      </div>
+      <div id="gameInfo" class="muted">尚未导入对局日志</div>
+      <div id="gameList" style="max-height:18vh;overflow:auto"></div>
+      <div class="muted">说明：边玩边暂停/回退需要连接真实对局引擎（由后端提供日志与快照接口）；本工具负责导入日志后的逐步重放与重跑。</div>
+
+      <div class="sub">决策日志（自动累加）</div>
+      <div id="logWrap" style="max-height:20vh;overflow:auto"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+/* ================= 默认块文本（方案预填，可改） ================= */
+const BLOCK_DEFS=[
+  {id:'rules',      name:'规则要点',       on:true},
+  {id:'identity',   name:'身份块',         on:true},
+  {id:'hardInfo',   name:'硬信息优先',     on:true},
+  {id:'style',      name:'说话方式',       on:true},
+  {id:'timeline',   name:'时间线防捏造',   on:true},
+  {id:'claim',      name:'跳身份规则',     on:false},
+  {id:'wolf',       name:'狼队战术',       on:false},
+  {id:'angle',      name:'本轮切入角度',   on:false},
+  {id:'antiRepeat', name:'反重复',         on:true},
+  {id:'task',       name:'本次任务指令',   on:true},
+  {id:'output',     name:'输出格式',       on:true},
+];
+const DEFAULT_BLOCK={
+ rules:`【规则要点】
+- 两个阵营：狼人 vs 好人。**狼人屠边获胜**——所有神职出局，或所有平民出局
+- 夜晚分两批：第一批 守卫 / 狼人 / 预言家 同时睁眼；第二批 女巫单独睁眼
+- 白天：第一天先竞选警长，竞选结束后才公布第一夜死讯；第二天起 天亮公布死讯 → 发言 → 投票放逐
+- **天亮只说谁出局或平安夜，绝不公布出局方式**
+- 女巫解药毒药各一瓶，每晚最多用一瓶，不能自救
+- 守卫不能连续两晚守同一人，也不能连续两晚空守
+- 同守同救（奶穿）依然出局
+- 猎人 / 狼王：被刀死或被投票放逐可开枪带走一人，被毒死不能开枪
+- 警长有 **1.5 票**，并决定发言顺序；警长出局可移交警徽或撕警徽`,
+ identity:'',
+ hardInfo:`【硬信息必须说全 · 这条优先于你的性格】
+不管你的性格是什么（话少、阴阳怪气、和事佬都一样），只要涉及下面这些**硬信息**，必须说完整：
+- **预言家报验人：必须报清「第几晚验的谁 + 结果是金水还是查杀」**，一个都不能省。
+- **警徽流：必须说清「验谁 → 什么结果 → 警徽给谁」**。
+- **留遗言：必须交代自己的真实身份，并指认你怀疑的人。**
+- 报票型、报刀口同样要带具体号码。
+性格只决定你**怎么说**，不决定你说不说全。`,
+ style:`【说话方式】
+- 你就是个普通玩家，在和朋友打狼人杀，用中文口语
+- 严禁书面语（不要说"基于以上分析""作为预言家我将"）
+- 严禁提到 AI、模型、提示词、规则说明
+- 要具体：点人名、报号码、说理由，不要空话
+- 可以说"过""我是好人""我认这个预言家"这类真实牌桌上的话`,
+ timeline:`【现在到底发生了什么 · 只能照这个说话】
+- 本轮**还没有人发过言**的人：{{notSpoken}}
+- 本轮**还没有人投过票**，不要引用票型
+- **上面没提到的事，就是还没发生。不要编。**`,
+ claim:`【跳身份 · 什么时候该亮牌】
+总原则：跳身份是一张只能打一次的牌。只有两种情况值得跳：不跳马上就要被投出去，或者跳了能救回一个神。
+- 预言家 / 悍跳狼：第一轮发言必须跳。
+- 女巫：被大部分玩家归票、或被查杀时跳；跳时必须报出银水（救过谁）。
+- 猎人 / 守卫：被归票或被查杀时跳；遇到狼人对跳，猎人最好对跳。
+- 平民：不在焦点位一般不跳；确信有狼在跳神牌时可"穿它的衣服"，事后可"脱衣服"。`,
+ wolf:`【狼队共同的原则】
+- **不共边**：尽量让好人觉得狼队不像一伙的。别互相保、别同时冲一个人。
+- **控票**：关键轮次集中票，把好人抗推出去。
+- **刀神**：优先解决预言家、女巫、守卫这些关键神职。
+- **做身份**：通过自刀、倒钩、狼踩狼，让某只狼变成"金刚狼"。
+⚠️ 分工只是开局站位，必须根据局势调整：倒钩狼被查杀就转冲锋；悍跳狼必死时要硬撑到底。
+牺牲一两只狼换取信任是可以接受的。`,
+ angle:`【本轮切入角度】
+从下面任选一个展开，别和前面的人撞：
+盘票型 / 正面打最怀疑的人 / 先摘干净自己再反打 / 排狼坑顺序 / 逼跳预言家者表态 / 聊警徽流 / 抓改口细节 / 说清你信谁`,
+ antiRepeat:`【别和大家说一样的话】
+- 不要用和前面的人相同的开场白、句式和结论顺序
+- 别人已经说过的观点，不要再复述一遍
+- 更不要"我同意前面某人的看法"然后什么都没加`,
+ task:'',
+ output:''
+};
+const PRESETS=Object.assign({}, DEFAULT_BLOCK, {
+ nofab:`【绝对不能编造】
+你说的每一条信息，都要能在上面那些清单里找到出处。
+- 不要评价**还没发过言**的人，更不要替他们编内容或者站边
+- 不要引用**还没发生**的事
+- 不确定的事就说"我不知道""我没注意"，**不要猜着当成事实说出来**`,
+ output:`**只输出 JSON，不要写理由、不要任何解释文字**：
+{"target": 号码}   // 不选就写 null`
+});
+
+const DEFAULT_SYS=`你是 {{seat}} 号玩家，正在参加一局中文狼人杀，请完全代入你的身份。
+{{anti_injection}}
+{{anti_bomb}}`;
+const DEFAULT_USER=`{{rules}}
+{{identity}}
+{{hardInfo}}
+{{style}}
+{{claim}}
+{{wolf}}
+【场上情况】
+{{public}}
+{{timeline}}
+{{angle}}
+{{antiRepeat}}
+【现在轮到你】
+{{task}}
+{{output}}`;
+
+const SAMPLE=[
+ {name:'S1 第1夜·狼刀',round:1,phase:'NIGHT',taskKind:'json',camp:'狼人',
+  identity:'【你的身份】座位：3 号\n角色：狼人\n阵营：狼人\n你的狼队友：7号、11号（只有你们互相知道，好人不知道）',
+  public:'存活：1 2 3 4 5 7 8 9 10 11 12\n还没有人出局\n警长：还没选出来',
+  hardFacts:'（无）',votes:'（本轮还没有投票）',
+  timeline:'- 现在是第 1 夜，天还没亮\n- 本轮还没有人发过言，你不能评价任何人的发言\n- 今晚的结果还没揭晓',
+  allowed:'1,2,4,5,8,9,10,12',
+  task:'你是狼人，今晚要和队友一起刀一个人。优先刀看起来像神职（预言家 / 女巫 / 守卫 / 猎人）或者威胁大的好人。\n注意：狼队今晚是各自选，最后按"选的人最多"的算，平票随机挑一个。除非有更强的理由，否则跟着队友已经选的那个走。',
+  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
+ {name:'S2 第1夜·预言家验人',round:1,phase:'NIGHT',taskKind:'json',camp:'好人',
+  identity:'【你的身份】座位：5 号\n角色：预言家\n阵营：好人\n技能：每晚可查验一名玩家的阵营',
+  public:'存活：1 2 3 4 5 7 8 9 10 11 12\n还没有人出局',
+  hardFacts:'（你还没有验过人）',votes:'（本轮还没有投票）',
+  timeline:'- 现在是第 1 夜，天还没亮\n- 本轮还没有人发过言',
+  allowed:'1,2,3,4,7,8,9,10,11,12',
+  task:'你是预言家，今晚要查验一个人。优先查你还不确定身份、且发言有问题的玩家。',
+  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
+ {name:'S3 第1夜·女巫用药',round:1,phase:'NIGHT',taskKind:'json',camp:'好人',
+  identity:'【你的身份】座位：8 号\n角色：女巫\n阵营：好人\n你的药水：解药还在，毒药还在\n今晚 5 号 被狼人刀了（解药没用过，所以你看得到刀口）',
+  public:'存活：1 2 3 4 5 7 8 9 10 11 12',
+  hardFacts:'你还没救过人（没有银水）',votes:'（本轮还没有投票）',
+  timeline:'- 现在是第 1 夜\n- 本轮还没有人发过言',
+  allowed:'1,2,3,4,7,9,10,11,12',
+  task:'你是女巫，每晚最多只能用一瓶药。可选：SAVE（用解药救回 5 号）/ POISON（毒死一人）/ NONE（不用药）。\n毒错一个好人可能直接葬送整局；第一晚用解药救人是常见的保守打法。如果有人跟你**对跳女巫**，那只狼就是你最该毒的目标。',
+  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"choice": "SAVE" 或 "POISON" 或 "NONE", "target": 号码或null}'},
+ {name:'S4 第2天·白天发言',round:2,phase:'DAY_SPEECH',taskKind:'text',camp:'好人',
+  identity:'【你的身份】座位：9 号\n角色：平民\n阵营：好人',
+  public:'存活：1 2 3 4 7 8 9 10 11 12\n已出局：5号(第1天)、6号(第1天)\n警长：还没选出来\n【发言记录】\n1号：我先过，听后面的。\n3号：5号昨晚死了，我觉得该听听归票位的意见。\n7号：我认 3 号是好人，他第一轮没乱踩。',
+  hardFacts:'（无）',votes:'（本轮还没有投票）',
+  timeline:'- 本轮已经发过言的是：1号、3号、7号\n- 2号、4号、8号、10号、11号、12号 还没开口\n- 本轮还没有人投过票',
+  allowed:'',
+  task:'轮到你发言。点号码、说理由，不要空话，控制在 150 字以内。',
+  output:'直接输出你要说的话，不要加引号、不要加任何前缀。'},
+ {name:'S5 第2天·放逐投票',round:2,phase:'DAY_VOTE',taskKind:'json',camp:'好人',
+  identity:'【你的身份】座位：2 号\n角色：猎人\n阵营：好人',
+  public:'存活：1 2 3 4 7 8 9 10 11 12\n【发言记录】\n3号：我怀疑 4 号，他全程没给过实质判断。\n7号：我也觉得 4 号有问题。\n4号：我只是低调，别因为话少就投我。',
+  hardFacts:'（无）',votes:'（本轮还没有投票）',
+  timeline:'- 本轮发过言：3号、7号、4号\n- 本轮还没有人投过票，不要引用票型',
+  allowed:'3,4,7,8,9,10,11,12',
+  task:'你要投票放逐一名玩家。结合所有人的发言和投票行为，投给你最怀疑是狼的人。\n本轮焦点位：4号（3号、7号 说他有问题）。优先从焦点位里选，除非你有明确说得出口的更好理由。',
+  output:'只输出 JSON，不要写理由、不要任何解释文字：\n{"target": 号码}'},
+ {name:'S6 第3天·被查杀后辩解',round:3,phase:'DAY_SPEECH',taskKind:'text',camp:'好人',
+  identity:'【你的身份】座位：4 号\n角色：平民\n阵营：好人',
+  public:'存活：2 3 4 7 9 10 11 12\n【发言记录】\n3号：我是预言家，第 2 晚我验的 4 号，是查杀。\n7号：那我信 3 号，4 号你怎么说？',
+  hardFacts:'你是平民，3 号的查杀是错的',votes:'（本轮还没有投票）',
+  timeline:'- 本轮已经发过言的是：3号、7号\n- 2号、4号、9号、10号、11号、12号 还没开口',
+  allowed:'',
+  task:'你是被查杀的平民，轮到你辩解。可以说清自己的视角、指认你怀疑的人，但不要编造没发生的事。控制在 150 字以内。',
+  output:'直接输出你要说的话，不要加引号、不要加任何前缀。'}
+];
+
+/* ================= 状态 ================= */
+const KEY='promptlab.v2';
+function SAMPLE_AGENTS(){
+  return [
+    {label:'席位A · 主力', baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
+     timeout:60, retries:3, thinking:'disabled', temperature:0.8},
+    {label:'席位B · 对照', baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus', apiKey:'',
+     timeout:60, retries:3, thinking:'disabled', temperature:0.8}
+  ];
+}
+function blank(){
+  const blocks={}; BLOCK_DEFS.forEach(b=>blocks[b.id]={text:DEFAULT_BLOCK[b.id]||'',on:!!b.on});
+  return {
+    version:'lab-2.0', proxy:'', engine:'',
+    snapshots:SAMPLE.map(s=>Object.assign({camp:'',hardFacts:'',votes:''},s)),
+    activeSnap:0,
+    agents:SAMPLE_AGENTS(), activeAgent:0,
+    blocks,
+    slots:{seat:'',role_label:'',personality:'',stake:'',experiences:'',anti_injection:'',anti_bomb:''},
+    tmpl:{system:DEFAULT_SYS,user:DEFAULT_USER},
+    game:null, gameIdx:-1,
+    log:[]
+  };
+}
+let S=load();
+function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const o=JSON.parse(raw); if(o&&o.version) return o; } }catch(e){} return blank(); }
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+
+/* ================= 渲染 ================= */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fp(k){ return k && k.length>10 ? k.slice(0,6)+'…'+k.slice(-4) : (k?'••••':''); }
+
+function render(){
+  document.getElementById('snapList').innerHTML=S.snapshots.map((s,i)=>
+    `<div class="list-item ${i===S.activeSnap?'active':''}" onclick="pickSnap(${i})">
+       <div class="nm">${esc(s.name)}</div>
+       <div class="meta">${esc(s.phase||'')} · ${s.taskKind==='json'?'结构化决策':'自由发言'} · ${esc(s.camp||'')}</div>
+     </div>`).join('');
+
+  const sn=S.snapshots[S.activeSnap]||{};
+  const f=(k,ph)=>`<label>${k}</label><input value="${esc(sn[k]||'')}" oninput="setSnap('${k}',this.value)" placeholder="${ph||''}">`;
+  const t=(k,r)=>`<label>${k}</label><textarea rows="${r}" oninput="setSnap('${k}',this.value)">${esc(sn[k]||'')}</textarea>`;
+  document.getElementById('snapEdit').innerHTML=
+      f('name','快照名')
+    + '<div class="row"><div>'+f('round','第几天')+'</div><div>'+f('phase','NIGHT/DAY_SPEECH/DAY_VOTE')+'</div></div>'
+    + '<div class="row"><div>'+f('taskKind','json 或 text')+'</div><div>'+f('camp','狼人 / 好人')+'</div></div>'
+    + t('identity',4) + t('public',4) + t('hardFacts',2) + t('votes',2)
+    + t('timeline',3) + f('allowed','合法号码，逗号分隔') + t('task',3) + t('output',2);
+
+  document.getElementById('agentList').innerHTML=S.agents.map((a,i)=>
+    `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
+       <div class="nm">${esc(a.label)} <span class="meta">${esc(a.model||'未设模型')}</span></div>
+       <div class="meta">key ${a.apiKey?esc(fp(a.apiKey)):'<span class="badge b-warn">未填</span>'} · ${esc(a.baseUrl||'')}</div>
+     </div>`).join('');
+  const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}</option>`).join('');
+  document.getElementById('cmpAgent').innerHTML=opts;
+  try{ document.getElementById('cmpAgent').value=Math.min(1,S.agents.length-1); }catch(e){}
+
+  const ag=S.agents[S.activeAgent]||{};
+  const ai=(k,ph)=>`<label>${({label:'名称',baseUrl:'接口地址 baseUrl',model:'模型名',apiKey:'该席位专属 API Key（只存本机）',timeout:'超时（秒）',retries:'重试次数',temperature:'temperature'})[k]}</label><input ${k==='apiKey'?'type="password"':''} value="${esc(ag[k]==null?'':ag[k])}" oninput="setAgent('${k}',this.value)" placeholder="${ph||''}">`;
+  document.getElementById('agentEdit').innerHTML=
+      ai('label') + ai('baseUrl') + ai('model') + ai('apiKey')
+    + '<div class="row"><div>'+ai('timeout','60')+'</div><div>'+ai('retries','3')+'</div></div>'
+    + '<div class="row"><div>'+ai('temperature','0.8')+'</div><div><label>模型自带思考</label><select onchange="setAgent(\'thinking\',this.value)">'
+    + ['disabled','enabled'].map(v=>`<option value="${v}" ${ag.thinking===v?'selected':''}>${v==='disabled'?'关闭（推荐）':'开启'}</option>`).join('')
+    + '</select></div></div>';
+
+  document.getElementById('presetTarget').innerHTML=BLOCK_DEFS.map(b=>`<option value="${b.id}">${b.name}</option>`).join('');
+  document.getElementById('blockList').innerHTML=BLOCK_DEFS.map(b=>{
+    const v=S.blocks[b.id]||{text:'',on:false};
+    return `<div style="margin-bottom:8px">
+      <div class="flexline">
+        <span class="pill ${v.on?'on':''}" onclick="toggleBlock('${b.id}')">${v.on?'已启用':'未启用'} · ${b.name}</span>
+        <button title="把当前快照的对应字段填进这一块" onclick="fillFromSnap('${b.id}')">填入快照字段</button>
+      </div>
+      <textarea rows="3" oninput="setBlock('${b.id}',this.value)" placeholder="（空）">${esc(v.text)}</textarea>
+    </div>`;
+  }).join('');
+
+  for(const k of Object.keys(S.slots)){ const el=document.getElementById('sl_'+k); if(el && document.activeElement!==el) el.value=S.slots[k]; }
+  const ts=document.getElementById('tmplSystem'); if(document.activeElement!==ts) ts.value=S.tmpl.system;
+  const tu=document.getElementById('tmplUser'); if(document.activeElement!==tu) tu.value=S.tmpl.user;
+  const px=document.getElementById('proxy'); if(document.activeElement!==px) px.value=S.proxy;
+  const eg=document.getElementById('engine'); if(eg && document.activeElement!==eg) eg.value=S.engine||'';
+
+  renderGame(); renderLog();
+}
+function pickSnap(i){ S.activeSnap=i; save(); render(); }
+function pickAgent(i){ S.activeAgent=i; save(); render(); }
+function setSnap(k,v){ S.snapshots[S.activeSnap][k]=v; save(); }
+function setEngine(v){ S.engine=v; save(); }
+function setAgent(k,v){ if(k==='timeout'||k==='retries'||k==='temperature'){ S.agents[S.activeAgent][k]=parseFloat(v)||0; } else { S.agents[S.activeAgent][k]=v; } save(); renderAgentList(); }
+function renderAgentList(){
+  const el=document.getElementById('agentList'); if(!el) return;
+  el.innerHTML=S.agents.map((a,i)=>
+    `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
+       <div class="nm">${esc(a.label)} <span class="meta">${esc(a.model||'未设模型')}</span></div>
+       <div class="meta">key ${a.apiKey?esc(fp(a.apiKey)):'<span class="badge b-warn">未填</span>'} · ${esc(a.baseUrl||'')}</div>
+     </div>`).join('');
+  const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}</option>`).join('');
+  const cmp=document.getElementById('cmpAgent'); if(cmp){ const cur=cmp.value; cmp.innerHTML=opts; cmp.value=cur||String(Math.min(1,S.agents.length-1)); }
+}
+function setBlock(id,v){ S.blocks[id].text=v; save(); }
+function toggleBlock(id){ S.blocks[id].on=!S.blocks[id].on; save(); render(); }
+function newSnapshot(){ S.snapshots.push({name:'新快照'+(S.snapshots.length+1),round:1,phase:'DAY_SPEECH',taskKind:'text',camp:'',identity:'',public:'',hardFacts:'',votes:'',timeline:'',allowed:'',task:'',output:''}); S.activeSnap=S.snapshots.length-1; save(); render(); }
+function delSnapshot(){ if(S.snapshots.length<=1){ alert('至少保留一个快照'); return; } S.snapshots.splice(S.activeSnap,1); S.activeSnap=0; save(); render(); }
+function newAgent(){ S.agents.push({label:'席位'+(S.agents.length+1),baseUrl:'',model:'',apiKey:'',timeout:60,retries:3,thinking:'disabled',temperature:0.8}); S.activeAgent=S.agents.length-1; save(); render(); }
+function delAgent(){ if(S.agents.length<=1){ alert('至少保留一个席位'); return; } S.agents.splice(S.activeAgent,1); S.activeAgent=0; save(); render(); }
+function hint(msg){ const st=document.getElementById('status'); if(st) st.innerHTML='<span class="muted">'+esc(msg)+'</span>'; }
+function fillFromSnap(id){ const sn=S.snapshots[S.activeSnap]||{}; const map={identity:'identity',timeline:'timeline',task:'task',output:'output'};
+  if(map[id]){ S.blocks[id].text=sn[map[id]]||''; S.blocks[id].on=true; save(); render(); hint('已把快照的「'+map[id]+'」字段填入该块'); }
+  else { hint('这一块没有对应的快照字段，请手填（规则/硬信息/风格/战术等由提示词负责人编写）'); } }
+function applyPreset(){ const t=document.getElementById('presetTarget').value, p=document.getElementById('presetPick').value;
+  if(!t){ hint('先选目标块'); return; } if(!p){ hint('先选一个参考片段'); return; }
+  S.blocks[t].text=PRESETS[p]||''; S.blocks[t].on=true; save(); render(); hint('已插入参考片段到「'+t+'」，建议改写后再用'); }
+function resetBlocks(){ if(!confirm('把所有提示词块恢复为方案预填的默认文本？')) return;
+  BLOCK_DEFS.forEach(b=>{ S.blocks[b.id]={text:DEFAULT_BLOCK[b.id]||'',on:!!b.on}; }); save(); render(); }
+
+/* ================= 对局时间轴 ================= */
+function importLog(inp){
+  const f=inp.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{
+    const lines=String(r.result).split(/\r?\n/).filter(x=>x.trim());
+    const steps=[];
+    lines.forEach((ln,i)=>{ try{ steps.push(Object.assign({_i:i}, JSON.parse(ln))); }catch(e){} });
+    if(!steps.length){ alert('没解析出任何步骤，请确认是每行一个 JSON 的日志'); return; }
+    S.game={name:f.name, steps}; S.gameIdx=0; save(); render();
+  };
+  r.readAsText(f); inp.value='';
+}
+function renderGame(){
+  const gi=document.getElementById('gameInfo'), gl=document.getElementById('gameList');
+  if(!S.game||!S.game.steps){ gi.textContent='尚未导入对局日志'; gl.innerHTML=''; return; }
+  gi.textContent=`${esc(S.game.name)} · 共 ${S.game.steps.length} 步 · 当前第 ${S.gameIdx+1} 步`;
+  gl.innerHTML=S.game.steps.map((s,i)=>
+    `<div class="list-item ${i===S.gameIdx?'active':''}" onclick="pickStep(${i})">
+       <div class="nm">第${i+1}步 · ${esc(s.round||'?')}天 ${esc(s.phase||'')} · ${esc(s.seat||'?')}号 ${esc(s.role||'')}</div>
+       <div class="meta">${s.fallback?'<span class="badge b-bad">当时兜底</span>':'<span class="badge b-ok">当时正常</span>'} ${esc(s.ms||'')}${s.ms?'ms':''} · ${esc((s.raw||'').slice(0,40))}</div>
+     </div>`).join('');
+}
+/* ---- 线上提示词契约：直连 /api/admin/prompts（同源） ---- */
+let _live=null;   // {items:{key:{value,note,kind}}, changed:Set}
+async function liveLoad(){
+  const b=engBase()||'';   // 留空 = 同源（/lab 就挂在对局服务上，直接相对路径）
+  let j;
+  try{ const r=await fetch(b+'/api/admin/prompts'); if(!r.ok) throw new Error('HTTP '+r.status); j=await r.json(); }
+  catch(e){ document.getElementById('liveInfo').innerHTML='<span class="badge b-bad">拉取失败</span> '+esc(e.message); return; }
+  _live={items:{}, changed:new Set(), readonly:j.readonly||[]};
+  (j.groups||[]).forEach(g=>(g.items||[]).forEach(it=>{ _live.items[it.key]={value:it.value==null?'':String(it.value),note:it.note||'',kind:it.kind||'static'}; }));
+  renderLive(); hint('已载入 '+Object.keys(_live.items).length+' 项（只读守卫 '+_live.readonly.length+' 项）');
+}
+function renderLive(){
+  const box=document.getElementById('liveBlocks'); if(!box||!_live) return;
+  const byGroup={};
+  Object.keys(_live.items).forEach(k=>{
+    const it=_live.items[k];
+    const g=(k.split('::')[0])||'其他';
+    (byGroup[g]=byGroup[g]||[]).push([k,it]);
+  });
+  const keys=Object.keys(_live.items);
+  // 分组信息在拉取时已带 group 名 —— 用 note 前缀不可靠，直接按组名重排：这里按 key 原序即可
+  let html='';
+  const dirty=k=>_live.changed.has(k)?' <span class="badge b-warn">已改</span>':'';
+  keys.forEach(k=>{
+    const it=_live.items[k];
+    html+='<div style="margin-bottom:8px"><div class="flexline"><b style="font-size:12px">'+esc(k)+'</b>'+dirty(k)
+      +'<span class="grow"></span><span class="muted" title="'+esc(it.note)+'">'+esc((it.note||'').slice(0,26))+'</span></div>'
+      +'<textarea rows="'+(it.value.length>400?6:3)+'" data-k="'+esc(k)+'" oninput="liveEdit(this)">'+esc(it.value)+'</textarea></div>';
+  });
+  if(_live.readonly.length){
+    html+='<div class="sub">只读守卫（故意不可改）</div>';
+    _live.readonly.forEach(r=>{ html+='<div class="muted" title="'+esc(r.why||'')+'">🔒 '+esc(r.name||'')+'</div>'; });
+  }
+  box.className=''; box.innerHTML=html;
+  document.getElementById('liveInfo').innerHTML='已载入 '+keys.length+' 项，改了 '+_live.changed.size+' 项';
+}
+function liveEdit(ta){ const k=ta.getAttribute('data-k'); if(!_live||!(k in _live.items)) return;
+  if(ta.value!==_live.items[k].value) _live.changed.add(k); else _live.changed.delete(k);
+  const badge=ta.previousElementSibling.querySelector('.badge'); if(badge) badge.remove();
+  if(_live.changed.has(k)){ const b=document.createElement('span'); b.className='badge b-warn'; b.textContent='已改'; ta.previousElementSibling.appendChild(b); }
+  document.getElementById('liveInfo').innerHTML='已载入，改了 '+_live.changed.size+' 项';
+}
+async function liveSave(){
+  if(!_live){ hint('先载入线上契约'); return; }
+  if(!_live.changed.size){ hint('没有改动要保存'); return; }
+  const b=engBase()||'';   // 同上：留空 = 同源
+  const prompts={}; _live.changed.forEach(k=>{ prompts[k]=_live.items[k].value; });
+  try{
+    const r=await fetch(b+'/api/admin/prompts',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({prompts})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+    _live.changed.forEach(k=>{ _live.items[k].value=_live.items[k].value; });
+    _live.changed.clear(); renderLive();
+    hint('已保存 '+((j.applied||[]).length)+' 项，下一局开始生效');
+  }catch(e){ hint('保存失败：'+e.message); }
+}
+
+/* ---- 引擎连接：实时对局的暂停 / 单步 / 拉取步骤 ---- */
+let _poll=null;
+function engBase(){ const v=(document.getElementById('engine')||{}).value||''; return v.replace(/\/+$/,''); }
+async function engGet(p){
+  const b=engBase(); if(!b){ hint('先填对局服务地址，例如 http://127.0.0.1:8000'); return null; }
+  try{ const r=await fetch(b+p, {headers:{'Accept':'application/json'}}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
+  catch(e){ document.getElementById('engInfo').innerHTML='<span class="badge b-bad">连不上</span> '+esc(e.message); return null; }
+}
+async function engPost(p){
+  const b=engBase(); if(!b){ hint('先填对局服务地址'); return null; }
+  try{ const r=await fetch(b+p, {method:'POST'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
+  catch(e){ document.getElementById('engInfo').innerHTML='<span class="badge b-bad">连不上</span> '+esc(e.message); return null; }
+}
+async function engStatus(){
+  const j=await engGet('/api/lab/status'); if(!j) return;
+  document.getElementById('engInfo').innerHTML=
+    (j.paused?'<span class="badge b-warn">已暂停</span>':'<span class="badge b-ok">推进中</span>')
+    + ` 步骤 ${j.steps} · 落盘 ${j.log_enabled?'开':'关'}`;
+  hint('已连接：'+engBase()+'（第 '+(j.ctx&&j.ctx.round||0)+' 天 '+(j.ctx&&j.ctx.phase||'')+'）');
+  return j;
+}
+async function engPause(v){ const j=await engPost('/api/lab/pause?value='+(v?'true':'false')); if(!j) return; await engStatus(); hint(v?'已暂停：对局停在下一步之前，现在可以改提示词了':'已继续'); }
+async function engStep(){ const j=await engPost('/api/lab/step?n=1'); if(!j) return; await engStatus(); hint('已放行一步，走完自动停住'); }
+async function engPull(){
+  const j=await engGet('/api/lab/steps?limit=500'); if(!j) return;
+  const rows=(j.steps||[]).map((s,i)=>({
+    _i:i, round:s.round, phase:s.phase, seat:s.seat, role:s.role,
+    identity:(s.prompt&&s.prompt.system)||'', public:'', timeline:'',
+    hardFacts:'', votes:'', allowed:'',
+    task:(s.prompt&&s.prompt.user)||'', output:'',
+    raw:s.raw||'', parsed:null, fallback:!!s.fallback, ms:s.ms, model:s.model
+  }));
+  if(!rows.length){ hint('还没有落盘步骤：先让对局跑起来（确认服务里 LAB_LOG 未关）'); return; }
+  S.game={name:'引擎实时对局', steps:rows}; S.gameIdx=rows.length-1; save(); render();
+  hint('已拉取 '+rows.length+' 步，默认停在最后一步');
+}
+function togglePoll(){
+  const on=document.getElementById('autopoll').checked;
+  if(_poll){ clearInterval(_poll); _poll=null; }
+  if(on){ _poll=setInterval(()=>{ engStatus().then(()=>engPull()); }, 3000); hint('自动刷新已开：每 3 秒同步一次状态与步骤'); }
+  else { hint('自动刷新已关'); }
+}
+function pickStep(i){ S.gameIdx=i; save(); render(); }
+function step(d){ if(!S.game) { alert('先导入对局日志'); return; }
+  S.gameIdx=Math.max(0,Math.min(S.game.steps.length-1,S.gameIdx+d)); save(); render(); }
+function loadStep(){
+  if(!S.game){ hint('先导入对局日志'); return; }
+  const s=S.game.steps[S.gameIdx]; if(!s) return;
+  const snap={ name:`L${S.gameIdx+1} · ${s.round||'?'}天 ${s.phase||''} · ${s.seat||'?'}号`,
+    round:s.round||1, phase:s.phase||'', taskKind:/\{/.test(s.output||'')||(s.parsed&&typeof s.parsed==='object')?'json':'text',
+    camp:s.camp||'', identity:s.identity||'', public:s.public||'', hardFacts:s.hardFacts||'',
+    votes:s.votes||'', timeline:s.timeline||'', allowed:s.allowed||'', task:s.task||'', output:s.output||'' };
+  S.snapshots.push(snap); S.activeSnap=S.snapshots.length-1; save(); render();
+  document.getElementById('status').innerHTML=`<span class="badge b-ok">已载入为快照</span> ${esc(snap.name)}`;
+  if(s.raw) document.getElementById('out').textContent='【日志里记录的当时输出】\n'+s.raw;
+}
+
+/* ================= 组装与调用 ================= */
+function buildPrompt(){
+  const sn=S.snapshots[S.activeSnap]||{};
+  const m=/还没开口[：: ]*([0-9、号 ]+)/.exec(sn.timeline||'');
+  const notSpoken=m?m[1].trim():'';
+  const blk=id=>S.blocks[id]&&S.blocks[id].on?S.blocks[id].text:'';
+  const fill=t=>t
+    .replace(/\{\{rules\}\}/g,blk('rules'))
+    .replace(/\{\{identity\}\}/g,blk('identity')||sn.identity||'')
+    .replace(/\{\{public\}\}/g,sn.public||'')
+    .replace(/\{\{hardInfo\}\}/g,blk('hardInfo'))
+    .replace(/\{\{hardFacts\}\}/g,sn.hardFacts||'')
+    .replace(/\{\{votes\}\}/g,sn.votes||'')
+    .replace(/\{\{style\}\}/g,blk('style'))
+    .replace(/\{\{timeline\}\}/g,blk('timeline')||sn.timeline||'')
+    .replace(/\{\{claim\}\}/g,blk('claim'))
+    .replace(/\{\{wolf\}\}/g,blk('wolf'))
+    .replace(/\{\{angle\}\}/g,blk('angle'))
+    .replace(/\{\{antiRepeat\}\}/g,blk('antiRepeat'))
+    .replace(/\{\{task\}\}/g,blk('task')||sn.task||'')
+    .replace(/\{\{output\}\}/g,blk('output')||sn.output||'')
+    .replace(/\{\{notSpoken\}\}/g,notSpoken||'（无）')
+    .replace(/\{\{seat\}\}/g,S.slots.seat||'')
+    .replace(/\{\{role_label\}\}/g,S.slots.role_label||'')
+    .replace(/\{\{personality\}\}/g,S.slots.personality||'')
+    .replace(/\{\{stake\}\}/g,S.slots.stake||'')
+    .replace(/\{\{experiences\}\}/g,S.slots.experiences||'')
+    .replace(/\{\{anti_injection\}\}/g,S.slots.anti_injection||'')
+    .replace(/\{\{anti_bomb\}\}/g,S.slots.anti_bomb||'');
+  return {system:fill(S.tmpl.system), user:fill(S.tmpl.user)};
+}
+async function callLLM(agent, messages){
+  const base=(S.proxy?S.proxy:(agent.baseUrl||'')).replace(/\/+$/,'');
+  if(!base) throw new Error('未填接口地址，也不知道代理地址');
+  const body={model:agent.model, messages, temperature:parseFloat(agent.temperature)||0.8};
+  if(agent.thinking==='disabled') body.thinking={type:'disabled'};
+  const t0=performance.now();
+  const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(), (parseFloat(agent.timeout)||60)*1000);
+  try{
+    const r=await fetch(base+'/chat/completions',{method:'POST',signal:ctl.signal,
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+(agent.apiKey||'')},
+      body:JSON.stringify(body)});
+    clearTimeout(to);
+    if(!r.ok){ const tx=await r.text(); throw new Error(`HTTP ${r.status} ${tx.slice(0,200)}`); }
+    const j=await r.json();
+    const msg=(j.choices&&j.choices[0]&&j.choices[0].message)||{};
+    return {text:(msg.content||msg.reasoning_content||'').toString(), ms:Math.round(performance.now()-t0), raw:j};
+  }catch(e){ clearTimeout(to); throw e; }
+}
+function guess(raw, kind){
+  if(!raw||!raw.trim()) return {parsed:null, fallback:true, why:'空输出 —— 多半是超时/限流/网络，先查基建而不是提示词'};
+  if(kind==='json'){
+    const m=/\{[^{}]*\}/.exec(raw);
+    if(!m) return {parsed:null, fallback:true, why:'没有 JSON —— 输出格式没讲清，属于提示词问题'};
+    try{ return {parsed:JSON.parse(m[0]), fallback:false, why:'JSON 正常'}; }
+    catch(e){ return {parsed:null, fallback:true, why:'JSON 解析失败（中文数字/引号常见），属于提示词问题'}; }
+  }
+  return {parsed:raw.trim(), fallback:false, why:'自由文本，跑净化闸后使用'};
+}
+async function runOnce(compare){
+  const out=document.getElementById('out'), st=document.getElementById('status'), pa=document.getElementById('parse');
+  const sn=S.snapshots[S.activeSnap]||{}; const p=buildPrompt();
+  const messages=[{role:'system',content:p.system},{role:'user',content:p.user}];
+  const main=S.agents[S.activeAgent];
+  st.textContent='调用中…'; out.textContent=''; pa.innerHTML='';
+  if(!main||!main.apiKey||!main.model||!main.baseUrl){ st.innerHTML='<span class="badge b-warn">席位配置不完整（接口地址 / 模型名 / Key 都要填）</span>'; return; }
+  try{
+    const r=await callLLM(main,messages); const g=guess(r.text, sn.taskKind);
+    out.textContent=r.text||'（空）';
+    const hist=(S.game&&S.game.steps[S.gameIdx]&&S.game.steps[S.gameIdx].raw)||'';
+    const same=hist? (hist.trim()===(r.text||'').trim()) : null;
+    pa.innerHTML=`<table>
+      <tr><th>耗时</th><td>${r.ms} ms</td></tr>
+      <tr><th>提示词字数</th><td>${(p.system+p.user).length}</td></tr>
+      <tr><th>解析结果</th><td>${esc(JSON.stringify(g.parsed))}</td></tr>
+      <tr><th>是否兜底</th><td>${g.fallback?'<span class="badge b-bad">是</span>':'<span class="badge b-ok">否</span>'}</td></tr>
+      <tr><th>归因结论</th><td>${esc(g.why)}</td></tr>
+      ${hist?`<tr><th>与日志对比</th><td>${same?'<span class="badge b-ok">和上次一致</span>':'<span class="badge b-warn">与上次不同</span>'}</td></tr>`:''}
+    </table>`;
+    st.innerHTML=`<span class="badge ${g.fallback?'b-bad':'b-ok'}">完成</span>`;
+    pushLog({snap:sn.name,label:main.label,model:main.model,raw:r.text,parsed:g.parsed,fallback:g.fallback,ms:r.ms,prompt:p});
+    if(compare){
+      const cmp=S.agents[parseInt(document.getElementById('cmpAgent').value,10)];
+      if(cmp&&cmp!==main){
+        try{
+          const r2=await callLLM(cmp,messages); const g2=guess(r2.text, sn.taskKind);
+          out.textContent=`—— ${main.label} ——\n${r.text||'（空）'}\n\n—— ${cmp.label} ——\n${r2.text||'（空）'}`;
+          pa.innerHTML+=`<div class="sub">对比 ${esc(cmp.label)}：${g2.fallback?'<span class="badge b-bad">兜底</span>':'<span class="badge b-ok">正常</span>'} · ${r2.ms}ms · ${esc(g2.why)}</div>`;
+          pushLog({snap:sn.name,label:cmp.label,model:cmp.model,raw:r2.text,parsed:g2.parsed,fallback:g2.fallback,ms:r2.ms,prompt:p});
+        }catch(e){ pa.innerHTML+=`<div class="sub">对比失败：${esc(e.message)}</div>`; }
+      }
+    }
+  }catch(e){
+    st.innerHTML=`<span class="badge b-bad">失败</span> ${esc(e.message)}`;
+    out.textContent='（无输出）\n'+e.message+'\n\n若是 CORS / NetworkError → 改用本地代理 promptlab_proxy.py';
+  }
+}
+function pushLog(e){ S.log.push(Object.assign({ts:new Date().toLocaleTimeString('zh-CN',{hour12:false})},e)); save(); renderLog(); }
+function renderLog(){
+  const rows=S.log.slice().reverse().slice(0,60).map(l=>
+    `<tr><td>${esc(l.ts)}</td><td>${esc(l.snap)}</td><td>${esc(l.label)}</td>
+     <td>${l.fallback?'<span class="badge b-bad">兜底</span>':'<span class="badge b-ok">正常</span>'}</td>
+     <td>${esc(l.ms)}ms</td><td title="${esc((l.raw||'').slice(0,400))}">${esc((l.raw||'').slice(0,50))}</td></tr>`).join('');
+  document.getElementById('logWrap').innerHTML=S.log.length
+    ? `<table><tr><th>时间</th><th>快照</th><th>席位</th><th>结果</th><th>耗时</th><th>原始输出</th></tr>${rows}</table>`
+    : '<div class="muted">还没有记录</div>';
+}
+
+/* ================= 导入导出 ================= */
+function dl(n,t){ const b=new Blob([t],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=n; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+function exportAll(){ dl('promptlab-state.json', JSON.stringify(S,null,2)); }
+function exportLog(){ dl('promptlab-log.jsonl', S.log.map(l=>JSON.stringify(l)).join('\n')); }
+function importAll(inp){ const f=inp.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{ const o=JSON.parse(r.result); if(!o||!o.version) throw new Error('bad'); S=o; save(); render(); }catch(e){ alert('导入失败：不是本工具导出的 JSON'); } };
+  r.readAsText(f); inp.value=''; }
+function wipe(){ if(!confirm('清空本机全部实验室数据？此操作不可恢复')) return; localStorage.removeItem(KEY); S=blank(); save(); render(); }
+
+render();
+</script>
+</body>
+</html>

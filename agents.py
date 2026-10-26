@@ -314,6 +314,40 @@ THOUGHT_SPEC: str = (
 SPEECH_PROGRESS_HEAD: str = ("### 今天的发言顺序（公开；✓已说的人才有「刚才的发言」可评；"
                           "○还没说的人此刻不可能说过任何话 —— 盘「谁没对谁表态」之前先看顺序）\n")
 
+# 🔴 2026-10-26 提示词契约收尾：build_messages 里剩下的**段落标题/收尾**原来全是
+#    f-string 内联 —— 配置台看不见、守门只能靠 PROMPT_FUNC_LITERALS 白名单兜着。
+#    现在全部抽成模块级常量（**逐字原样**，不改一个字符 ⇒ 行为零变化），
+#    并登记进 admin_api.PROMPT_STATIC —— 宁在实验室/配置台改标题措辞，下一局生效。
+#    段落里的**数据**（发言记录/票型/立场卡）照旧由引擎填，不在契约范围。
+HEAD_BOARD_FACT: str = "### 本局配置（发牌前全桌确认过的，公开）\n"
+HEAD_PUBLIC_LOG: str = "### 主持人已经公布的事\n"
+HEAD_HISTORY: str = "### 场上公开的发言记录\n"
+HEAD_STANCES_HIST: str = "### 场上的立场（每人每轮自己声明的，越早的越旧）\n"
+HEAD_STANCES: str = "### 场上的立场（每人自己说的）\n"
+TAIL_STANCES: str = "（这是他们自己在发言里声明的，不是你的判断）\n\n"
+HEAD_MY_TACTICS: str = "### 你之前的战术备忘（私有，只有你自己看得到）\n"
+HEAD_MY_PLAN: str = "### 你昨晚天亮前写下的战术预案（私有；局势可能已经变了，" \
+                    "照不照打由你判断）\n"
+HEAD_WHY_TURN: str = "### 为什么现在轮到你\n"
+TAIL_WHY_TURN: str = "（这是回应，不是新一轮自由发言：只针对这一问说，不要重复你上一句）\n\n"
+HEAD_WOLF_TERMS: str = "### 桌上通用的说法\n"
+HEAD_PLAYBOOK: str = "### 你这个身份的常规打法\n"
+HEAD_TASK: str = "### 你现在的任务\n"
+
+# 🔴 2026-10-26 守门抓到的存量欠账：speak 任务文案里整段"全场规则提醒"原来是
+#    函数内拼接的长字面量（配置台看不见）。抽成常量进契约；{round} 是数据占位符。
+SPEAK_RULES_REMINDER: str = (
+    "\n\n【全场规则提醒（必须遵守）】\n"
+    "· 当前是第 {round} 轮发言；本轮按座位顺序进行，"
+    "**已经发过言的玩家本轮不会再开口** —— 绝不要对已发言的人说"
+    "「待会听你怎么说」这类话。\n"
+    "· 第一轮发言：若你是狼人，且你是狼队里（或全场里）第一个开口的，"
+    "**必须悍跳预言家**（本局板子有预言家时）；本局板子没有预言家"
+    "（只有女巫）时，第一轮谁都不许跳任何身份。\n"
+    "· 局势清晰、前面的人已经把该盘的盘完时，你的发言就**简短**——"
+    "一句态度 + 一个落点即可，不要复述前面的人说过的话。"
+)
+
 
 # 🔴 2026-10-02：桌上通用的短说法（L0，全桌都懂）。
 #   为什么要有它：视频里那些 AI 言简意赅，一半功劳是**术语** —— 一个词顶一句话。
@@ -1156,7 +1190,7 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
     # 由引擎算好放 view["board_fact"]。没有它的后果（实测）：4 人局没有守卫，
     # AI 发言却说「可能有守卫」—— 配置靠猜必错。
     _bf = str(view.get("board_fact") or "")
-    _cfg = (f"### 本局配置（发牌前全桌确认过的，公开）\n{_bf}\n\n" if _bf else "")
+    _cfg = (HEAD_BOARD_FACT + _bf + "\n\n") if _bf else ""
     # 今天的发言进度（2026-10-02 用户加，公开）：谁已说/谁没说/轮到谁。
     # 实局：4 号评「1 号刚才的发言」—— 而 1 号还没说。没有进度，模型把
     # 还没发生的发言当成已经发生的来评。
@@ -1181,8 +1215,8 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
         f"{_sp_line}"
         f"{FACT_ONE_ROUND}\n\n"
         f"{user_rules}"
-        f"### 主持人已经公布的事\n{log_text}\n\n"
-        f"### 场上公开的发言记录\n{history_text}\n\n"
+        f"{HEAD_PUBLIC_LOG}{log_text}\n\n"
+        f"{HEAD_HISTORY}{history_text}\n\n"
     )
 
     # 「本轮谁被质疑最多」——**从上面的公开发言里算出来的**，人人相同（L0 派生）。
@@ -1200,12 +1234,11 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
     # 轮次标在卡上 ⇒ 陈旧性可见。注入主体仍是上面的全量发言记录（用户口径）。
     _ch = card_history_line(view.get("stances_history") or [])
     if _ch:
-        user += ("### 场上的立场（每人每轮自己声明的，越早的越旧）\n" + _ch + "\n\n")
+        user += (HEAD_STANCES_HIST + _ch + "\n\n")
     else:
         _cl = card_line(view.get("stances") or {})   # 兜底：老视图没有历史字段
         if _cl:
-            user += (f"### 场上的立场（每人自己说的）\n{_cl}"
-                     f"（这是他们自己在发言里声明的，不是你的判断）\n\n")
+            user += (HEAD_STANCES + _cl + TAIL_STANCES)
     # 前几天的投票票型（2026-10-02 用户加）：发言/投票/刀人/技能**共用**这一段
     # prompt，所以一处注入等于所有行动都能看到。数据只含**已结算**的天
     # （vote_history 结算时才落）——「正在投的今天」天然不在里面：
@@ -1216,29 +1249,27 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
     # 你自己的战术备忘（L2 私有，2026-10-02）：发言/投票时写下的 thought 存档。
     _tac = view.get("my_tactics") or []
     if _tac:
-        user += ("### 你之前的战术备忘（私有，只有你自己看得到）\n"
+        user += (HEAD_MY_TACTICS
                  + "\n".join("- " + str(x) for x in _tac[-3:]) + "\n\n")
     # 夜末预案（L2 私有，2026-10-02）：天亮那一刻写好的今日战术。
     _plan = str(view.get("my_plan") or "").strip()
     if _plan:
-        user += ("### 你昨晚天亮前写下的战术预案（私有；局势可能已经变了，"
-                 "照不照打由你判断）\n" + _plan + "\n\n")
+        user += (HEAD_MY_PLAN + _plan + "\n\n")
 
     # 「为什么现在轮到你」（挑战式发言顺序）：一轮里会出现两种非轮转发言 ——
     # 被点名的人回应、以及被回应后再说一句。不告诉它，它会以为又轮到自己自由发言
     # （把上一句再说一遍、或者接着往下讲）。
     _why = view.get("speech_reason")
     if _why:
-        user += (f"### 为什么现在轮到你\n{_why}"
-                 f"（这是回应，不是新一轮自由发言：只针对这一问说，不要重复你上一句）\n\n")
+        user += (HEAD_WHY_TURN + _why + TAIL_WHY_TURN)
 
     # 桌上通用的短说法（L0）：放在任务之前，让它先想到"这些词可以直接用"。
-    user += f"### 桌上通用的说法\n{WOLF_TERMS}\n\n"
+    user += HEAD_WOLF_TERMS + WOLF_TERMS + "\n\n"
     # 本身份的常规打法（只出现在本人这屏里 —— 每个座位只拿自己的 view）。
     _pb = PRIVATE_LINES.get("play_" + str(view.get("role", "")), "")
     if _pb:
-        user += "### 你这个身份的常规打法\n" + _pb + "\n\n"
-    user += f"### 你现在的任务\n{task}"
+        user += HEAD_PLAYBOOK + _pb + "\n\n"
+    user += HEAD_TASK + task
     if extra:
         user += "\n" + extra
 
@@ -1448,17 +1479,7 @@ class Agent:
             #    ② 对已发言的人说"待会听你怎么说"（本轮已发言的人不会再开口）；
             #    ③ 啰嗦。④ 第一轮最先发言的狼人必须悍跳（有预言家的局跳预言家，
             #    只有女巫的局什么都不跳）。四条都进 speak 的任务文案。
-            task += (
-                "\n\n【全场规则提醒（必须遵守）】\n"
-                "· 当前是第 " + str(int(view.get("round") or 1)) + " 轮发言；本轮按座位顺序进行，"
-                "**已经发过言的玩家本轮不会再开口** —— 绝不要对已发言的人说"
-                "「待会听你怎么说」这类话。\n"
-                "· 第一轮发言：若你是狼人，且你是狼队里（或全场里）第一个开口的，"
-                "**必须悍跳预言家**（本局板子有预言家时）；本局板子没有预言家"
-                "（只有女巫）时，第一轮谁都不许跳任何身份。\n"
-                "· 局势清晰、前面的人已经把该盘的盘完时，你的发言就**简短**——"
-                "一句态度 + 一个落点即可，不要复述前面的人说过的话。"
-            )
+            task += SPEAK_RULES_REMINDER.format(round=int(view.get("round") or 1))
         return build_messages(view, history, task,
                               level=self.level, summarize=self.summarize,
                               experiences=self.experiences,

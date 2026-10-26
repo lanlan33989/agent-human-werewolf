@@ -99,6 +99,24 @@ PROMPT_STATIC = (
      "跨局经验块的标题（G3，只有开了经验的档位才会出现这段）"),
     ("agents", "VOTE_PATTERN_HEAD", "投票票型",
      "行动前注入的票型段标题（含『拿票型对账言行』的指引；2026-10-02 加）"),
+    # 🔴 2026-10-26 提示词契约收尾：build_messages 里剩余的段落标题/收尾
+    #    从 f-string 内联抽成模块级常量（逐字原样，行为零变化），登记到这里。
+    #    段落里的数据（发言记录/票型/立场卡）由引擎填，不在契约范围。
+    ("agents", "HEAD_BOARD_FACT", "段落标题（user 消息）", "本局配置段标题"),
+    ("agents", "HEAD_PUBLIC_LOG", "段落标题（user 消息）", "主持人播报段标题"),
+    ("agents", "HEAD_HISTORY", "段落标题（user 消息）", "公开发言记录段标题"),
+    ("agents", "HEAD_STANCES_HIST", "段落标题（user 消息）", "立场卡·全量历史段标题"),
+    ("agents", "HEAD_STANCES", "段落标题（user 消息）", "立场卡·兜底段标题"),
+    ("agents", "TAIL_STANCES", "段落标题（user 消息）", "立场卡·兜底段收尾（声明出处提醒）"),
+    ("agents", "HEAD_MY_TACTICS", "段落标题（user 消息）", "私有战术备忘段标题"),
+    ("agents", "HEAD_MY_PLAN", "段落标题（user 消息）", "夜末预案段标题"),
+    ("agents", "HEAD_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段标题（挑战式发言）"),
+    ("agents", "TAIL_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段收尾（回应提醒）"),
+    ("agents", "HEAD_WOLF_TERMS", "段落标题（user 消息）", "桌上通用说法段标题"),
+    ("agents", "HEAD_PLAYBOOK", "段落标题（user 消息）", "身份常规打法段标题"),
+    ("agents", "HEAD_TASK", "段落标题（user 消息）", "任务段标题"),
+    ("agents", "SPEAK_RULES_REMINDER", "任务文案（speak）",
+     "发言任务末尾的【全场规则提醒】整段；{round} 是轮数占位符，**别删**"),
 )
 
 # （模块, 表名, 分组, 说明, 叶子名元组（None = 表本身就是 dict[str,str]））
