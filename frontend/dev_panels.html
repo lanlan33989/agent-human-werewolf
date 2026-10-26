@@ -7,8 +7,10 @@
   用法：python mock/mock_server.py → 开 http://127.0.0.1:5501/dev_panels.html
   改样式（table.css / play.html / tableui.js）后刷新本页即见全部场景。
 
-  加新场景：在 frontend/demo_scenes.js 的 DEMO_SCENES 里加一项 +
-  下面 SCENES 里加一格。要练交互流转：:5501/play.html（mock 假数据）。
+  ★ 2026-10-27 改：**格子由 demo_scenes.js 自动生成**，不再是手写清单。
+    加一个新界面 = 在 demo_scenes.js 里加一项（带 title/note），刷新本页
+    自动出现；没进任何分组的场景会掉到最底下的「未归类」红条里提醒。
+    GROUPS 只决定**陈列顺序**，不决定有没有。
 ============================================================ -->
 <html lang="zh">
 <head>
@@ -20,47 +22,97 @@
   .head{padding:18px 16px 6px;}
   .head h1{font-size:20px;margin:0 0 4px;}
   .head p{font-size:13px;color:#c9bfe8;margin:2px 0;}
-  .wall{display:flex;flex-wrap:wrap;gap:20px;padding:14px 16px 40px;align-items:flex-start;}
+  .grp{width:100%;margin:18px 16px 4px;font-size:15px;color:#8fd3ff;
+       border-bottom:1px solid rgba(255,255,255,.14);padding-bottom:5px;}
+  .grp b{color:#fff;}
+  .grp span{font-size:12px;color:#b6abd8;font-weight:normal;margin-left:8px;}
+  .wall{display:flex;flex-wrap:wrap;gap:20px;padding:8px 16px 12px;align-items:flex-start;}
   .cell{width:390px;}
   .cell>h2{font-size:15px;margin:0 0 2px;color:#ffd76a;}
   .cell>.note{font-size:12px;color:#b6abd8;margin:0 0 8px;min-height:16px;}
   .frame{width:390px;height:720px;border:1px solid rgba(255,255,255,.18);border-radius:14px;
          background:#171029;overflow:hidden;}
   .frame iframe{width:100%;height:100%;border:0;}
+  .miss{margin:10px 16px;padding:10px 12px;border-radius:10px;background:#5a1230;
+        border:1px solid #ff5c8a;font-size:13px;}
 </style>
 </head>
 <body>
 <div class="head">
   <h1>面板画廊（demo 场景墙）</h1>
   <p>每一格都是真页面 play.html 的演示模式（内置假数据、真实渲染管线）—— 改样式刷新即见，所见即产品所得。</p>
-  <p>交互演练：:5501/play.html（mock 假数据）· 真实全流程：MOCK 后端 /play · 本页不连后端。</p>
+  <p>交互演练：:5501/play.html（mock 假数据）· 本页不连后端。</p>
+  <p id="count" style="color:#ffd76a"></p>
 </div>
-<div class="wall" id="wall"></div>
+<div id="wall"></div>
+
+<!-- 场景与展示 URL 之外，还有两个**独立页面**不是 demo 场景，单独列 -->
+<script src="/demo_scenes.js"></script>
 <script>
-var SCENES = [
-  ['cards',        '身份牌 · 逐座位翻牌（狼/预/巫/守/民）', '翻面样式按座位轮换；卡片文案与狼队友提示来自 demo seat 数据'],
-  ['night_wolf',   '夜 · 狼人刀人（拨号盘）',   '先认领（点圆心）→ 大数字键盘选刀口；🐺队友 / 🔪刀标'],
-  ['wolf_confirm', '夜 · 狼刀确认（多狼第二步）', '队友已点 🔪 且确认 → 你点圆心确认整夜刀口'],
-  ['night_witch',  '夜 · 女巫（解药 ✓✕）',     '5 号被刀 ☠️ 标记；空刀夜看解药按钮置灰'],
-  ['witch_poison', '夜 · 女巫（毒药问）',       '同一晚第二问；拨号盘选毒药目标'],
-  ['night_seer',   '夜 · 预言家（验人）',       '拨号盘点号码；验完 👍/👎 大字'],
-  ['night_guard',  '夜 · 守卫（守人）',         '拨号盘点号码 = 守他'],
-  ['day_say',      '白天 · 轮到真人发言',       '大圆发言模式：点一下开始录音、再点结束'],
-  ['vote',         '投票（点号码 → 圆心确认）',   '投票允许投自己；已投 AI 有标记'],
-  ['vote_result',  '投票结果（票型大字）',       '#voteBig 只摆票型不显示 AI 文本'],
-  ['hunter',       '猎人开枪（轮盘 · 可放弃）',   'shoot 走大圆轮盘；wheelExtra「不开枪」'],
-  ['last_words',   '出局遗言（AI 播报中）',      '无面板：法官播报 + AI 遗言逐句上屏'],
-  ['ended',        '终局（胜负 + 战报入口）',     'winner 非 null 即结束；局末出口此时才出现']
+var GROUPS = [
+  ['① 开局前 / 收尾', ['cover', 'cards', 'ended']],
+  ['② 夜间操作（拨号盘 · 认领后出）', ['night_wolf', 'wolf_confirm', 'night_witch',
+                                      'witch_poison', 'night_seer', 'night_guard']],
+  ['③ 白天（发言 / 投票 / 票型 / 遗言）', ['day_say', 'vote', 'vote_result', 'last_words', 'hunter']],
+  ['④ 等待与异常（没有面板的屏也算界面）', ['wait_ai', 'lost']]
 ];
-var wall = document.getElementById('wall');
-for (var i = 0; i < SCENES.length; i++){
-  var c = SCENES[i];
-  var d = document.createElement('div');
-  d.className = 'cell';
-  d.innerHTML = '<h2>' + (i + 1) + '. ' + c[1] + '</h2>'
-    + '<p class="note">' + c[2] + '</p>'
-    + '<div class="frame"><iframe src="play.html?demo=' + c[0] + '" loading="lazy"></iframe></div>';
-  wall.appendChild(d);
+/* 独立页面：不是 demo 场景，但它们同样是"用户会看到的一屏" */
+var PAGES = [
+  ['board.html', '⑤ 榜单与战报（独立页）',
+   '局末 / 封面入口都能到；表格列出每局的胜负、轮数与「战报 / 日志」两个出口'],
+  ['play.html?demo=vote&diag=1', '⑤ 诊断面板（手机排查浮层）',
+   'play.html 任意场景加 &diag=1 都能开这一层（tableui.js:1643）']
+];
+
+function isScene(k){ return k !== 'roles' && DEMO_SCENES[k] && DEMO_SCENES[k].title; }
+
+function cellHtml(i, title, note, src){
+  return '<div class="cell"><h2>' + i + '. ' + (title || '（无标题）') + '</h2>'
+       + '<p class="note">' + (note || '') + '</p>'
+       + '<div class="frame"><iframe src="' + src + '" loading="lazy"></iframe></div></div>';
+}
+
+var wall = document.getElementById('wall'), n = 0, used = {};
+GROUPS.forEach(function(g){
+  if (!g[1].length) return;
+  var html = '';
+  g[1].forEach(function(k){
+    used[k] = 1;
+    if (!isScene(k)) return;
+    var s = DEMO_SCENES[k];
+    html += cellHtml(++n, s.title, s.note, 'play.html?demo=' + k);
+  });
+  if (!html) return;
+  var h = document.createElement('div');
+  h.className = 'grp';
+  h.innerHTML = '<b>' + g[0] + '</b>';
+  wall.appendChild(h);
+  var w = document.createElement('div');
+  w.className = 'wall';
+  w.innerHTML = html;
+  wall.appendChild(w);
+});
+/* 独立页面那一节永远是最后一节 */
+var ph = document.createElement('div');
+ph.className = 'grp';
+ph.innerHTML = '<b>' + PAGES[0][1].split(' ')[0] + ' 独立页面</b><span>不是 demo 场景，但同样是用户会看到的一屏</span>';
+wall.appendChild(ph);
+var pw = document.createElement('div');
+pw.className = 'wall';
+pw.innerHTML = PAGES.map(function(p){ return cellHtml('·', p[1].replace(/^⑤ /,''), p[2], p[0]); }).join('');
+wall.appendChild(pw);
+
+/* 兜底：**任何没进分组的场景都会冒出来报红** —— 加场景不用记着改这里。 */
+var missed = Object.keys(DEMO_SCENES).filter(function(k){ return isScene(k) && !used[k]; });
+document.getElementById('count').textContent =
+  '共 ' + n + ' 个 demo 场景 + ' + PAGES.length + ' 个独立页面'
+  + (missed.length ? '（⚠️ ' + missed.length + ' 个场景没归类，见底部红条）' : '（全部分类到位）');
+if (missed.length){
+  var warn = document.createElement('div');
+  warn.className = 'miss';
+  warn.innerHTML = '⚠️ 以下场景还没归进任何一个分组，加人迭代请顺手给它们安排位置：<b>'
+    + missed.join(' / ') + '</b>';
+  wall.appendChild(warn);
 }
 </script>
 </body>

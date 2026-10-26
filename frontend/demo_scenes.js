@@ -70,6 +70,41 @@ function _pub(mod) {
 
 var DEMO_SCENES = {
 
+  /* 封面（开局前唯一那扇门）：人数 / 座次 / 档位 / 性格 / 规则开关 / key
+     + 继续上一局 + 榜单入口。kind=cover 特殊分支：不进牌桌，走真实 boot()。 */
+  cover: {
+    kind: "cover",
+    title: "封面（开局配置 + 继续上一局）",
+    note: "真实 boot()：rules/settings/keys 全由 mock 提供；并伪造一个活着的局号，让「继续上一局」也出现在画面里。",
+    roles: DEMO_ROLES
+  },
+
+  /* 异常：服务端重启过 / 同时开的局太多被挤掉 ⇒ /public 404 ⇒ lostGame 屏 */
+  lost: {
+    fail404: true,
+    title: "异常 · 这一局没了（/public 404）",
+    note: "💀 失控屏 + 底部说明 +「回到开始界面」出口（tableui.js:225）。以前这里是静默 return，界面永久冻住。",
+    roles: DEMO_ROLES,
+    public: _pub(function (p) {
+      p.phase = "night"; p.night_node = "wolf"; p.pending = "working";
+      p.now = { kind: "wheel", seat: 0, node: "wolf", need: null, started: false };
+      p._ps = { seats: [] };
+    })
+  },
+
+  /* 等待态：这一拍没有人类要点（AI 在算 / 收尾播报）⇒ 只有底部一行提示 */
+  wait_ai: {
+    title: "等待态（桌上一个按钮都没有）",
+    note: "pending=working 且 now.need=null ⇒ 底部「把手机放回桌子中央」，无任何面板 —— 正常态，别当卡住。",
+    roles: DEMO_ROLES,
+    public: _pub(function (p) {
+      p.phase = "discuss"; p.round = 1; p.night_node = null; p.night_plan = [];
+      p.pending = "working";
+      p.now = { kind: "none", seat: null, node: null, need: null, started: false };
+      p._ps = { seats: [] };
+    })
+  },
+
   /* 身份牌：逐座位翻牌（demo 特殊分支，不进桌） */
   cards: {
     kind: "cards",
@@ -276,13 +311,17 @@ var DEMO_SCENES = {
     })
   },
 
-  /* 终局 */
+  /* 终局 —— ⚠️ phase 必须是小写 "ended"、winner 必须是 "wolf"/"good"：
+     tableui.js:244 判的是 `PUBLIC.phase === 'ended'`（后端 engine.py:90
+     ENDED="ended"，下发值也是小写）；winner 用 '狼人胜利' 这种整句也不会报错，
+     但那是假的（后端只下发 'wolf'/'good'）。这两处写错 ⇒ 局末的
+     「本局战报 / 导出复盘 / 榜单与战报」那排出口永远不出现。 */
   ended: {
     title: "终局（胜负 + 战报入口）",
-    note: "winner 非 null 即结束；局末出口（战报/导出）只在此时可取。",
+    note: "底部 endLinks：本局战报 / 导出复盘；只有这一屏它们才出现。",
     public: _pub(function (p) {
-      p.phase = "ENDED"; p.round = 3; p.night_node = null; p.night_plan = [];
-      p.winner = "好人胜利";
+      p.phase = "ended"; p.round = 3; p.night_node = null; p.night_plan = [];
+      p.winner = "good";
       p.pending = "ended";
       p.timeline.push({ t: "sys", s: "最后一名狼人出局。", voice: "Neil", ts: 1793034700 });
       p.timeline.push({ t: "sys", s: "游戏结束：好人胜利！", voice: "Neil", ts: 1793034702 });

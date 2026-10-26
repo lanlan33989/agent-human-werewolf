@@ -608,6 +608,9 @@ async function api(path, opts){
       if (v.investigations) out.investigations = v.investigations;
       return out;
     }
+    /* lost 场景：模拟"服务端这一局没了" ⇒ tick 的 catch 走 💀 失控屏 */
+    if (path.indexOf('/public') > 0 && DEMO.fail404)
+      throw new Error('404 Not Found');
     /* 🔴 2026-10-27 回归修复：/public 这一支必须返回场景数据。上一版把兜底
        改成 `return {ok:true}` 后，tick 的 `PUBLIC = await api('/public')`
        被 {ok:true} 覆盖 ⇒ 所有面板（拨号盘）当场消失，只剩投票那类
@@ -1220,6 +1223,18 @@ function loadScript(src){
         + '」。可用：' + Object.keys(DEMO_SCENES).join(' / ') + '</p>';
       return;
     }
+    if (sc.kind === 'cover'){
+      /* 封面场景：不进牌桌。走**真实的 boot()**（rules/settings 由 mock 给），
+         再伪造一个"上一局还在"的 local 锚点 ⇒ 「继续上一局」按钮也一并出画，
+         黄子凡调封面不需要先开一局。 */
+      DEMO = null;
+      localStorage.setItem('tt.gid', 'MOCKGID');
+      await boot();
+      await tryResume();
+      show('p0');
+      foot('');
+      return;
+    }
     if (sc.kind === 'cards'){
       DEMO = { public: sc.public, roles: sc.roles, ps: { seats: [] } };
       GID = 'DEMO'; PUBLIC = sc.public;
@@ -1228,7 +1243,7 @@ function loadScript(src){
     } else {
       /* next 必须带上：否则 DEMO.next 恒为 undefined，提交后推进分支
          （api() 里的 /act）永远不触发，点了号码就一直停在"AI 正在想…" */
-      DEMO = { public: sc.public, roles: sc.roles,
+      DEMO = { public: sc.public, roles: sc.roles, fail404: !!sc.fail404,
                ps: sc.public._ps || { seats: [] }, next: sc.next || null };
       GID = 'DEMO'; PUBLIC = sc.public;
       VOICE_ON = false;                    /* 演示模式关语音：播报门（voicedUp）恒过，面板直接出 */

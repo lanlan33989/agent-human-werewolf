@@ -36,6 +36,36 @@ ROUTES = {
 }
 
 
+# 战报样例：真后端 `/api/game/{gid}/report.md` 是 **Markdown 纯文本**
+# （game_api.py:951 media_type="text/markdown"），所以这里同格式给。
+_SAMPLE_REPORT = """# 本局战报（MOCK 样例）
+
+- 板子：6 人 · 2 狼 1 巫 1 预 2 民
+- 档位：认真 · 共 3 轮
+- 结果：**好人胜利**
+
+## 身份一览
+
+| 座位 | 身份 | 结局 |
+|---|---|---|
+| 1 号 | 狼人（真人） | 第 3 轮被投出 |
+| 2 号 | 预言家 | 存活 |
+| 3 号 | 女巫 | 第 2 夜被刀 |
+| 4 号 | 守卫 | 存活 |
+| 5 号 | 狼人 | 第 2 轮被投出 |
+| 6 号 | 村民 | 第 1 夜被刀 |
+
+## 逐夜
+
+- 第 1 夜：狼刀 6 号，女巫未救，守卫守 2 号。
+- 第 2 夜：狼刀 3 号，女巫已出局，预言家验 1 号（查杀）。
+- 第 3 轮：1 号被 4 票投出，狼队人数不足，好人获胜。
+
+> 想改排版：这是服务端吐的一整份 Markdown，改样式要先确定"是做成 HTML 页
+> 还是继续纯文本"，这条口子归后端 + 前端一起定（见 docs/界面清单.md）。
+"""
+
+
 def _load(name: str):
     with open(os.path.join(HERE, "fixtures", name), encoding="utf-8") as f:
         return json.load(f)
@@ -51,6 +81,9 @@ _TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
 
 def _static(path: str):
     name = "play.html" if path in ("/", "/play") else path.lstrip("/")
+    # 封面/局末链过去用的是短路径（真后端 server.py 的路由名），这里照抄一份
+    name = {"/board": "board.html", "/admin": "admin.html",
+            "/lab": "promptlab.html", "/play": "play.html"}.get(path, name)
     if "/" in name:
         return None
     fp = os.path.normpath(os.path.join(_FRONTEND, name))
@@ -72,6 +105,15 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")   # 前端任意 dev 端口
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_md(self, text: str, code: int = 200) -> None:
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/markdown; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -109,6 +151,32 @@ class H(BaseHTTPRequestHandler):
             return self._send({"phones": []})
         if path == "/api/admin/play-keys":
             return self._send({"asr": "", "llm": "", "tts": ""})
+        # 榜单与战报页（2026-10-27）：board.html 只吃这两个接口 —— 给假数据，
+        # 黄子凡调「榜单 / 战报列表」不用等后端。
+        if path == "/api/game/stats":
+            return self._send({"by_level": {
+                "娱乐": {"games": 12, "wolf_wins": 5, "good_wins": 7,
+                         "wolf_win_rate": "41.7%", "avg_rounds": 3.2,
+                         "human_seat_win_rate": "50.0%", "ai_seat_win_rate": "50.0%",
+                         "human_exiled": 4, "ai_exiled": 8},
+                "认真": {"games": 6, "wolf_wins": 4, "good_wins": 2,
+                         "wolf_win_rate": "66.7%", "avg_rounds": 4.5,
+                         "human_seat_win_rate": "33.3%", "ai_seat_win_rate": "66.7%",
+                         "human_exiled": 3, "ai_exiled": 3}}})
+        if path == "/api/game/games":
+            return self._send({"games": [
+                {"gid": "MOCKGID", "board": "6 人 · 2 狼 1 巫 1 预 2 民",
+                 "level": "认真", "winner": "good", "rounds": 3,
+                 "report": "/api/game/MOCKGID/report.md",
+                 "replay": "/api/game/MOCKGID/replay"},
+                {"gid": "OLDGID1", "board": "9 人 · 3 狼 3 神 3 民",
+                 "level": "娱乐", "winner": "wolf", "rounds": 4,
+                 "report": "/api/game/OLDGID1/report.md",
+                 "replay": "/api/game/OLDGID1/replay"}]})
+        # 战报正文（真后端是 text/markdown 纯文本，这里同格式）—— 局末那一排
+        # 出口点下去要真能打开东西，不然等于没这个界面。
+        if path.endswith("/report.md"):
+            return self._send_md(_SAMPLE_REPORT)
         st = _static(path)
         if st is not None:
             mime, body = st
