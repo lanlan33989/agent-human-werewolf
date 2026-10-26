@@ -35,7 +35,7 @@ import json
 import os
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 # ---------------------------------------------------------------- 白名单与配置
@@ -274,6 +274,58 @@ def _is_local(request: Request) -> bool:
     return host in ("127.0.0.1", "::1", "localhost", "testclient")
 
 
+# ---------------------------------------------------------------- 主产品开始界面：三类 key
+# 🔴 2026-10-26（用户要求）：/play 封面支持填写 ASR / LLM / TTS 的 key，
+#    默认回填当前已配置的值。写入即热替换（os.environ + _runtime.json + reload），
+#    进行中的对局不受影响，下一局生效。
+#    ⚠️ 安全边界：明文**只回给本机请求**（服务可能开给局域网手机，key 不能广播）；
+#    非本机只给指纹。这与配置台「密钥只进不出」的原则一致，只是范围放宽到本机页面。
+PLAY_KEYS = (("asr", "ASR_API_KEY", "DASHSCOPE_API_KEY"),
+             ("llm", "LLM_API_KEY", None),
+             ("tts", "DASHSCOPE_API_KEY", None))
+
+
+def api_play_keys_get(request: Request):
+    local = _is_local(request)
+    out = {}
+    for name, env, fallback in PLAY_KEYS:
+        v = os.environ.get(env, "")
+        if not v and fallback:
+            v = os.environ.get(fallback, "")
+        out[name] = v if local else fingerprint(v)
+    return out
+
+
+async def api_play_keys_set(request: Request):
+    try:
+        body = await request.json()
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(status_code=400, detail="body 必须是 JSON") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body 必须是对象")
+    st = _state()
+    changed = []
+    for name, env, _fb in PLAY_KEYS:
+        v = str(body.get(name) or "").strip()
+        if not v or env not in ADMIN_ENV_KEYS:
+            continue
+        os.environ[env] = v
+        st.setdefault("env", {})[env] = v
+        changed.append(env)
+    if not changed:
+        return {"ok": True, "changed": [], "note": "没有要更新的 key"}
+    _write_state(st)
+    note = "进行中的对局不受影响，下一局生效"
+    if _reload_fn:
+        try:
+            _reload_fn()
+            note = "已热替换模型通道（进行中的对局不受影响，下一局生效）"
+        except Exception as e:                               # noqa: BLE001
+            note = "key 已保存，但热替换失败（重启服务后生效）：" + repr(e)
+    print("[admin] 主产品封面更新 key：" + ", ".join(changed), flush=True)
+    return {"ok": True, "changed": changed, "note": note}
+
+
 def _allowed(request: Request) -> bool:
     if _is_local(request):
         return True
@@ -363,6 +415,15 @@ def register(app: FastAPI, *, reload_fn, snapshot_fn, page_fn) -> None:
     """
     global _reload_fn, _snapshot_fn, _page_fn
     _reload_fn, _snapshot_fn, _page_fn = reload_fn, snapshot_fn, page_fn
+
+    # 主产品开始界面（/play 封面）的三类 key：本机明文回填 + 热替换
+    @app.get("/api/admin/play-keys")
+    def _pk_get(request: Request):
+        return api_play_keys_get(request)
+
+    @app.post("/api/admin/play-keys")
+    async def _pk_set(request: Request):
+        return await api_play_keys_set(request)
 
     @app.get("/api/admin/config")
     def admin_config(request: Request) -> JSONResponse:

@@ -405,6 +405,25 @@
       <!-- 榜单与战报（2026-10-12 用户：从局末出口挪到设置页底部） -->
       <a class="bigbtn" id="lnkBoard" href="/board" target="_blank" rel="noopener"
          style="display:block;text-align:center;margin-top:10px;text-decoration:none">榜单与战报</a>
+
+      <!-- 模型与语音 key（2026-10-26 用户要求）：默认回填服务端当前配置；
+           填好点应用 → 写进服务端并热替换，下一局生效。 -->
+      <div class="h2" style="margin-top:18px">模型与语音 Key</div>
+      <div id="keysWrap" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <label style="font-size:13.5px;color:rgba(255,255,255,.86)">语音识别 ASR
+          <input type="password" id="kAsr" placeholder="ASR_API_KEY"
+                 style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <label style="font-size:13.5px;color:rgba(255,255,255,.86)">大模型 LLM
+          <input type="password" id="kLlm" placeholder="LLM_API_KEY"
+                 style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <label style="font-size:13.5px;color:rgba(255,255,255,.86)">语音合成 TTS
+          <input type="password" id="kTts" placeholder="DASHSCOPE_API_KEY"
+                 style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+        <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key</button>
+        <span id="keysMsg" style="font-size:12px;color:rgba(255,255,255,.66)"></span>
+      </div>
     </div>
   </section>
 
@@ -627,6 +646,30 @@ document.addEventListener('visibilitychange', function(){
 });
 
 /* ---------------------------------------------------------- 封面 / 开局 */
+
+/* 模型与语音 key（2026-10-26）：封面加载即回填服务端当前配置；应用后热替换 */
+async function loadKeys(){
+  try{
+    var j = await api('/api/admin/play-keys');
+    $('kAsr').value = j.asr || '';
+    $('kLlm').value = j.llm || '';
+    $('kTts').value = j.tts || '';
+  }catch(e){ $('keysMsg').textContent = '当前配置读取失败：' + e.message; }
+}
+async function applyKeys(){
+  var msg = $('keysMsg');
+  try{
+    var r = await api('/api/admin/play-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asr: $('kAsr').value.trim(),
+                             llm: $('kLlm').value.trim(),
+                             tts: $('kTts').value.trim() })
+    });
+    msg.textContent = (r.changed && r.changed.length ? '已更新（' + r.changed.join('、') + '）—— ' : '没有变化 —— ')
+      + (r.note || '');
+  }catch(e){ msg.textContent = '应用失败：' + e.message; }
+}
 
 async function boot(){
   /* 2026-10-12（用户）：识别/大脑/说话那行装配文案删除 —— 诊断面板里全都有。 */
@@ -1102,6 +1145,8 @@ async function tryResume(){
 })();
 
 $('btnNew').onclick = newGame;
+$('btnKeys').onclick = applyKeys;
+loadKeys();
 
 /* 身份牌页的「看完，交给下一位」。
    这里原本漏了绑定 —— 点它没反应，整局就卡在身份牌那一步（用页面点出来才发现）。
