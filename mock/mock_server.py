@@ -40,6 +40,23 @@ def _load(name: str):
         return json.load(f)
 
 
+# 静态页面（2026-10-27）：同一端口直接吐 frontend/ 的页面与资源 ——
+# 黄子凡不需要再开第二个服务：:5501/play.html 就是"页面+假数据"全流程。
+_FRONTEND = os.path.join(os.path.dirname(HERE), "frontend")
+_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
+          ".css": "text/css", ".png": "image/png", ".ico": "image/x-icon"}
+
+
+def _static(path: str):
+    name = "play.html" if path in ("/", "/play") else path.lstrip("/")
+    fp = os.path.normpath(os.path.join(_FRONTEND, name))
+    if not fp.startswith(_FRONTEND) or not os.path.isfile(fp):
+        return None
+    ext = os.path.splitext(fp)[1]
+    with open(fp, "rb") as f:
+        return _TYPES.get(ext, "application/octet-stream"), f.read()
+
+
 class H(BaseHTTPRequestHandler):
     delay = 0.0
 
@@ -63,6 +80,15 @@ class H(BaseHTTPRequestHandler):
                 if path.endswith("/new"):
                     data["gid"] = GID
                 return self._send(data)
+        st = _static(path)
+        if st is not None:
+            mime, body = st
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         return self._send({"error": "mock 没配这个路由：" + path}, 404)
 
     def do_POST(self) -> None:                               # noqa: N802
