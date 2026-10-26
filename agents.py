@@ -1474,6 +1474,13 @@ class Agent:
         而且隔离边界会出现第二个拼装点（见 07a 里"唯一入口"那条）。
         """
         task = TASKS[task_key] + _format_hint(task_key)
+        # 实验室落盘打点（2026-10-26）：night_driver 只打 round/phase，座位/角色
+        # 只有这里知道 —— 没有它，归因列分不清"这一步是谁的调用"。
+        try:
+            import lab_api as _lab
+            _lab.set_ctx(seat=self.seat, role=str(view.get("role") or ""))
+        except Exception:
+            pass
         if task_key == "speak":
             # 🔴 2026-10-12（用户实机三条）：① AI 不知道当前第几轮 ⇒ 说"已经两轮发言了"；
             #    ② 对已发言的人说"待会听你怎么说"（本轮已发言的人不会再开口）；

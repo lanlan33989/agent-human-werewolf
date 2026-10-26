@@ -43,6 +43,8 @@
   .chat-sys{align-self:center;max-width:94%;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.5}
   .chat-msg{align-self:flex-start;max-width:90%;background:#1b2334;border:1px solid var(--line);
             border-radius:10px 10px 10px 3px;padding:5px 9px;font-size:12.5px;line-height:1.6}
+  .chat-msg.chat-pick{cursor:pointer}
+  .chat-msg.chat-pick:hover{border-color:var(--accent);background:#20304e}
   .chat-msg .who{font-size:10.5px;color:#7fa5ff;display:block;margin-bottom:1px}
   .chat-day{align-self:center;font-size:10.5px;color:#5b6472;border:1px dashed var(--line);
             border-radius:9px;padding:0 10px;line-height:1.7}
@@ -512,7 +514,7 @@ function renderGame(){
   gi.textContent=`${esc(S.game.name)} · 共 ${S.game.steps.length} 步 · 当前第 ${S.gameIdx+1} 步`;
   gl.innerHTML=S.game.steps.map((s,i)=>
     `<div class="list-item ${i===S.gameIdx?'active':''}" onclick="pickStep(${i})">
-       <div class="nm">第${i+1}步 · ${esc(s.round||'?')}天 ${esc(s.phase||'')} · ${esc(s.seat||'?')}号 ${esc(s.role||'')}</div>
+       <div class="nm">第${i+1}步 · ${esc(s.round||'?')}天 ${esc(s.phase||'')} · ${s.seat!=null&&s.seat!==''?(Number(s.seat)+1)+' 号':'?号'} ${esc(s.role||'')}</div>
        <div class="meta">${s.fallback?'<span class="badge b-bad">当时兜底</span>':'<span class="badge b-ok">当时正常</span>'} ${esc(s.ms||'')}${s.ms?'ms':''} · ${esc((s.raw||'').slice(0,40))}</div>
      </div>`).join('');
 }
@@ -583,7 +585,9 @@ const PHASE_CN={night:'夜晚',dawn:'天亮',discuss:'白天发言',vote:'投票
 function _phaseCn(p){ return PHASE_CN[p]||p||''; }
 function chatBubble(m){
   if(m.t==='say'){
-    return '<div class="chat-msg"><span class="who">'+esc(String((m.seat!=null?m.seat:'?')))+' 号</span>'
+    return '<div class="chat-msg chat-pick" title="点击：在第③列查看这句发言背后的完整 prompt 与模型原始输出"'
+         + ' onclick="chatPick('+Number(m.seat)+','+(Number(m.ts)||0)+')">'
+         + '<span class="who">'+esc(String(m.seat!=null?(Number(m.seat)+1):'?'))+' 号</span>'
          + esc(m.s||'')+'</div>';
   }
   return '<div class="chat-sys">'+esc(m.s||'')+'</div>';
@@ -597,7 +601,10 @@ async function chatTick(force){
   info.innerHTML=(j.paused?'<span class="badge b-warn">已暂停</span>':'<span class="badge b-ok">推进中</span>')
     + ' 第'+(j.round||'?')+'天 · '+esc(_phaseCn(j.phase))
     + (j.winner?(' · <b>'+esc(j.winner==='wolf'?'狼人胜':'好人胜')+'</b>'):'')
-    + ' · 步 '+(j.steps||0);
+    + ' · 步 '+(j.steps||0)
+    + (_live&&_live.changed.size
+        ? ' <span class="badge b-warn" title="第②列有未保存的契约改动：保存后回退+单步，重跑就会用新提示词">契约改 '+_live.changed.size+' 项未保存</span>'
+        : '');
   const tl=j.timeline||[];
   const box=document.getElementById('chatBox');
   if(tl.length<_chatN||force){ _chatN=0; box.innerHTML=''; box.classList.remove('empty'); }
@@ -610,7 +617,45 @@ async function chatTick(force){
   if(tl.length) box.classList.remove('empty');
   box.scrollTop=box.scrollHeight;
   // 步数变了就顺手刷新回退下拉（限频 5 秒，别每拍都拉）
-  if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); }
+  if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); chatSyncSteps(); }
+}
+
+/* ---- 与第①②③列的联动 ---- */
+let _liveRows=null;   // 落盘步骤缓存（与第③列"拉取步骤"同源：/api/lab/steps）
+async function chatSyncSteps(){
+  const b=engBase()||'';
+  try{ const r=await fetch(b+'/api/lab/steps?limit=500'); if(!r.ok) return; const j=await r.json(); _liveRows=j.steps||[]; }catch(e){}
+  // 联动第③列：时间轴若是"引擎实时对局"模式且用户停在最后一步，就跟着直播长
+  if(S.game&&S.game.name==='引擎实时对局'&&_liveRows.length
+     && S.game.steps.length!==_liveRows.length
+     && S.gameIdx===S.game.steps.length-1){
+    engPull();          // 贴尾跟随：新步骤自动进时间轴并保持选中最后一步
+  }
+}
+/* 点直播里的某句发言 → 第③列定位到那一步（prompt+原始输出），第①列可一键载入为快照 */
+async function chatPick(seat, ts){
+  if(!_liveRows||!_liveRows.length) await chatSyncSteps();
+  if(!_liveRows||!_liveRows.length){ hint('还没有落盘步骤（对局在跑就会自动有）'); return; }
+  let idx=-1;
+  for(let k=_liveRows.length-1;k>=0;k--){
+    const r=_liveRows[k];
+    if((Number(r.epoch)||0) > (ts||0)+3) continue;         // 发言 = speak 调用返回后进时间轴 ⇒ 调用时刻略早于气泡 ts
+    if(r.seat!=null && r.seat!=='' && Number(r.seat)!==seat) continue;
+    idx=k; break;
+  }
+  if(idx<0){ hint('没找到对应的落盘步骤（太早的步骤已被日志滚动淘汰）'); return; }
+  if(!S.game||S.game.name!=='引擎实时对局'||S.game.steps.length!==_liveRows.length){
+    const rows=_liveRows.map((s,i)=>({
+      _i:i, round:s.round, phase:s.phase, seat:s.seat, role:s.role,
+      identity:(s.prompt&&s.prompt.system)||'', public:'', timeline:'',
+      hardFacts:'', votes:'', allowed:'',
+      task:(s.prompt&&s.prompt.user)||'', output:'',
+      raw:s.raw||'', parsed:null, fallback:!!s.fallback, ms:s.ms, model:s.model
+    }));
+    S.game={name:'引擎实时对局', steps:rows};
+  }
+  pickStep(idx);
+  hint('已定位到「'+(seat||'?')+' 号」这句发言的落盘步骤（第③列）—— 要改这块局面请点回退下拉');
 }
 async function chatSnap(){
   _chatSnapAt=Date.now();
@@ -637,6 +682,7 @@ async function chatRewind(){
   if(j&&j.ok){
     _chatN=0;
     hint('已回退到第 '+j.rewound_to+' 步之前（第'+(j.round||'?')+'天 '+_phaseCn(j.phase)+'），对局已暂停；改完提示词按 ⏭ 单步或 ▶ 继续重跑');
+    engPull();          // 联动：第③列时间轴自动刷新（被否决的未来已从日志截断）
   } else {
     hint('回退失败：'+((j&&(j.detail||j.error))||'未知原因'));
   }
@@ -688,7 +734,20 @@ function togglePoll(){
   if(on){ _poll=setInterval(()=>{ engStatus().then(()=>engPull()); }, 3000); hint('自动刷新已开：每 3 秒同步一次状态与步骤'); }
   else { hint('自动刷新已关'); }
 }
-function pickStep(i){ S.gameIdx=i; save(); render(); }
+function pickStep(i){ S.gameIdx=i; save(); render(); showStepDetail(); }
+/* 选中步的详情回填（2026-10-26）：以前只高亮列表项，prompt/原始输出区不动 —— 点了也白点 */
+function showStepDetail(){
+  const cur=S.game&&S.game.steps[S.gameIdx]; if(!cur) return;
+  const out=document.getElementById('out');
+  if(out) out.textContent=cur.raw?('【日志里记录的当时输出】\n'+cur.raw):'（这一步没有记录原始输出）';
+  const pa=document.getElementById('parse');
+  if(pa) pa.innerHTML='<table>'
+    +'<tr><th>耗时</th><td>'+esc(String(cur.ms||'?'))+' ms</td></tr>'
+    +'<tr><th>模型</th><td>'+esc(cur.model||'?')+'</td></tr>'
+    +'<tr><th>座位 / 角色</th><td>'+(cur.seat!=null&&cur.seat!==''?(Number(cur.seat)+1)+' 号 '+esc(cur.role||''):'（旧日志没记座位）')+'</td></tr>'
+    +'<tr><th>判定</th><td>'+(cur.fallback?'<span class="badge b-bad">当时兜底</span>':'<span class="badge b-ok">当时正常</span>')+'</td></tr>'
+    +'</table>';
+}
 function step(d){ if(!S.game) { alert('先导入对局日志'); return; }
   S.gameIdx=Math.max(0,Math.min(S.game.steps.length-1,S.gameIdx+d)); save(); render(); }
 function loadStep(){
