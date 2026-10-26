@@ -50,6 +50,10 @@
             border-radius:9px;padding:0 10px;line-height:1.7}
   #chatBox.empty::after{content:'（还没有直播数据：连上对局服务，开一局就会在这里滚动）';
                         font-size:11.5px;color:var(--dim);align-self:center}
+  /* 对照席位（ref）在列表里的分隔样式 */
+  .agentRefNote{margin:16px 0 6px;padding:5px 8px;font-size:11px;line-height:1.6;
+                color:#9a937f;border:1px dashed var(--line);border-radius:6px;background:#141820}
+  .list-item.ref{border-style:dashed;opacity:.92}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
   th{color:var(--dim);font-weight:500}
@@ -322,9 +326,9 @@ function SAMPLE_AGENTS(){
   return [
     {label:'席位A · 主力', baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
      timeout:60, retries:3, thinking:'disabled', temperature:0.8},
-    /* 席位B：默认与主力同配置（对照用）。注：qwen-plus 是对话模型不是 ASR，
-       但默认统一成主力的 baseUrl/model，跨厂商时再手改（对照才有意义）。 */
-    {label:'席位B · 对照', baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
+    /* 席位B：默认与主力同配置（对照用）。ref=true = 对照席位，只试跑、不进对局。
+       注：qwen-plus 是对话模型不是 ASR，但默认统一成主力配置，跨厂商时再手改。 */
+    {label:'对照席位B · 只试跑', ref:true, baseUrl:'https://api.deepseek.com/v1', model:'deepseek-flash', apiKey:'',
      timeout:60, retries:3, thinking:'disabled', temperature:0.8}
   ];
 }
@@ -346,9 +350,13 @@ let S=load();
 function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const o=JSON.parse(raw); if(o&&o.version){ // 2026-10-26 手写示例快照（S0~S6）退役：老数据裁成 1 个，局面一律从列0选步自动填入
 if(Array.isArray(o.snapshots)&&o.snapshots.length>1){ o.snapshots=[o.snapshots[0]]; } if(!Array.isArray(o.snapshots)||!o.snapshots.length){ o=blank(); } o.activeSnap=0;
 // 2026-10-26 一次性迁移：老数据里默认的席位B是 dashscope/qwen-plus ——
-// 与主力统一（qwen-plus 其实是对话模型不是 ASR，但对照席位默认跟主力同厂商才有意义）
+// 与主力统一；label 含「对照」的席位打 ref 标记（只试跑、不进对局）并排到末尾
 if(Array.isArray(o.agents)&&o.agents.length>1&&o.agents[1]&&o.agents[1].model==='qwen-plus'){
   const a0=o.agents[0]||{}; o.agents[1].baseUrl=a0.baseUrl||o.agents[1].baseUrl; o.agents[1].model=a0.model||o.agents[1].model;
+}
+if(Array.isArray(o.agents)){
+  o.agents.forEach(a=>{ if(a&&/对照/.test(a.label||'')) a.ref=true; });
+  o.agents.sort((x,y)=>(x.ref?1:0)-(y.ref?1:0));
 }
 return o; } } }catch(e){} return blank(); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
@@ -375,7 +383,9 @@ function render(){
   document.getElementById('agentEdit').innerHTML=
       ai('label') + ai('baseUrl') + ai('model') + ai('apiKey')
     + '<div class="row"><div>'+ai('timeout','60')+'</div><div>'+ai('retries','3')+'</div></div>'
-    + '<div class="row"><div>'+ai('temperature','0.8')+'</div><div><label>模型自带思考</label><select onchange="setAgent(\'thinking\',this.value)">'
+    + '<div class="row"><div>'+ai('temperature','0.8')+'</div><div><label>对照席位（勾上 = 只试跑对比，<b>不进对局</b>）</label>'
+    + '<select onchange="setAgent(\'ref\',this.value===\'1\')"><option value="0" '+(!ag.ref?'selected':'')+'>否 · 参与对局</option><option value="1" '+(ag.ref?'selected':'')+'>是 · 只试跑</option></select></div></div>'
+    + '<div class="row"><div><label>模型自带思考</label><select onchange="setAgent(\'thinking\',this.value)">'
     + ['disabled','enabled'].map(v=>`<option value="${v}" ${ag.thinking===v?'selected':''}>${v==='disabled'?'关闭（推荐）':'开启'}</option>`).join('')
     + '</select></div></div>';
 
@@ -403,16 +413,26 @@ function pickSnap(i){ S.activeSnap=i; save(); render(); }
 function pickAgent(i){ S.activeAgent=i; save(); render(); }
 function setSnap(k,v){ S.snapshots[S.activeSnap][k]=v; save(); }
 function setEngine(v){ S.engine=v; save(); }
-function setAgent(k,v){ if(k==='timeout'||k==='retries'||k==='temperature'){ S.agents[S.activeAgent][k]=parseFloat(v)||0; } else { S.agents[S.activeAgent][k]=v; } save(); renderAgentList(); }
+function setAgent(k,v){
+  if(k==='timeout'||k==='retries'||k==='temperature'){ S.agents[S.activeAgent][k]=parseFloat(v)||0; }
+  else if(k==='ref'){ S.agents[S.activeAgent][k]=!!v; }
+  else { S.agents[S.activeAgent][k]=v; }
+  save(); renderAgentList();
+}
 function renderAgentList(){
   const el=document.getElementById('agentList'); if(!el) return;
-  el.innerHTML=S.agents.map((a,i)=>
-    `<div class="list-item ${i===S.activeAgent?'active':''}" onclick="pickAgent(${i})">
+  // 对照席位（ref）永远排末尾、断开距离 —— 对局装配会跳过它们（2026-10-26 用户定）
+  const order=S.agents.map((a,i)=>i).sort((x,y)=>(S.agents[x].ref?1:0)-(S.agents[y].ref?1:0));
+  el.innerHTML=order.map(i=>{
+    const a=S.agents[i], ref=!!a.ref;
+    return (ref?'<div class="agentRefNote">⬇ 对照席位：只用于「试跑 / 双席位对比」各调一次同一个 prompt，<b>不会进入对局</b>（对局装配跳过它们）</div>':'')
+      + `<div class="list-item ${i===S.activeAgent?'active':''} ${ref?'ref':''}" onclick="pickAgent(${i})">
        <div class="nm">${esc(a.label)} <span class="meta">${esc(a.model||'未设模型')}</span></div>
        <div class="meta">key ${a.apiKey?esc(fp(a.apiKey)):'<span class="badge b-warn">未填</span>'} · ${esc(a.baseUrl||'')}</div>
-     </div>`).join('');
-  const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}</option>`).join('');
-  const cmp=document.getElementById('cmpAgent'); if(cmp){ const cur=cmp.value; cmp.innerHTML=opts; cmp.value=cur||String(Math.min(1,S.agents.length-1)); }
+     </div>`;
+  }).join('');
+  const opts=S.agents.map((a,i)=>`<option value="${i}">${esc(a.label)}${a.ref?'（只试跑）':''}</option>`).join('');
+  const cmp=document.getElementById('cmpAgent'); if(cmp){ const cur=cmp.value; cmp.innerHTML=opts; cmp.value=cur||String(S.agents.findIndex(a=>a.ref)>=0?S.agents.findIndex(a=>a.ref):Math.min(1,S.agents.length-1)); }
 }
 function setBlock(id,v){ S.blocks[id].text=v; save(); }
 function toggleBlock(id){ S.blocks[id].on=!S.blocks[id].on; save(); render(); }
@@ -594,37 +614,54 @@ async function stepLab(){
   engStep(); chatSnapSoon();
 }
 
-/* 直接在实验室开一局全 AI 局（2026-10-26 用户要的：不用跳 /play） */
+/* 直接在实验室开一局全 AI 局（2026-10-26 用户要的：不用跳 /play）。
+   🔴 开局前自动把第①列席位推给服务端 —— 对局 AI **永远**用第①列的配置，
+   服务端那份只是兜底（用户：服务端配置之后可能会清空）。 */
 async function startGameHere(){
   const n=Math.max(4,Math.min(9,parseInt(document.getElementById('newAiN').value,10)||6));
   const b=engBase()||'';
   const info=document.getElementById('startInfo');
   try{
+    let pushed=0;
+    const valid=usableAgents();
+    if(valid.length){ pushed=await pushAgentsRaw(valid); }
     const r=await fetch(b+'/api/game/new',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({humans:0,ais:n})});
     if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||('HTTP '+r.status)); }
     const j=await r.json();
     if(info) info.textContent='局号 '+j.gid;
-    hint('已开一局（'+n+' AI，局号 '+j.gid+'）—— AI 的模型与 key：已点「⤴ 应用」走第①列席位，否则走服务端默认；直播马上开始滚动');
+    hint('已开一局（'+n+' AI，局号 '+j.gid+'）—— AI 的模型与 key '+(pushed?'已自动带上第①列席位':'（第①列没配可用席位，走了服务端默认）')+'；直播马上开始滚动');
     chatTick(true);
   }catch(e){ if(info) info.textContent=''; hint('开局失败：'+e.message); }
 }
 
-/* 第①列席位 → 对局服务（key/model/baseUrl 全走第①列；下一局生效） */
-async function pushAgents(){
+/* 第①列里"可参与对局"的席位：填了 baseUrl+model、且不是对照席位 */
+function usableAgents(){
+  return S.agents.filter(a=>!a.ref&&a.baseUrl&&a.model).map(a=>({
+    label:a.label,baseUrl:a.baseUrl,model:a.model,apiKey:a.apiKey,
+    temperature:Number(a.temperature)||0.8,timeout:Number(a.timeout)||60,
+    thinking:a.thinking||'disabled'}));
+}
+async function pushAgentsRaw(valid){
   const b=engBase()||'';
-  const agents=S.agents.map(a=>({label:a.label,baseUrl:a.baseUrl,model:a.model,apiKey:a.apiKey,
-    temperature:Number(a.temperature)||0.8,timeout:Number(a.timeout)||60,thinking:a.thinking||'disabled'}));
-  const valid=agents.filter(a=>a.baseUrl&&a.model);
+  const r=await fetch(b+'/api/lab/agents-config',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({agents:valid})});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const j=await r.json();
+  const el=document.getElementById('agentsApplied');
+  if(el) el.textContent='已生效 ×'+j.count+'（下一局开局即用；对局中不受影响）';
+  return j.count;
+}
+
+/* 第①列席位 → 对局服务（key/model/baseUrl 全走第①列；下一局生效）。
+   对照席位（ref）不推 —— 它们只试跑，不进对局。 */
+async function pushAgents(){
+  const valid=usableAgents();
   if(!valid.length){ hint('第①列还没有可用席位（要填接口地址+模型名）'); return; }
   try{
-    const r=await fetch(b+'/api/lab/agents-config',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({agents:valid})});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const j=await r.json();
-    document.getElementById('agentsApplied').textContent='已生效 ×'+j.count+'（下一局开局即用；对局中不受影响）';
-    hint('第①列席位已推给对局服务：'+valid.map(a=>a.model).join('、')+' —— 开一局，AI 的 key/模型全走这套配置');
+    await pushAgentsRaw(valid);
+    hint('第①列席位已推给对局服务：'+valid.map(a=>a.model).join('、')+' —— 开一局，AI 的 key/模型全走这套配置（对照席位不参与）');
   }catch(e){ hint('推送失败：'+e.message); }
 }
 

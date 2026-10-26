@@ -968,6 +968,14 @@ def new_game(req: NewGameReq) -> Dict[str, Any]:
                     layout=req.layout)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    # 🔴 2026-10-26：暂停门状态是跨局持久的（lab/control.json）—— 上一局回退后
+    # 忘了解暂停，新局开局就被门拦住"对局不动"（用户踩过）。新局 = 新意图，
+    # 开局即自动解除暂停；回退/单步的暂停语义只属于当前那一局。
+    try:
+        import lab_api as _lab
+        _lab.set_paused(False)
+    except Exception:                                    # noqa: BLE001
+        pass
 
     # 只保留最近若干局，避免内存无限增长（探针阶段不做持久化）。
     # ⚠️ 按**最近使用**淘汰，不是按创建顺序 —— 按创建顺序会把「人家正在打的那一局」挤掉，
