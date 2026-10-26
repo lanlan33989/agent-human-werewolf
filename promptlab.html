@@ -191,11 +191,11 @@
 
   <!-- 中 -->
   <section class="col">
-    <h2>② 线上提示词契约（改完下一局生效）</h2>
+    <h2>② 线上提示词契约（与主产品同一份；改完下一次模型调用即生效）</h2>
     <div class="body">
       <div class="flexline">
         <button title="从对局服务 /api/admin/prompts 拉取全部可改的提示词条目（按分组展示）" onclick="liveLoad()">载入线上契约</button>
-        <button title="把改动过的条目保存回对局服务（只提交你改过的项），下一局开始生效" onclick="liveSave()">保存到线上</button>
+        <button title="把改动过的条目保存回对局服务（只提交你改过的项）；保存后下一次模型调用就用新文本（包括进行中的局）——想只影响新局，请在没有对局进行时保存" onclick="liveSave()">保存到线上</button>
         <span class="muted" id="liveInfo">未载入</span>
       </div>
       <div id="liveBlocks" class="muted">载入后这里按分组列出全部可改条目；只读守卫项也会列出来（不可改）。对局服务地址留空 = 直连当前同源。</div>
@@ -602,7 +602,7 @@ async function liveSave(){
     if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
     _live.changed.forEach(k=>{ _live.items[k].value=_live.items[k].value; });
     _live.changed.clear(); renderLive();
-    hint('已保存 '+((j.applied||[]).length)+' 项，下一局开始生效');
+    hint('已保存 '+((j.applied||[]).length)+' 项，下一次模型调用即生效（含进行中的局）');
   }catch(e){ hint('保存失败：'+e.message); }
 }
 

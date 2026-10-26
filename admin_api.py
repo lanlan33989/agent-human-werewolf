@@ -402,7 +402,8 @@ def _read_path(path: list):
 
 def _write_path(path: list, value) -> None:
     """写回。顶层字符串用 setattr；表里的叶子**原地改字典** ——
-    代码是在**调用时**读这些表的，所以原地改就对下一局生效（不必重启，也不必 reload）。"""
+    代码是在**每次调用时**读这些表的，所以原地改下一次模型调用就生效
+    （不必重启、不必 reload；进行中的局同样会用到新文本）。"""
     mod = importlib.import_module(path[0])
     if len(path) == 2:
         setattr(mod, path[1], value)
@@ -548,7 +549,8 @@ def register(app: FastAPI, *, reload_fn, snapshot_fn, page_fn) -> None:
             "groups": groups,
             "readonly": ro,
             "count": sum(len(gp["items"]) for gp in groups),
-            "note": "改 prompt **立刻生效**（下一局开始用；进行中的局不受影响）。"
+            "note": "改 prompt **立刻生效**：下一次模型调用就用新文本（"
+                    "包括进行中的局 —— 想只影响新局，请在没有对局进行时改）。"
                     "表里的条目是**动态展开**的 —— 代码里加了新措辞，这里自动多一项。",
         })
 
@@ -603,7 +605,8 @@ def register(app: FastAPI, *, reload_fn, snapshot_fn, page_fn) -> None:
         _write_state(st)
         print("[admin] 改了 prompt " + str(len(applied)) + " 项：" + ", ".join(applied[:8])
               + (" …" if len(applied) > 8 else "") + "（下一局生效）", flush=True)
-        return JSONResponse({"ok": True, "applied": applied, "note": "下一局开始时生效"})
+        return JSONResponse({"ok": True, "applied": applied,
+                             "note": "已生效：下一次模型调用即用新文本（含进行中的局）"})
 
     @app.post("/api/admin/reload")
     def admin_reload(request: Request) -> JSONResponse:
