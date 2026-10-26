@@ -608,6 +608,13 @@ async function api(path, opts){
       if (v.investigations) out.investigations = v.investigations;
       return out;
     }
+    /* 🔴 2026-10-27 回归修复：/public 这一支必须返回场景数据。上一版把兜底
+       改成 `return {ok:true}` 后，tick 的 `PUBLIC = await api('/public')`
+       被 {ok:true} 覆盖 ⇒ 所有面板（拨号盘）当场消失，只剩投票那类
+       首拍就已渲染好的屏。按路径分别给，别再统一兜底。
+       ⚠️ 注释里禁止再写「星号 + 斜杠」的收尾组合：它会把这段块注释提前
+       闭合，后半句变成代码 ⇒ 整段脚本 SyntaxError ⇒ 页面停在封面 p0。 */
+    if (path.indexOf('/public') > 0) return DEMO.public;
     if (path.indexOf('/pending_seats') > 0) return DEMO.ps || { seats: [] };
     if (path.indexOf('/act') > 0 && DEMO.next && window.DEMO_SCENES
         && DEMO_SCENES[DEMO.next]){
@@ -615,8 +622,8 @@ async function api(path, opts){
          用 next 串成一条链）—— 否则静态数据永远停在原状态，提交后底部
          一直显示"AI 正在想…"误导人以为卡了。 */
       var _nx = DEMO_SCENES[DEMO.next];
-      DEMO = { public: nx.public, roles: nx.roles || DEMO_SCENES.roles || null,
-               ps: nx.public._ps || { seats: [] }, next: nx.next || null };
+      DEMO = { public: _nx.public, roles: _nx.roles || DEMO_SCENES.roles || null,
+               ps: _nx.public._ps || { seats: [] }, next: _nx.next || null };
       PUBLIC = DEMO.public;
     }
     return { ok: true };                   /* /act、/arm… 提交一律成功 */
@@ -1219,7 +1226,10 @@ function loadScript(src){
       cardQueue = [0, 1, 2, 3];            /* 4 张身份牌轮着翻，翻完顺势进桌 */
       nextCard();
     } else {
-      DEMO = { public: sc.public, roles: sc.roles, ps: sc.public._ps || { seats: [] } };
+      /* next 必须带上：否则 DEMO.next 恒为 undefined，提交后推进分支
+         （api() 里的 /act）永远不触发，点了号码就一直停在"AI 正在想…" */
+      DEMO = { public: sc.public, roles: sc.roles,
+               ps: sc.public._ps || { seats: [] }, next: sc.next || null };
       GID = 'DEMO'; PUBLIC = sc.public;
       VOICE_ON = false;                    /* 演示模式关语音：播报门（voicedUp）恒过，面板直接出 */
       resumeInto('DEMO', sc.public);
