@@ -19,7 +19,7 @@
   button:hover{border-color:var(--accent)}
   button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   button.go{background:var(--ok);border-color:var(--ok);color:#0b2019;font-weight:600}
-  main{display:grid;grid-template-columns:300px 1fr 390px;gap:10px;padding:10px;height:calc(100vh - 50px)}
+  main{display:grid;grid-template-columns:300px 280px 1fr 390px;gap:10px;padding:10px;height:calc(100vh - 50px)}
   .col{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
   .col h2{margin:0;padding:8px 12px;font-size:12.5px;font-weight:600;color:var(--dim);border-bottom:1px solid var(--line);background:var(--panel2)}
   .body{padding:10px;overflow:auto;flex:1}
@@ -39,7 +39,7 @@
   #out{white-space:pre-wrap;background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px;font:12.5px/1.7 "Cascadia Mono",Consolas,monospace;min-height:110px;max-height:30vh;overflow:auto}
   /* 对局直播（群聊式） */
   #chatBox{background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px;
-           height:34vh;overflow:auto;display:flex;flex-direction:column;gap:6px}
+           height:52vh;overflow:auto;display:flex;flex-direction:column;gap:6px}
   .chat-sys{align-self:center;max-width:94%;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.5}
   .chat-msg{align-self:flex-start;max-width:90%;background:#1b2334;border:1px solid var(--line);
             border-radius:10px 10px 10px 3px;padding:5px 9px;font-size:12.5px;line-height:1.6}
@@ -72,11 +72,10 @@
 </header>
 
 <main>
-  <!-- 左 -->
+  <!-- 最左：对局直播（群聊式） -->
   <section class="col">
-    <h2>① 局面快照 · 对局直播</h2>
+    <h2>⓪ 对局直播（群聊式）</h2>
     <div class="body">
-      <div class="sub">💬 对局直播（群聊式 · 可暂停 · 可回退重跑）</div>
       <div class="flexline" id="chatHead"><span class="muted" id="chatInfo">未连接</span></div>
       <div id="chatBox" class="empty"></div>
       <div class="flexline">
@@ -92,8 +91,13 @@
         <button title="把整局退回所选快照：引擎状态、播报、游标全部回退，过期预跑决策作废，然后自动暂停 —— 改完提示词从那里重跑（重跑整步，规则等价但模型输出会有差异）" onclick="chatRewind()">⏪ 回退</button>
       </div>
       <div class="muted" style="font-size:11px">回退是<b>真回退</b>：引擎状态整体恢复到那一步之前；重跑的是整步（一步可能含几次模型调用）。回退后自动暂停。</div>
+    </div>
+  </section>
 
-      <div class="sub">快照（实验室的试跑局面）</div>
+  <!-- 左 -->
+  <section class="col">
+    <h2>① 局面快照</h2>
+    <div class="body">
       <div id="snapList"></div>
       <div class="flexline">
         <button title="新建一个空白局面快照，手动填写身份/场上情况/时间线等字段" onclick="newSnapshot()">+ 新建快照</button>
