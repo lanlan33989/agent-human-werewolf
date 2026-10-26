@@ -7,6 +7,9 @@
 *.pfx
 _runtime.json
 
+# ---- 两周工作安排：只在小组群私下传（内含 key），不进 git（2026-10-27 撤出） ----
+docs/两周工作安排-10.27-11.7.md
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
