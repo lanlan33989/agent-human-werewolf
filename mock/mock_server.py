@@ -21,6 +21,7 @@
 import argparse
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +81,21 @@ class H(BaseHTTPRequestHandler):
                 if path.endswith("/new"):
                     data["gid"] = GID
                 return self._send(data)
+        # 身份牌（2026-10-27）：按座位轮换角色 —— 翻 4 张牌能看 4 种身份样式
+        m = re.match(r"^/api/game/" + GID + r"/seat/(\d+)$", path)
+        if m:
+            n = int(m.group(1))
+            roles = ["wolf", "seer", "guard", "witch", "villager"]
+            role = roles[n % len(roles)]
+            return self._send({
+                "seat": n, "role": role,
+                "alive": True, "round": 0, "phase": "SETUP",
+                "speech": [], "timeline": [],
+                "pending": f"human_look:{n}",
+                "is_my_turn_to_speak": False, "is_my_turn_to_vote": False,
+                "players": [{"seat": i, "display": f"{i + 1}号", "kind": "human" if i == n else "ai", "alive": True}
+                            for i in range(4)],
+            })
         st = _static(path)
         if st is not None:
             mime, body = st
