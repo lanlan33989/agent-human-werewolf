@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#5B21B6">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>面杀AI玩家 · 对局</title>
+<title>面杀高手 · 对局</title>
 <!--
   真引擎驱动的对局页。
 
@@ -366,9 +366,13 @@
   <!-- ============ 第 0 页：封面 / 开局 ============ -->
   <section class="page on" id="p0">
     <div class="mid">
-      <div class="logo">面杀 AI 玩家</div>
+      <div class="logo">面杀高手</div>
       <div class="sub">4 个人，玩出 8 人局的推理密度</div>
       <div class="tip" style="margin-top:22px">把这部手机放在桌子中央</div>
+      <!-- 2026-10-26：导出对局落盘日志（每次 AI 决策一行）——给提示词实验室复盘用 -->
+      <div style="margin-top:14px"><a href="#" id="btnExportLab"
+        style="font-size:12px;color:#8b8578;text-decoration:underline"
+        onclick="exportLabFile(event)">⤓ 导出对局文件（导入提示词实验室用）</a></div>
     </div>
     <div class="pad">
       <div class="h2">定几个人</div>
@@ -791,7 +795,12 @@ function buildPlan(){
   var wrap = $('planWrap'); if (!wrap) return;
   if (n <= 0){ wrap.style.display = 'none'; PLAN = []; return; }
   wrap.style.display = 'block';
-  if (PLAN.length !== n) PLAN = defaultPlan(nh, na);
+  /* 🔴 2026-10-26 修：只比长度会漏 —— 上局 2真人2AI（长4）→ 这局 0真人4AI（长4），
+     长度相同但真人计数不同，旧 PLAN 直接发后端 ⇒ 400「layout 人数不一致」。
+     长度**和**真人计数都对上才复用，否则重建默认座次。 */
+  var hn = 0, k;
+  for (k = 0; k < PLAN.length; k++) if (PLAN[k] === 'human') hn++;
+  if (PLAN.length !== n || hn !== nh) PLAN = defaultPlan(nh, na);
   var h = '';
   for (var i = 0; i < n; i++){
     h += '<span class="planChip ' + (PLAN[i] === 'human' ? 'ph' : 'pa')
@@ -844,6 +853,23 @@ function resetEndLinks(){
   el.style.display = 'none';
   var a = $('lnkReport');
   if (a) a.removeAttribute('href');
+}
+
+/* 导出对局落盘日志（2026-10-26）：每次 AI 决策一行的 JSONL，
+   提示词实验室「导入对局日志」直接吃这个文件 → 生成可回退时间轴。 */
+async function exportLabFile(ev){
+  ev.preventDefault();
+  try{
+    var r = await fetch('/api/lab/steps?limit=0');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var txt = await r.text();
+    if (!txt.trim()) { alert('还没有对局落盘记录：先开一局（配了真模型 key 的局才会记录每次决策）'); return; }
+    var blob = new Blob([txt], {type: 'application/jsonl'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'lab-steps-' + new Date().toISOString().slice(0,16).replace(/[:T]/g,'') + '.jsonl';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){ alert('导出失败：' + e.message); }
 }
 
 async function newGame(){

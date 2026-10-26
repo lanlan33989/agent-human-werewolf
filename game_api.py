@@ -242,12 +242,17 @@ class Session:
         #     直接挨着 —— 用户点名要改（人类与人类之间必有至少 1 个 AI）。
         if layout is not None:
             kinds = list(layout)
+            # 2026-10-26 宽容化：长度/取值仍强校验（坏数据没救），但「人类数对不上」
+            # 不再 400 —— 那是前端残留旧座次（比如上局 2 真人 2 AI、这局 0 真人 4 AI）
+            # 的典型症状，直接忽略编排退回默认座次更符合直觉。
             if len(kinds) != n or any(k not in ("human", "ai") for k in kinds):
                 raise ValueError("layout 必须是长度为 " + str(n)
                                  + " 的 human/ai 数组")
             if kinds.count("human") != humans:
-                raise ValueError("layout 里的人类数（" + str(kinds.count("human"))
-                                 + "）与 humans（" + str(humans) + "）不一致")
+                print("[new] layout 人类数(" + str(kinds.count("human"))
+                      + ")与 humans(" + str(humans) + ")不一致 —— 忽略编排，用默认座次",
+                      flush=True)
+                kinds = default_layout(humans, n - humans)
         else:
             kinds = default_layout(humans, n - humans)
         self.game = Game(board, kinds, seed=seed)

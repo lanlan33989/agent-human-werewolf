@@ -338,7 +338,13 @@ function blank(){
 }
 let S=load();
 function load(){ try{ const raw=localStorage.getItem(KEY); if(raw){ const o=JSON.parse(raw); if(o&&o.version){ // 2026-10-26 手写示例快照（S0~S6）退役：老数据裁成 1 个，局面一律从列0选步自动填入
-if(Array.isArray(o.snapshots)&&o.snapshots.length>1){ o.snapshots=[o.snapshots[0]]; } if(!Array.isArray(o.snapshots)||!o.snapshots.length){ o=blank(); } o.activeSnap=0; return o; } } }catch(e){} return blank(); }
+if(Array.isArray(o.snapshots)&&o.snapshots.length>1){ o.snapshots=[o.snapshots[0]]; } if(!Array.isArray(o.snapshots)||!o.snapshots.length){ o=blank(); } o.activeSnap=0;
+// 2026-10-26 一次性迁移：老数据里默认的席位B是 dashscope/qwen-plus ——
+// 与主力统一（qwen-plus 其实是对话模型不是 ASR，但对照席位默认跟主力同厂商才有意义）
+if(Array.isArray(o.agents)&&o.agents.length>1&&o.agents[1]&&o.agents[1].model==='qwen-plus'){
+  const a0=o.agents[0]||{}; o.agents[1].baseUrl=a0.baseUrl||o.agents[1].baseUrl; o.agents[1].model=a0.model||o.agents[1].model;
+}
+return o; } } }catch(e){} return blank(); }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
 
 /* ================= 渲染 ================= */
