@@ -2,7 +2,7 @@
 
 > GitHub：https://github.com/lanlan33989/agent-human-werewolf/tree/main/frontend
 > 接口契约（先读这份再动代码）：https://github.com/lanlan33989/agent-human-werewolf/blob/main/docs/contract.md
-> 工作台（提示词实验室）前端也在本目录：`promptlab.html`，详见 `docs/lab-README.md`
+> 工作台（提示词实验室）前端也在本目录：`promptlab.html`，详见 `docs/工作台-README.md`
 
 ## 一句话
 
@@ -19,7 +19,7 @@
 | `speech_ui.js` | 播报队列 + 夜间门控：谁的话什么时候念出来、夜间面板什么时候允许弹（**弹面板只听服务端 `now.started`**，不许前端自己提前） |
 | `rec.js` | 录音共享模块（按住说话 → 16k WAV → `/api/asr`）；采样率换算只在这里做一次 |
 | `table.js` / `table.css` | 椭圆排座/座位特效/样式（从 demo 提取，未动） |
-| `promptlab.html` | 提示词实验室（三列：席位 / 线上契约 / 直播回放）—— 见 `docs/lab-README.md` |
+| `promptlab.html` | 提示词实验室（三列：席位 / 线上契约 / 直播回放）—— 见 `docs/工作台-README.md` |
 | `admin.html` | 配置台（key / 通道 / 音色 / prompt，服务端 `/api/admin/*` 渲染） |
 | `board.html` | 榜单与战报（只读，随便刷新） |
 

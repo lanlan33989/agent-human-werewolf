@@ -75,11 +75,15 @@ python -m venv .venv
 
 ## 谁该看哪份（按角色进，别从头读）
 
+三份上手文档**并列**，动哪个看哪个：
+[backend/README.md](backend/README.md)（后端）· [frontend/README.md](frontend/README.md)（前端）·
+[docs/工作台-README.md](docs/%E5%B7%A5%E4%BD%9C%E5%8F%B0-README.md)（工作台：提示词实验室 / 配置台 / 榜单与战报）。
+
 | 你是 | 第一件事 | 入口文档 |
 |---|---|---|
 | **前端负责人** | clone 完**不需要装任何环境、不需要起后端**，先把画廊跑起来看全部界面 | [frontend/README.md](frontend/README.md) · [docs/前端界面清单.md](docs/前端界面清单.md) |
 | **后端负责人** | 建 venv → 一键启动 → 跑回归 | [backend/README.md](backend/README.md) · [docs/contract.md](docs/contract.md) · [docs/openapi.json](docs/openapi.json) |
-| **调提示词 / 跑评测（工作台）** | 起服务后开 `/lab`（提示词实验室）与 `/board`（榜单与战报） | [docs/lab-README.md](docs/lab-README.md) · [docs/存档与度量口径.md](docs/存档与度量口径.md) |
+| **调提示词 / 跑评测（工作台）** | 起服务后开 `/lab`（提示词实验室）、`/admin`（配置台）、`/board`（榜单与战报） | [docs/工作台-README.md](docs/%E5%B7%A5%E4%BD%9C%E5%8F%B0-README.md) · [docs/存档与度量口径.md](docs/存档与度量口径.md) |
 
 一张联接清单（写排期时直接贴）：**[docs/入口链接.md](docs/入口链接.md)**。
 

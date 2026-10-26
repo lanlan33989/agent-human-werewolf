@@ -23,7 +23,7 @@
 | `ai_behaviors.py` | AI 决策与预跑收割的粘合（等待/超时丢弃/默认放弃） |
 | `layers_llm.py` | LLM 适配（OpenAI 兼容）：重试/超时策略、usage 打点、温度/thinking 配置 |
 | `layers_asr.py` / `layers_tts.py` | 云 ASR（qwen3-asr-flash）/ 云 TTS（qwen-tts）适配；TTS 缺 key 回落浏览器本地合成 |
-| `lab_api.py` | **工作台 API**（详见 `docs/lab-README.md`）：快照/回退/重跑/暂停门/步骤落盘/席位覆盖/导出 |
+| `lab_api.py` | **工作台 API**（详见 `docs/工作台-README.md`）：快照/回退/重跑/暂停门/步骤落盘/席位覆盖/导出 |
 | `admin_api.py` | **配置台 + 提示词契约 API**：key 白名单改动（密钥只进不出）、prompt 可改清单（动态展开 + 守门）、`_runtime.json` 持久化 |
 | `run_archive.py` | 对局自动存档：每局 `runs/<时间>_<局号>_v<git短哈希>/`（meta/trace/timeline/result，详见根 README 的度量一节） |
 | `experience.py` / `metrics.py` / `report.py` / `summarize.py` | 跨局经验库 / 对局指标 / 战报 markdown / 长上下文压缩 |
