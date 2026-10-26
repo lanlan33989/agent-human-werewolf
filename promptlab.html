@@ -104,7 +104,7 @@
 
       <div class="flexline">
         <button class="go" title="用第①列席位 × 第②列块 × 选中步局面，本地组装并调用模型（不进对局）" onclick="runOnce(false)">▶ 试跑这一步</button>
-        <button title="用另一个席位同时跑同一个局面，并排对比" onclick="runOnce(true)">⇄ 双席位对比</button>
+        <button title="不是两个席位同台进对局 —— 是用两个席位各自独立调用同一个 prompt（同一局面），并排对比两个模型的回答，用于选模型/调提示词。对局里 AI 的配置走「⤴ 应用到对局」" onclick="runOnce(true)">⇄ 双席位对比</button>
         <span id="status" class="muted">尚未运行</span>
       </div>
       <div class="flexline">
@@ -119,10 +119,16 @@
       <div class="sub">决策日志（本地试跑自动累加）</div>
       <div id="logWrap" style="max-height:16vh;overflow:auto"></div>
 
-      <div class="sub">连接 · 席位接管</div>
+      <div class="sub">连接 · 开局 · 席位接管</div>
       <div class="flexline">
         <input id="engine" class="grow" placeholder="对局服务地址（留空=同源）" onchange="setEngine(this.value)">
         <button title="刷新连接状态" onclick="engStatus()">连接</button>
+      </div>
+      <div class="flexline">
+        <label style="margin:0">AI 数 <input type="number" id="newAiN" value="6" min="4" max="9"
+          style="width:50px"></label>
+        <button title="直接在这里开一局全 AI 局（不跳 /play）：AI 的模型与 key 用第①列席位（若已点「⤴ 应用到对局」），否则用服务端默认配置" onclick="startGameHere()">▶ 开一局</button>
+        <span class="muted" id="startInfo"></span>
       </div>
       <div class="flexline">
         <button title="把第①列的 AI 席位（baseUrl/model/key/温度）推给对局服务：下一局开局的 AI 全部按这套配置装配（第 1 个 AI 用席位A，依序循环），key 也走第①列" onclick="pushAgents()">⤴ 把第①列席位应用到对局</button>
@@ -586,6 +592,23 @@ async function stepLab(){
     }catch(e){ hint('提示词覆盖设置失败：'+e.message+'（本次单步仍用服务端原 prompt）'); }
   }
   engStep(); chatSnapSoon();
+}
+
+/* 直接在实验室开一局全 AI 局（2026-10-26 用户要的：不用跳 /play） */
+async function startGameHere(){
+  const n=Math.max(4,Math.min(9,parseInt(document.getElementById('newAiN').value,10)||6));
+  const b=engBase()||'';
+  const info=document.getElementById('startInfo');
+  try{
+    const r=await fetch(b+'/api/game/new',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({humans:0,ais:n})});
+    if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.detail||('HTTP '+r.status)); }
+    const j=await r.json();
+    if(info) info.textContent='局号 '+j.gid;
+    hint('已开一局（'+n+' AI，局号 '+j.gid+'）—— AI 的模型与 key：已点「⤴ 应用」走第①列席位，否则走服务端默认；直播马上开始滚动');
+    chatTick(true);
+  }catch(e){ if(info) info.textContent=''; hint('开局失败：'+e.message); }
 }
 
 /* 第①列席位 → 对局服务（key/model/baseUrl 全走第①列；下一局生效） */
