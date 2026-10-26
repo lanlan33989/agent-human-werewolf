@@ -285,6 +285,17 @@ PLAY_KEYS = (("asr", "ASR_API_KEY", "DASHSCOPE_API_KEY"),
              ("tts", "DASHSCOPE_API_KEY", None))
 
 
+def _lab_override_active() -> bool:
+    """实验室第①列席位是否正在接管对局装配（agents_runtime.json 非空）。
+    覆盖存在时对局 LLM 走席位 key —— 主产品改的 LLM_API_KEY 只影响兜底通道，
+    必须如实告知，否则用户以为改了就生效（与实验室的优先级不一致会被当成 bug）。"""
+    try:
+        import lab_api
+        return bool(lab_api.get_agents_config())
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
 def api_play_keys_get(request: Request):
     local = _is_local(request)
     out = {}
@@ -293,6 +304,7 @@ def api_play_keys_get(request: Request):
         if not v and fallback:
             v = os.environ.get(fallback, "")
         out[name] = v if local else fingerprint(v)
+    out["llm_override"] = _lab_override_active()
     return out
 
 
@@ -309,6 +321,8 @@ async def api_play_keys_set(request: Request):
         v = str(body.get(name) or "").strip()
         if not v or env not in ADMIN_ENV_KEYS:
             continue
+        if os.environ.get(env, "") == v:
+            continue                     # 值没变：不写不 reload（避免假"已更新"）
         os.environ[env] = v
         st.setdefault("env", {})[env] = v
         changed.append(env)
@@ -322,6 +336,10 @@ async def api_play_keys_set(request: Request):
             note = "已热替换模型通道（进行中的对局不受影响，下一局生效）"
         except Exception as e:                               # noqa: BLE001
             note = "key 已保存，但热替换失败（重启服务后生效）：" + repr(e)
+    # ⚠️ 必须在最终 note 确定之后追加：reload 块会整体覆盖 note，放前面会被吃掉
+    if "LLM_API_KEY" in changed and _lab_override_active():
+        note += ("。⚠️ 对局的 LLM 走实验室第①列席位配置（key 以席位为准），"
+                 "本页的 LLM key 要等席位清空后才用于对局")
     print("[admin] 主产品封面更新 key：" + ", ".join(changed), flush=True)
     return {"ok": True, "changed": changed, "note": note}
 

@@ -654,6 +654,10 @@ async function loadKeys(){
     $('kAsr').value = j.asr || '';
     $('kLlm').value = j.llm || '';
     $('kTts').value = j.tts || '';
+    /* 2026-10-26 一致性检查（用户要求）：实验室第①列席位接管对局 LLM 时必须如实说，
+       否则这里填的 LLM key 下一局"看起来生效了"其实被席位覆盖挡住。 */
+    if (j.llm_override)
+      $('keysMsg').textContent = '⚠️ 对局的 LLM 目前走实验室第①列席位（覆盖此处的 LLM key）；ASR / TTS 以这里为准';
   }catch(e){ $('keysMsg').textContent = '当前配置读取失败：' + e.message; }
 }
 async function applyKeys(){
