@@ -37,6 +37,17 @@
   .badge{font-size:11px;padding:1px 6px;border-radius:9px}
   .b-ok{background:#14432f;color:var(--ok)} .b-warn{background:#463612;color:var(--warn)} .b-bad{background:#4a1f21;color:var(--bad)}
   #out{white-space:pre-wrap;background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px;font:12.5px/1.7 "Cascadia Mono",Consolas,monospace;min-height:110px;max-height:30vh;overflow:auto}
+  /* 对局直播（群聊式） */
+  #chatBox{background:#0f1218;border:1px solid var(--line);border-radius:6px;padding:8px;
+           height:34vh;overflow:auto;display:flex;flex-direction:column;gap:6px}
+  .chat-sys{align-self:center;max-width:94%;font-size:11.5px;color:var(--dim);text-align:center;line-height:1.5}
+  .chat-msg{align-self:flex-start;max-width:90%;background:#1b2334;border:1px solid var(--line);
+            border-radius:10px 10px 10px 3px;padding:5px 9px;font-size:12.5px;line-height:1.6}
+  .chat-msg .who{font-size:10.5px;color:#7fa5ff;display:block;margin-bottom:1px}
+  .chat-day{align-self:center;font-size:10.5px;color:#5b6472;border:1px dashed var(--line);
+            border-radius:9px;padding:0 10px;line-height:1.7}
+  #chatBox.empty::after{content:'（还没有直播数据：连上对局服务，开一局就会在这里滚动）';
+                        font-size:11.5px;color:var(--dim);align-self:center}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
   th{color:var(--dim);font-weight:500}
@@ -63,8 +74,26 @@
 <main>
   <!-- 左 -->
   <section class="col">
-    <h2>① 局面快照</h2>
+    <h2>① 局面快照 · 对局直播</h2>
     <div class="body">
+      <div class="sub">💬 对局直播（群聊式 · 可暂停 · 可回退重跑）</div>
+      <div class="flexline" id="chatHead"><span class="muted" id="chatInfo">未连接</span></div>
+      <div id="chatBox" class="empty"></div>
+      <div class="flexline">
+        <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
+        <button title="取消暂停，对局继续自动推进" onclick="engPause(false)">▶ 继续</button>
+        <button title="暂停状态下再往前走一步，走完自动停住" onclick="engStep();chatSnapSoon()">⏭ 单步</button>
+        <button title="刷新直播" onclick="chatTick(true)">⟳</button>
+      </div>
+      <div class="flexline">
+        <select id="chatSnapSel" class="grow" title="局面快照：每一步开始前的完整引擎状态（deepcopy）">
+          <option value="">— 回退到哪一步之前 —</option>
+        </select>
+        <button title="把整局退回所选快照：引擎状态、播报、游标全部回退，过期预跑决策作废，然后自动暂停 —— 改完提示词从那里重跑（重跑整步，规则等价但模型输出会有差异）" onclick="chatRewind()">⏪ 回退</button>
+      </div>
+      <div class="muted" style="font-size:11px">回退是<b>真回退</b>：引擎状态整体恢复到那一步之前；重跑的是整步（一步可能含几次模型调用）。回退后自动暂停。</div>
+
+      <div class="sub">快照（实验室的试跑局面）</div>
       <div id="snapList"></div>
       <div class="flexline">
         <button title="新建一个空白局面快照，手动填写身份/场上情况/时间线等字段" onclick="newSnapshot()">+ 新建快照</button>
@@ -542,16 +571,87 @@ async function liveSave(){
   }catch(e){ hint('保存失败：'+e.message); }
 }
 
+/* ---- 对局直播（群聊式）+ 真回退 ---- */
+let _chatN=0;                      // 已渲染的时间线条数（增量渲染游标）
+let _chatSnapped=false;            // 单步后等快照列表更新
+let _chatSnapAt=0;                 // 快照下拉上次刷新时刻（限频）
+const PHASE_CN={night:'夜晚',dawn:'天亮',discuss:'白天发言',vote:'投票',exile:'结算',setup:'准备',ended:'结束'};
+function _phaseCn(p){ return PHASE_CN[p]||p||''; }
+function chatBubble(m){
+  if(m.t==='say'){
+    return '<div class="chat-msg"><span class="who">'+esc(String((m.seat!=null?m.seat:'?')))+' 号</span>'
+         + esc(m.s||'')+'</div>';
+  }
+  return '<div class="chat-sys">'+esc(m.s||'')+'</div>';
+}
+async function chatTick(force){
+  const b=engBase()||'';
+  let j=null;
+  try{ const r=await fetch(b+'/api/lab/live?limit=300'); if(r.ok) j=await r.json(); }catch(e){}
+  const info=document.getElementById('chatInfo'); if(!info) return;
+  if(!j||!j.found){ info.innerHTML='<span class="muted">未连接（填右上/中栏的对局服务地址；开了对局自动出现）</span>'; return; }
+  info.innerHTML=(j.paused?'<span class="badge b-warn">已暂停</span>':'<span class="badge b-ok">推进中</span>')
+    + ' 第'+(j.round||'?')+'天 · '+esc(_phaseCn(j.phase))
+    + (j.winner?(' · <b>'+esc(j.winner==='wolf'?'狼人胜':'好人胜')+'</b>'):'')
+    + ' · 步 '+(j.steps||0);
+  const tl=j.timeline||[];
+  const box=document.getElementById('chatBox');
+  if(tl.length<_chatN||force){ _chatN=0; box.innerHTML=''; box.classList.remove('empty'); }
+  if(_chatN===0&&!tl.length){ return; }
+  // 增量渲染：只追加 _chatN 之后的新条目
+  for(let k=_chatN;k<tl.length;k++){
+    box.insertAdjacentHTML('beforeend', chatBubble(tl[k]));
+  }
+  _chatN=tl.length;
+  if(tl.length) box.classList.remove('empty');
+  box.scrollTop=box.scrollHeight;
+  // 步数变了就顺手刷新回退下拉（限频 5 秒，别每拍都拉）
+  if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); }
+}
+async function chatSnap(){
+  _chatSnapAt=Date.now();
+  const b=engBase()||'';
+  let j=null;
+  try{ const r=await fetch(b+'/api/lab/snapshots?limit=200'); if(r.ok) j=await r.json(); }catch(e){}
+  const sel=document.getElementById('chatSnapSel'); if(!sel) return;
+  const cur=sel.value;
+  const rows=(j&&j.snapshots)||[];
+  sel.innerHTML='<option value="">— 回退到哪一步之前（共 '+rows.length+' 步快照）—</option>'
+    + rows.slice().reverse().map(s=>
+        '<option value="'+s.i+'">第 '+s.i+' 步 · 第'+(s.round||'?')+'天 '+esc(_phaseCn(s.phase))+'</option>').join('');
+  if(cur) sel.value=cur;
+  _chatSnapped=false;
+}
+function chatSnapSoon(){ _chatSnapped=true; }
+async function chatRewind(){
+  const sel=document.getElementById('chatSnapSel');
+  const i=parseInt(sel.value,10);
+  if(!i){ hint('先在下拉里选要回退到的步'); return; }
+  const b=engBase()||'';
+  let j=null;
+  try{ const r=await fetch(b+'/api/lab/rewind?i='+i,{method:'POST'}); j=await r.json(); }catch(e){ hint('回退失败：'+e.message); return; }
+  if(j&&j.ok){
+    _chatN=0;
+    hint('已回退到第 '+j.rewound_to+' 步之前（第'+(j.round||'?')+'天 '+_phaseCn(j.phase)+'），对局已暂停；改完提示词按 ⏭ 单步或 ▶ 继续重跑');
+  } else {
+    hint('回退失败：'+((j&&(j.detail||j.error))||'未知原因'));
+  }
+  chatSnap();
+}
+setInterval(()=>{ chatTick(); if(_chatSnapped) chatSnap(); }, 2000);
+setTimeout(()=>{ chatTick(); chatSnap(); }, 600);
+
 /* ---- 引擎连接：实时对局的暂停 / 单步 / 拉取步骤 ---- */
 let _poll=null;
 function engBase(){ const v=(document.getElementById('engine')||{}).value||''; return v.replace(/\/+$/,''); }
 async function engGet(p){
-  const b=engBase(); if(!b){ hint('先填对局服务地址，例如 http://127.0.0.1:8000'); return null; }
+  const b=engBase()||'';   // 留空 = 同源（/lab 挂在对局服务上）。旧版空地址直接 return，
+                           // 直播面板的暂停/继续/单步会静默失效（2026-10-26 修）
   try{ const r=await fetch(b+p, {headers:{'Accept':'application/json'}}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
   catch(e){ document.getElementById('engInfo').innerHTML='<span class="badge b-bad">连不上</span> '+esc(e.message); return null; }
 }
 async function engPost(p){
-  const b=engBase(); if(!b){ hint('先填对局服务地址'); return null; }
+  const b=engBase()||'';   // 同上：同源兜底
   try{ const r=await fetch(b+p, {method:'POST'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); }
   catch(e){ document.getElementById('engInfo').innerHTML='<span class="badge b-bad">连不上</span> '+esc(e.message); return null; }
 }

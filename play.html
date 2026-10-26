@@ -373,7 +373,7 @@
     <div class="pad">
       <div class="h2">定几个人</div>
       <div class="counters">
-        <label>真人<input type="number" id="nHuman" min="1" max="8" value="2"></label>
+        <label>真人<input type="number" id="nHuman" min="0" max="8" value="2"></label>
         <label>AI<input type="number" id="nAi" min="0" max="9" value="2"></label>
         <!-- 座次编排（2026-10-01）：默认 = 真人 1 号先发言 + 真人之间均匀隔 AI；
              拖动（电脑）或点两下交换（手机）可任意调。开局时随 /new 发给后端。 -->
@@ -753,12 +753,15 @@ function renderRules(){
   var na = parseInt($('nAi').value, 10) || 0;
   var p = (RULES.preview || {})[String(nh + na)];
   var why = '';
-  if (nh < 1) why = '至少要 1 个真人';
+  /* 2026-10-26 放行全 AI 局：后端（game_api / make_board）本来就允许 humans=0，
+     这里只是前端自己的规则 —— 0 真人时交给下面的「支持范围」检查兜底。 */
+  if (nh < 0 || na < 0) why = '人数不能为负';
   else if (nh + na > 9) why = '真人 + AI 最多 9 人';
   else if (!p) why = (nh + na) + ' 人不在支持范围（4–16）';
   else if (!p.ok) why = p.reason;
   if (why) { $('rulesLine').innerHTML = '<span class="bad">' + why + '</span>'; return false; }
-  $('rulesLine').innerHTML = '共 <b>' + (nh + na) + '</b> 人　' + p.label;
+  $('rulesLine').innerHTML = '共 <b>' + (nh + na) + '</b> 人　' + p.label
+    + (nh === 0 ? '　（全 AI 局：自动推进，只围观）' : '');
   buildPlan();                            /* 人数变了就重排座次（长度没变则保留手排） */
   return true;
 }
@@ -850,7 +853,9 @@ async function newGame(){
     var d = await api('/api/game/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ humans: parseInt($('nHuman').value, 10) || 2,
+      /* 2026-10-26：显式填 0 必须保持 0（全 AI 局）—— 旧写法 `||2` 会把 0 吞成 2 */
+      body: JSON.stringify({ humans: (function(v){ var n = parseInt(v, 10);
+                                      return isNaN(n) ? 2 : n; })($('nHuman').value),
                              ais: parseInt($('nAi').value, 10) || 0,
                              level: LEVEL || undefined,
                              personality: PERSONA || undefined,

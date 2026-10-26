@@ -47,10 +47,14 @@ lab_api.set_paused(True)
 chk("暂停后 gate=True", lab_api.gate() is True)
 chk("暂停后仍然停住", lab_api.gate() is True)
 
-# 4) 单步：给一个额度 → 放行一次 → 再停
+# 4) 单步：额度在**步完成**时才扣（gate 只放行不扣）——
+#    一步可能中途多次返回 working（预跑等待/夜钟补播），在 gate 扣会退化成半步
 lab_api.request_step(1)
-chk("单步放行一次", lab_api.gate() is False)
-chk("单步后重新停住", lab_api.gate() is True)
+chk("单步有额度时放行", lab_api.gate() is False)
+chk("working 半步不扣额度（仍放行）", lab_api.gate() is False)
+chk("额度还没被 gate 吃掉", lab_api._read_control()["budget"] == 1)
+lab_api.step_done()
+chk("步完成后重新停住", lab_api.gate() is True)
 
 # 5) 继续 → 额度清零、不再停
 lab_api.set_paused(False)
@@ -68,7 +72,8 @@ os.environ["LAB_LOG"] = "1"
 # 7) 路由存在
 paths = sorted({r.path for r in lab_api.router.routes})
 chk("路由齐全", all(any(p.endswith(x) for p in paths)
-                    for x in ["/status", "/pause", "/step", "/steps"]), paths)
+                    for x in ["/status", "/pause", "/step", "/steps",
+                              "/live", "/snapshots", "/rewind"]), paths)
 
 lab_api.clear_steps()
 bad = [x for x in ok if x[0] == "FAIL"]

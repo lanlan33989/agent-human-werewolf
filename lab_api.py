@@ -19,11 +19,12 @@
   收口点。放在这里才能做到"一次调用一行、不漏也不重"。
 """
 
+import copy
 import json
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -37,7 +38,8 @@ CONTROL_PATH = os.path.join(LAB_DIR, "control.json")
 _lock = threading.Lock()
 
 # 由相位驱动器在每一步写入的上下文（哪一天 / 哪个相位 / 轮到谁）
-_ctx: Dict[str, Any] = {"round": 0, "phase": "", "seat": None, "role": ""}
+_ctx: Dict[str, Any] = {"round": 0, "phase": "", "seat": None, "role": "",
+                        "snap": 0}
 
 
 # ---------------------------------------------------------------- 开关
@@ -95,6 +97,7 @@ def log_call(*, model: str, messages: List[dict], raw: str,
             "epoch": round(time.time(), 3),
             "round": _ctx.get("round"),
             "phase": _ctx.get("phase") or "",
+            "snap": int(_ctx.get("snap") or 0),
             "seat": _ctx.get("seat"),
             "role": _ctx.get("role") or "",
             "model": model,
@@ -188,7 +191,12 @@ def request_step(n: int = 1) -> Dict[str, Any]:
 
 
 def gate() -> bool:
-    """相位驱动器每步开头问一次：True = 这一步先别走（返回 working 交给轮询）。"""
+    """相位驱动器每步开头问一次：True = 这一步先别走（返回 working 交给轮询）。
+
+    🔴 2026-10-26 改额度扣法：这里**只看不扣**。旧版在放行瞬间扣额度，但
+    "一步"可能中途多次返回 working（预跑收割等待、夜钟补播）—— 单步就退化成
+    "半步"：真模型局里按一次单步只走到第一个 working 返回点就停，回退重跑
+    时必现。现在额度由 `step_done()` 在**一步完整走完**后才扣。"""
     if not os.path.exists(CONTROL_PATH):
         return False
     d = _read_control()
@@ -196,11 +204,178 @@ def gate() -> bool:
         return False
     with _lock:
         d = _read_control()        # 重新读，避免与 request_step 抢
-        if int(d.get("budget", 0)) > 0:
-            d["budget"] = int(d["budget"]) - 1
-            _write_control(d)
-            return False           # 放行这一步
-    return True                    # 停住
+        return int(d.get("budget", 0)) <= 0
+
+
+def step_done() -> None:
+    """一个相位步**完整走完**（handler 返回了 continue/pending/ended，而不是
+    working）后由驱动器调用：在这里扣单步额度。任何异常吞掉。"""
+    try:
+        if not os.path.exists(CONTROL_PATH):
+            return
+        with _lock:
+            d = _read_control()
+            if d.get("paused") and int(d.get("budget", 0)) > 0:
+                d["budget"] = int(d["budget"]) - 1
+                _write_control(d)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 局面快照 / 回退
+# 🔴 2026-10-26 用户要「真的能回退」：不只回看日志，而是把引擎状态整个退回去，
+#    改完提示词从那里重跑。可行性依据（2026-10-26 审计结论）：
+#    · engine.Game 是**纯数据对象**（无锁/句柄/回调，rng 可 deepcopy）⇒ 整体 deepcopy 安全
+#    · AI 的 Agent 实例在 Session 上、对局中途无状态 ⇒ 不进快照，沿用原实例
+#      （deepcopy 函数对象是原引用，闭包里的 LLM 客户端不会被复制 —— 正好）
+#    · 快照点 = night_driver.auto_advance 的「gate 放行之后、handler 分发之前」：
+#      上一步已完整落定、下一步未动，粒度与暂停门/单步完全一致（一个相位步）。
+#    ⚠️ 粒度说明：一次"步"可能含多次模型调用（狼队协商 = 每狼一次），
+#       回退重跑的是**整步**，不是某一句话。
+#    ⚠️ 重跑语义是「规则等价」而不是逐字复现：rng 在快照里所以规则层可复现，
+#       但 LLM 本身非确定 —— 这正是"改提示词后对比"想要的。
+_SNAP_MAX = 80                     # 内存环形缓冲：最近 80 步（一局几百步内够用）
+_snaps: List[Dict[str, Any]] = []  # {"i","gid","round","phase","game","sess"}
+_snap_seq = 0
+_last_gid = ""
+_lookup: Optional[Callable[[str], Any]] = None
+
+
+def register_session_lookup(fn: Callable[[str], Any]) -> None:
+    """由 server.py 注册「gid → Session」的查询，避免 lab_api 反向 import game_api。"""
+    global _lookup
+    _lookup = fn
+
+
+def _sess_state(sess: Any) -> Dict[str, Any]:
+    """与 game 推进深度耦合、必须**一起回退**的 Session 字段。
+    漏回退任何一个都会重复播报 / 预案不再生成（审计列出的坑 #2）。"""
+    keys = ("speech", "timeline", "_log_ptr", "_announced", "_harvested",
+            "tactics", "day_plans", "day_summaries", "_planned_round",
+            "pending", "human_wait_since", "human_wait_pending_since",
+            "_nn_round", "_nn_nodes", "_nn_i", "_nn_at", "_nn_need_arm",
+            "_nn_injecting")
+    out: Dict[str, Any] = {}
+    for k in keys:
+        if not hasattr(sess, k):
+            continue
+        try:
+            out[k] = copy.deepcopy(getattr(sess, k))
+        except Exception:
+            pass
+    return out
+
+
+def maybe_snapshot(sess: Any) -> int:
+    """相位驱动器每步调用（gate 放行后）。任何异常都被吞掉 —— 快照不能影响对局。"""
+    global _last_gid, _snap_seq
+    if not log_enabled():
+        return 0
+    try:
+        with _lock:
+            _snap_seq += 1
+            i = _snap_seq
+            _ctx["snap"] = i                      # 之后发生的模型调用行都带这个号
+            _snaps.append({
+                "i": i,
+                "gid": str(getattr(sess, "id", "") or ""),
+                "round": _ctx.get("round"),
+                "phase": _ctx.get("phase") or "",
+                "game": copy.deepcopy(getattr(sess, "game", None)),
+                "sess": _sess_state(sess),
+            })
+            if len(_snaps) > _SNAP_MAX:
+                _snaps.pop(0)
+            _last_gid = str(getattr(sess, "id", "") or "")
+        return i
+    except Exception as e:                     # 快照失败不能影响对局，但不能静默 ——
+        print("[lab] 局面快照失败：" + repr(e), flush=True)   # 静默了回退就悄悄失效
+        return 0
+
+
+def list_snaps(limit: int = 200) -> List[Dict[str, Any]]:
+    with _lock:
+        rows = [{"i": s["i"], "gid": s["gid"], "round": s["round"],
+                 "phase": s["phase"]} for s in _snaps[-max(1, limit):]]
+    return rows
+
+
+def _truncate_steps_after(i: int) -> int:
+    """截掉落盘日志里快照号 >= i 的行（被否决的未来）。旧的、无 snap 号的行保留。"""
+    kept: List[str] = []
+    removed = 0
+    try:
+        if os.path.exists(STEPS_PATH):
+            with open(STEPS_PATH, "r", encoding="utf-8") as f:
+                for ln in f:
+                    ln = ln.rstrip("\n")
+                    if not ln.strip():
+                        continue
+                    try:
+                        row = json.loads(ln)
+                        if int(row.get("snap") or 0) >= i:
+                            removed += 1
+                            continue
+                    except ValueError:
+                        pass
+                    kept.append(ln)
+            tmp = STEPS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(kept) + ("\n" if kept else ""))
+            os.replace(tmp, STEPS_PATH)
+    except OSError:
+        pass
+    return removed
+
+
+def rewind(i: int) -> Dict[str, Any]:
+    """把对局整个退回第 i 步**之前**（快照 i = 第 i 步动作前的完整状态），
+    并自动暂停 —— 之后在实验室改提示词，再单步/继续从那里重跑。"""
+    if _lookup is None:
+        raise RuntimeError("还没装配（服务未启动完成）")
+    with _lock:
+        snap = next((s for s in _snaps if s["i"] == int(i)), None)
+    if snap is None:
+        raise KeyError("没有这个快照（可能已被环形缓冲挤出，或还没走到这一步）")
+    sess = _lookup(snap["gid"])
+    if sess is None:
+        raise KeyError("这一局已经不在内存里了（服务重启或被淘汰），无法回退")
+    # 驱动泵持 sess.lock 推进 —— 拿到锁 = 没有半步动作正在进行
+    with getattr(sess, "lock", threading.Lock()):
+        with _lock:
+            snap = next((s for s in _snaps if s["i"] == int(i)), None)
+        if snap is None:
+            raise KeyError("快照刚好被挤出了环形缓冲，重试一次")
+        # ① 引擎状态：deepcopy 回去（副本，别把快照本体交出去被继续改）
+        sess.game = copy.deepcopy(snap["game"])
+        # ② 展示层 / 推进游标：与 game 一起回退
+        for k, v in snap["sess"].items():
+            try:
+                setattr(sess, k, copy.deepcopy(v))
+            except Exception:
+                pass
+        # ③ 过期预跑决策必须全弃（审计列出的坑 #1：唯一能跨快照污染引擎的通道）
+        try:
+            sess._pre.discard_all()
+        except Exception:
+            pass
+        try:
+            sess._pre = None
+            sess._pre_round = None
+            sess._pre_vote_round = None
+            sess._vote_grace_at = None
+            sess._adv_deadline = None
+        except Exception:
+            pass
+        # ④ 快照流：回退点之后 = 已被否决的未来，删掉（步号不回退，重跑生成新步）
+        with _lock:
+            _snaps[:] = [s for s in _snaps if s["i"] <= int(i)]
+        removed = _truncate_steps_after(int(i))
+        # ⑤ 停在原地：改完提示词由人决定单步还是继续
+        ctl = set_paused(True)
+    return {"ok": True, "rewound_to": int(i), "round": snap["round"],
+            "phase": snap["phase"], "removed_log_rows": removed,
+            "control": ctl}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -245,3 +420,57 @@ def api_step_one(index: int) -> dict:
 def api_clear() -> dict:
     clear_steps()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- 直播 / 回退
+@router.get("/live")
+def api_live(limit: int = 150) -> dict:
+    """实验室群聊面板的数据源：最近的时间线条目 + 当前局面 + 门状态。
+    只读公开层（timeline 的 sys/say 本来就是全桌可见的东西），无泄露面。"""
+    d = _read_control()
+    out: Dict[str, Any] = {"gid": _last_gid, "found": False,
+                           "paused": bool(d.get("paused")),
+                           "budget": int(d.get("budget", 0)),
+                           "steps": _snap_seq, "log_steps": len(read_steps(limit=0))}
+    if _lookup is None:
+        return out
+    sess = _lookup(_last_gid) if _last_gid else None
+    if sess is None:
+        return out
+    g = getattr(sess, "game", None)
+    if g is None:
+        return out
+    # ★ 谁在看直播，谁就是推进器：本服务的推进一直靠客户端轮询 drive()
+    #   （/play 的语义；v4 说明里写的"服务端水泵"在代码里并不存在——2026-10-26
+    #   实测发现，直播面板如果不 drive，围观时对局是静止的）。预算与 /public 同档。
+    try:
+        sess.drive(0.15)
+    except Exception:
+        pass
+    out.update({
+        "found": True,
+        "round": getattr(g, "round", 0),
+        "phase": getattr(getattr(g, "phase", None), "value", ""),
+        "winner": getattr(g, "winner", None),
+        "pending": str(getattr(sess, "pending", "") or ""),
+        "public_log": [str(x) for x in (getattr(g, "public_log", None) or [])[-40:]],
+        "timeline": list(getattr(sess, "timeline", None) or [])[-max(10, min(400, int(limit))):],
+        "players": [{"seat": p.seat + 1, "kind": p.kind, "alive": p.alive,
+                     "lives": p.lives} for p in getattr(g, "players", [])],
+    })
+    return out
+
+
+@router.get("/snapshots")
+def api_snapshots(limit: int = 200) -> dict:
+    return {"count": len(_snaps), "snapshots": list_snaps(limit)}
+
+
+@router.post("/rewind")
+def api_rewind(i: int) -> dict:
+    try:
+        return rewind(i)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e

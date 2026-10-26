@@ -539,6 +539,10 @@ def auto_advance(self, max_steps: int = 300,
                              or str(getattr(g, "phase", "") or ""))
                 if _lab.gate():
                     return "working"
+                # ★ 局面快照（2026-10-26）：gate 放行后、handler 动引擎之前 ——
+                #   上一步已完整落定、下一步未动的干净点。回退=恢复到这里，
+                #   重跑的是**整步**（一步可能含多次模型调用，如狼队协商）。
+                _lab.maybe_snapshot(self)
             except Exception:
                 pass
 
@@ -551,6 +555,15 @@ def auto_advance(self, max_steps: int = 300,
                 print(f"[phase] 没有配剧本的相位：{g.phase.value}", flush=True)
                 return "stuck"
             res = getattr(self, handler)()
+            # ★ 单步额度在**一步完整走完**后才扣（lab_api.gate 只放行不扣）。
+            #   "working" = 这一步还没走完（预跑等待/夜钟补播中途交回轮询），
+            #   不能算完成 —— 否则单步退化成半步（2026-10-26 回退重跑时暴露）。
+            if res != "working":
+                try:
+                    import lab_api as _lab
+                    _lab.step_done()
+                except Exception:
+                    pass
             if res == "continue":
                 continue
             return res

@@ -204,6 +204,9 @@ app.include_router(game_api.router)
 import lab_api  # noqa: E402
 
 app.include_router(lab_api.router)
+# 局面回退（2026-10-26）：lab_api 需要「gid → Session」的查询能力，
+# 注册回调而不是反向 import（game_api/night_driver 已经依赖 lab_api，反着来会循环）。
+lab_api.register_session_lookup(lambda gid: game_api.SESSIONS.get(gid))
 
 
 # ---------------------------------------------------------------- AI 玩家接模型
