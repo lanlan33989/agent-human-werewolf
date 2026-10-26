@@ -151,6 +151,12 @@ class OpenAICompatLlm(Llm):
                 if _lab:
                     _lab.log_call(model=self.model, messages=messages, raw=out,
                                   ms=int((time.monotonic() - _t0) * 1000), ok=True)
+                try:
+                    import run_archive as _ra
+                    _ra.note_model(self.model, self.temperature, self.thinking,
+                                   int((time.monotonic() - _t0) * 1000), _u)
+                except Exception:                            # noqa: BLE001
+                    pass
                 return out
             except httpx.TimeoutException as e:
                 # ⚠️ 超时**不走重试**：它已经把整段预算烧光了，再重试只会让桌上多等一轮。
@@ -161,6 +167,12 @@ class OpenAICompatLlm(Llm):
                     _lab.log_call(model=self.model, messages=messages, raw="",
                                   ms=int((time.monotonic() - _t0) * 1000), ok=False,
                                   err="timeout")
+                try:
+                    import run_archive as _ra
+                    _ra.note_model(self.model, self.temperature, self.thinking,
+                                   int((time.monotonic() - _t0) * 1000), None)
+                except Exception:                            # noqa: BLE001
+                    pass
                 raise RuntimeError(f"LLM 超时：{e}") from e
             except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
                 last = e
@@ -174,6 +186,12 @@ class OpenAICompatLlm(Llm):
             _lab.log_call(model=self.model, messages=messages, raw="",
                           ms=int((time.monotonic() - _t0) * 1000), ok=False,
                           err=f"{type(last).__name__}: {last}"[:200])
+        try:
+            import run_archive as _ra
+            _ra.note_model(self.model, self.temperature, self.thinking,
+                           int((time.monotonic() - _t0) * 1000), None)
+        except Exception:                                # noqa: BLE001
+            pass
         raise RuntimeError(f"LLM 调用失败（已重试 {attempts} 次）：{last}")
 
 

@@ -263,7 +263,10 @@ class Session:
         # 那是最难查的一类 bug —— 所以在写法上就把它堵死。
         if SETTINGS:
             self.game.rules = replace(self.game.rules, **_valid_settings(SETTINGS))
-        self.rng = random.Random(seed if seed is not None else random.randrange(10 ** 6))
+        # seed 显式存一份（2026-10-26 run_archive 要进 meta.json —— 之前只喂给
+        # random.Random 就丢了，复现对比时拿不到本局种子）
+        self.seed = seed if seed is not None else random.randrange(10 ** 6)
+        self.rng = random.Random(self.seed)
         # 每个 AI 座位：造 Agent + 打档位 + 注入 G2 摘要器 + 注入 G3 跨局经验。
         # ⚠️ 经验是**按角色**给的：经验里写的是"我当狼时…"，给好人座位是噪音。
         #   for_prompt 里还会再查一次"这一档开不开经验"（硬核/地狱才开）——
@@ -297,6 +300,8 @@ class Session:
             if _p.kind != "ai":
                 continue
             _ag = _new_agent(_p.seat, self.rng, self.level)
+            # run_archive（2026-10-26）：agent 带上局号 —— trace 行按它归档
+            _ag.gid = self.id
             _ag.experiences = experience.BANK.for_prompt(self.level, _p.role.value)
             _ag.summarize = SUMMARIZER
             _ag.personality = _persons.get(_p.seat)
@@ -346,7 +351,15 @@ class Session:
         self._vote_grace_at = None
 
     def _harvest(self):        return night_driver._harvest(self)
-    def drive(self, budget=1.5):        return night_driver.drive(self, budget)
+    def drive(self, budget=1.5):
+        r = night_driver.drive(self, budget)
+        # run_archive（2026-10-26）：检测到终局就落 result/timeline（全 try/except）
+        try:
+            import run_archive as _ra
+            _ra.on_drive_end(self)
+        except Exception:                                # noqa: BLE001
+            pass
+        return r
     def _announce_speaker(self, seat):        return speech_io._announce_speaker(self, seat)
     def _flush_log(self):        return speech_io._flush_log(self)
     def _round_speech(self, g):        return speech_io._round_speech(self, g)
@@ -983,8 +996,20 @@ def new_game(req: NewGameReq) -> Dict[str, Any]:
     # 实测：日志里出现过 /api/game/{gid}/public 404。
     if len(SESSIONS) >= MAX_SESSIONS:
         stalest = min(SESSIONS.items(), key=lambda kv: kv[1].last_used)[0]
+        try:
+            import run_archive as _ra
+            _ra.on_evict(SESSIONS[stalest])
+        except Exception:                                # noqa: BLE001
+            pass
         SESSIONS.pop(stalest, None)
     SESSIONS[s.id] = s
+    # run_archive（2026-10-26）：开局建档（runs/<时间>_<局号>_v<git短哈希>）。
+    # 全 try/except：runs/ 不可写只影响存档，对局照常。
+    try:
+        import run_archive as _ra
+        _ra.begin(s)
+    except Exception:                                    # noqa: BLE001
+        pass
 
     return {
         "gid": s.id,

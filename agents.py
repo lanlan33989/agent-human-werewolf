@@ -1501,6 +1501,11 @@ class Agent:
             #    ③ 啰嗦。④ 第一轮最先发言的狼人必须悍跳（有预言家的局跳预言家，
             #    只有女巫的局什么都不跳）。四条都进 speak 的任务文案。
             task += SPEAK_RULES_REMINDER.format(round=int(view.get("round") or 1))
+        try:
+            import run_archive as _ra
+            _ra.set_ask_ctx(task_key, view)
+        except Exception:                                # noqa: BLE001
+            pass
         return build_messages(view, history, task,
                               level=self.level, summarize=self.summarize,
                               experiences=self.experiences,
@@ -1526,7 +1531,22 @@ class Agent:
         print("[ask] " + str(self.seat + 1) + "号"
               + " 输入" + str(sum(len(str(m.get("content") or "")) for m in messages)) + "字",
               flush=True)
-        return self.chat_fn(messages)
+        try:
+            out = self.chat_fn(messages)
+        except Exception as e:
+            # run_archive（2026-10-26）：失败的调用也留一行（raw 空、verdict=error）
+            try:
+                import run_archive as _ra
+                _ra.on_ask_error(self, messages, e)
+            except Exception:                            # noqa: BLE001
+                pass
+            raise
+        try:
+            import run_archive as _ra
+            _ra.on_ask(self, messages, out)
+        except Exception:                                # noqa: BLE001
+            pass
+        return out
 
     # ---- 对外接口 ----
 
