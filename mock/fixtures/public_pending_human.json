@@ -1,0 +1,13 @@
+{
+ "pending": "working",
+ "phase": "night",
+ "now": {
+  "kind": "none",
+  "seat": null,
+  "node": "wolf",
+  "until": null,
+  "need": null,
+  "why": "这一节没有人类要点",
+  "started": false
+ }
+}

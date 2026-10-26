@@ -1,0 +1,171 @@
+{
+ "gid": "7f7148c9",
+ "board": "6 人 · 2 狼 1 巫 1 预 2 民",
+ "board_key": "dyn6",
+ "phase": "night",
+ "round": 1,
+ "winner": null,
+ "night_node": "wolf",
+ "night_plan": [
+  {
+   "id": "open",
+   "say": "第1夜，天黑请闭眼",
+   "win": 0,
+   "gap": 3,
+   "close": null,
+   "close_gap": 3
+  },
+  {
+   "id": "wolf",
+   "say": "狼人请睁眼，请选择今晚你们要击杀的人",
+   "win": 20,
+   "gap": 0,
+   "close": "狼人请闭眼",
+   "close_gap": 3
+  },
+  {
+   "id": "witch_heal",
+   "say": "女巫请睁眼，今晚死的是他，你要救吗？",
+   "win": 15,
+   "gap": 0,
+   "close": null,
+   "close_gap": 3
+  },
+  {
+   "id": "witch_poison",
+   "say": "你要使用毒药吗？",
+   "win": 15,
+   "gap": 0,
+   "close": "女巫请闭眼",
+   "close_gap": 3
+  },
+  {
+   "id": "seer",
+   "say": "预言家请睁眼，请选择今晚你要查验的人",
+   "win": 15,
+   "gap": 0,
+   "close": null,
+   "close_gap": 3
+  },
+  {
+   "id": "seer_result",
+   "say": "他是这个",
+   "win": 0,
+   "gap": 3,
+   "close": null,
+   "close_gap": 3
+  },
+  {
+   "id": "seer_close",
+   "say": "预言家请闭眼",
+   "win": 0,
+   "gap": 3,
+   "close": null,
+   "close_gap": 3
+  },
+  {
+   "id": "dawn",
+   "say": "天亮了，请所有玩家睁眼",
+   "win": 0,
+   "gap": 0,
+   "close": null,
+   "close_gap": 3
+  }
+ ],
+ "now": {
+  "kind": "none",
+  "seat": null,
+  "node": "wolf",
+  "until": null,
+  "need": null,
+  "why": "这一节没有人类要点",
+  "started": false
+ },
+ "public_log": [
+  "游戏开始，6 人局，每人 1 条命。",
+  "第 1 夜，天黑请闭眼。"
+ ],
+ "speech": [],
+ "timeline": [
+  {
+   "t": "sys",
+   "s": "游戏开始，6 人局，每人 1 条命。",
+   "voice": "Neil",
+   "ts": 1793034399.2594068
+  },
+  {
+   "t": "sys",
+   "s": "第 1 夜，天黑请闭眼。",
+   "voice": "Neil",
+   "ts": 1793034399.2594087
+  },
+  {
+   "t": "sys",
+   "s": "狼人请睁眼，请选择今晚你们要击杀的人",
+   "voice": "Neil",
+   "delay": 0,
+   "stage": "wolf",
+   "node": "wolf",
+   "at": 1793034399.2604115
+  }
+ ],
+ "players": [
+  {
+   "seat": 0,
+   "display": "1 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "human"
+  },
+  {
+   "seat": 1,
+   "display": "2 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "ai"
+  },
+  {
+   "seat": 2,
+   "display": "3 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "ai"
+  },
+  {
+   "seat": 3,
+   "display": "4 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "ai"
+  },
+  {
+   "seat": 4,
+   "display": "5 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "ai"
+  },
+  {
+   "seat": 5,
+   "display": "6 号",
+   "lives": 1,
+   "alive": true,
+   "kind": "ai"
+  }
+ ],
+ "speaking_order": [],
+ "current_speaker": null,
+ "voted_seats": [],
+ "votes": {},
+ "pending": "working",
+ "level": "娱乐",
+ "speech_mode": "rotation",
+ "suspicion": {
+  "0": 0,
+  "1": 0,
+  "2": 0,
+  "3": 0,
+  "4": 0,
+  "5": 0
+ }
+}

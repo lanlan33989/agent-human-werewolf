@@ -8,7 +8,8 @@
   · 批量评测：**全 AI 局能跑通** + 失败被记录而不是抛异常
 """
 import sys as _s, os as _o
-_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 import sys
 
 import game_api

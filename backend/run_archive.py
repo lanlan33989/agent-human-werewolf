@@ -49,7 +49,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-RUNS_DIR = os.path.join(_HERE, "runs")
+_ROOT = os.path.dirname(_HERE)          # 2026-10-26 拆 backend/ 后：数据目录锚仓库根
+RUNS_DIR = os.path.join(_ROOT, "runs")
 
 # ---------------------------------------------------------------- 版本短哈希
 _ver_cache: Optional[str] = None
@@ -139,12 +140,15 @@ class Archive:
         self.errs.append(where + ": " + type(e).__name__ + ": " + str(e)[:200])
 
     def _append(self, name: str, obj: dict) -> bool:
-        """追加一行 JSONL。每次 open/append/close：崩溃不丢已写的行。"""
+        """追加一行 JSONL。每次 open/append/close：崩溃不丢已写的行。
+        ⚠️ 必须持锁：夜间 AI 决策走后台预跑池（多线程同时收尾），
+        Windows 的 append 不是原子写 —— 不加锁会写出交错的半行，整个文件废掉。"""
         try:
-            os.makedirs(self.dir, exist_ok=True)
-            with open(os.path.join(self.dir, name), "a",
-                      encoding="utf-8") as f:
-                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            with _APPEND_LOCK:
+                os.makedirs(self.dir, exist_ok=True)
+                with open(os.path.join(self.dir, name), "a",
+                          encoding="utf-8") as f:
+                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             return True
         except Exception as e:                           # noqa: BLE001
             self._err("append:" + name, e)
@@ -296,6 +300,9 @@ class Archive:
 _active_seed: Dict[str, Any] = {}
 _active_kinds: Dict[str, Dict[int, str]] = {}
 _ACTIVE: Dict[str, Archive] = {}
+
+# 追加写全局锁（进程级）：多线程（预跑池 + 驱动器）同时写同一个 jsonl 时防交错
+_APPEND_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------- 对外钩子

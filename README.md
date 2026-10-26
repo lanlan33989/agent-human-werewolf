@@ -77,26 +77,30 @@ python -m venv .venv
 
 | 页面 | 用途 |
 |---|---|
-| `index.html` | 语音链路探针：说一句 → 转写 → LLM 回复 → 播报 |
-| `play.html` | 对局页面：AI 发言播报（半双工）、按住说话、确认后提交 |
+| `frontend/play.html` | 对局页面（根路径直落此页）：AI 发言播报（半双工）、按住说话、确认后提交 |
 | `board.html` | 榜单与战报 |
 | `admin.html` | 配置台 |
 
-## 项目结构
+## 项目结构（2026-10-26 前后端分离）
 
 ```
-├── start.py            # 一键启动器（自检/清进程/单进程双协议）
-├── run_https.py        # 自签名 HTTPS（手机麦克风必需）
-├── server.py           # FastAPI 服务端 + 语音上传/播报接口 + WebSocket ASR 中继
-├── game_api.py         # 对局 HTTP API
-├── engine.py           # 狼人杀规则引擎（确定性逻辑，四层信息隔离）
-├── agents.py / ai_behaviors.py   # AI 玩家（LLM + 规则兜底）
-├── night_driver.py / night_pre.py / night_script.py   # 夜间流程
-├── layers_asr/llm/tts.py   # ASR / LLM / TTS 适配层（可插拔）
-├── metrics.py / experience.py / report.py   # 对局指标 / 复盘 / 战报
-├── *.html / *.js / *.css    # 前端页面
-├── docs/               # 设计文档与踩坑记录（README-P0 等）
-└── tests/              # 冒烟测试与诊断脚本（tests/_smoke-*.py）
+├── start.py            # 一键启动器（自检/清进程/单进程双协议；py 模块在 backend/）
+├── backend/            # ★ 后端：全部 Python
+│   ├── server.py       #   FastAPI 服务端 + 页面路由 + 语音 + CORS（联调白名单）
+│   ├── game_api.py     #   对局 HTTP API
+│   ├── engine.py       #   狼人杀规则引擎（确定性逻辑，四层信息隔离）
+│   ├── agents.py / ai_behaviors.py    # AI 玩家（LLM + 规则兜底）
+│   ├── night_driver.py / night_pre.py / night_script.py   # 夜间流程
+│   ├── layers_asr/llm/tts.py          # ASR / LLM / TTS 适配层（可插拔）
+│   ├── lab_api.py / admin_api.py      # 提示词实验室 / 配置台
+│   ├── run_archive.py  #   对局自动存档（runs/）
+│   └── metrics.py / experience.py / report.py / summarize.py
+├── frontend/           # ★ 前端：页面与静态资源（play/promptlab/admin/board + js/css）
+├── docs/               # contract.md（接口契约）+ openapi.json + 设计文档
+├── mock/               # 前端联调假服务（fixtures 为实机抓的真实响应）
+├── runs-sample/        # 对局存档格式说明与脱敏样例（真实存档在 runs/，不进 git）
+├── tests/              # 冒烟测试与诊断脚本（tests/_smoke-*.py）
+└── lab/                # 实验室运行时产物（不进 git）
 ```
 
 ## 已知限制

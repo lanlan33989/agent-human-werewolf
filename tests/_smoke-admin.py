@@ -23,6 +23,7 @@ import sys
 import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根目录
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 os.environ["MOCK"] = "0"
 os.environ["MOCK_ASR"] = "0"
@@ -234,7 +235,8 @@ covered_tables = {t[1] for t in admin_api.PROMPT_TABLES}
 covered_tables |= {row[1] for row in admin_api.PROMPT_READONLY}
 
 for mod_file, mod_name in (("agents.py", "agents"), ("summarize.py", "summarize")):
-    strs, dicts = _module_level(mod_file)
+    # 2026-10-26 拆分：源码在 backend/ 下（check 名字仍用原文件名）
+    strs, dicts = _module_level(os.path.join("backend", mod_file))
     miss_s = sorted(s for s in strs if s not in covered_attrs and s not in _WAIVED_STR)
     miss_d = sorted(x for x in dicts if x not in covered_tables)
     check("★ 守门：" + mod_file + " 里每个 ≥30 字的模块级文本常量都在清单里（或只读写了原因）",
@@ -283,7 +285,7 @@ for _it in admin_api._catalog():
 
 for mod_file in ("agents.py", "summarize.py"):
     miss = []
-    for fname, text in _func_literals(mod_file):
+    for fname, text in _func_literals(os.path.join("backend", mod_file)):
         if text.startswith(_declared_lit) or text in _editable_values:
             continue
         miss.append(fname + "：「" + text.replace("\n", " ")[:32] + "」")

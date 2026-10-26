@@ -1,0 +1,27 @@
+{
+ "switches": [
+  {
+   "key": "hunter_can_shoot_on_witch_poison",
+   "label": "猎人被毒杀也能开枪",
+   "type": "bool",
+   "default": false,
+   "note": "网杀标准：不能（被毒死不算是被狼杀的，枪哑火）；面杀有变体"
+  },
+  {
+   "key": "guard_can_self_guard",
+   "label": "守卫可以守自己",
+   "type": "bool",
+   "default": true,
+   "note": "多数版本允许；禁掉之后守卫的选人要更谨慎"
+  },
+  {
+   "key": "guard_can_repeat",
+   "label": "守卫可以连守同一人",
+   "type": "bool",
+   "default": false,
+   "note": "标准：不能连守（否则守着一个人就无敌）"
+  }
+ ],
+ "current": {},
+ "note": "只影响新开的局；已在打的那一局规则不会变（中途改规则会让桌上的人白判断）"
+}

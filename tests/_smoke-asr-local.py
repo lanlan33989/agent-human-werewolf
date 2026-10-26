@@ -18,6 +18,7 @@ import time
 import wave
 
 sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 # 这一层要真跑，覆盖掉可能存在的 mock 配置
 os.environ["MOCK"] = "0"

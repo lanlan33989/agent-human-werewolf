@@ -26,6 +26,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 from engine import make_board  # noqa: E402
 from _testboards import SEER4  # noqa: E402

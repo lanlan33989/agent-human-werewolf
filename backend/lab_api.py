@@ -31,7 +31,8 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/api/lab", tags=["lab"])
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-LAB_DIR = os.path.join(_HERE, "lab")
+_ROOT = os.path.dirname(_HERE)          # 2026-10-26 拆 backend/ 后：数据目录锚仓库根
+LAB_DIR = os.path.join(_ROOT, "lab")
 STEPS_PATH = os.path.join(LAB_DIR, "steps.jsonl")
 CONTROL_PATH = os.path.join(LAB_DIR, "control.json")
 

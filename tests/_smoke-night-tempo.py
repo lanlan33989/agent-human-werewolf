@@ -21,6 +21,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))) or ".")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 os.environ.setdefault("MOCK", "1")
 os.environ.setdefault("MOCK_ASR", "1")

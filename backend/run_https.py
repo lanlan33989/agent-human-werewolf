@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 
 BASE = Path(__file__).parent
-CERT = BASE / "cert.pem"
-KEY = BASE / "key.pem"
+ROOT = BASE.parent                      # 2026-10-26 拆 backend/ 后：证书在仓库根
+CERT = ROOT / "cert.pem"
+KEY = ROOT / "key.pem"
 
 
 def local_ips() -> list[str]:

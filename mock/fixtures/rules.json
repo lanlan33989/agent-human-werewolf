@@ -1,0 +1,671 @@
+{
+ "wolf_ratio": 0.34,
+ "god_order": [
+  "witch",
+  "seer",
+  "hunter",
+  "guard",
+  "idiot"
+ ],
+ "levels": [
+  {
+   "key": "娱乐",
+   "desc": "轻松局：AI 照样认真玩，但语气最温和，不带跨局经验。"
+  },
+  {
+   "key": "认真",
+   "desc": "默认档：目标导向，AI 说话更省、更有目的性。"
+  },
+  {
+   "key": "硬核",
+   "desc": "高压局：孤立 + 不可逆，专治划水；带跨局经验（批八接）。"
+  },
+  {
+   "key": "地狱",
+   "desc": "血腥档：允许用咬/血/死这类意象，但禁止描写伤口与折磨细节。"
+  }
+ ],
+ "default_level": "娱乐",
+ "personalities": [
+  {
+   "key": "aggressive",
+   "label": "激进",
+   "brief": "你说话冲、敢点名、不怕得罪人；被质疑了就顶回去。"
+  },
+  {
+   "key": "cunning",
+   "label": "狡诈",
+   "brief": "你说话留一半，喜欢暗示而不是明说；从不把话说死。"
+  },
+  {
+   "key": "conservative",
+   "label": "保守",
+   "brief": "你很少第一个定调，更愿意跟着场上的共识走。"
+  },
+  {
+   "key": "analytical",
+   "label": "理性",
+   "brief": "你摆事实、对逻辑、说话有条理；喜欢指出谁的说法前后对不上。"
+  },
+  {
+   "key": "cautious",
+   "label": "谨慎",
+   "brief": "你总是先说「我觉得」「可能」，措辞留足余地，很少下死判断。"
+  },
+  {
+   "key": "bold",
+   "label": "大胆",
+   "brief": "你不怕被投、敢赌，关键轮次敢直接下判断。"
+  },
+  {
+   "key": "eloquent",
+   "label": "雄辩",
+   "brief": "你话多、会带节奏，擅长把水搅起来、把话题引到你要的地方。"
+  },
+  {
+   "key": "observant",
+   "label": "善于观察",
+   "brief": "你会复述别人说过的话，从细节里挑矛盾。"
+  },
+  {
+   "key": "strategic",
+   "label": "策略型",
+   "brief": "你盘算整体局势，说话有取舍，清楚哪些话该说、哪些该咽回去。"
+  }
+ ],
+ "personality_specials": [
+  {
+   "key": "off",
+   "label": "不配人格"
+  },
+  {
+   "key": "random",
+   "label": "随机分配"
+  }
+ ],
+ "preview": {
+  "4": {
+   "ok": true,
+   "label": "4 人 · 1 狼 1 巫 2 民",
+   "wolves": 1,
+   "gods": [
+    "witch"
+   ],
+   "villagers": 2,
+   "roles": [
+    "wolf",
+    "witch",
+    "villager",
+    "villager"
+   ]
+  },
+  "5": {
+   "ok": true,
+   "label": "5 人 · 1 狼 1 巫 3 民",
+   "wolves": 1,
+   "gods": [
+    "witch"
+   ],
+   "villagers": 3,
+   "roles": [
+    "wolf",
+    "witch",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "6": {
+   "ok": true,
+   "label": "6 人 · 2 狼 1 巫 1 预 2 民",
+   "wolves": 2,
+   "gods": [
+    "witch",
+    "seer"
+   ],
+   "villagers": 2,
+   "roles": [
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "villager",
+    "villager"
+   ]
+  },
+  "7": {
+   "ok": true,
+   "label": "7 人 · 2 狼 1 巫 1 预 3 民",
+   "wolves": 2,
+   "gods": [
+    "witch",
+    "seer"
+   ],
+   "villagers": 3,
+   "roles": [
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "8": {
+   "ok": true,
+   "label": "8 人 · 2 狼 1 巫 1 预 4 民",
+   "wolves": 2,
+   "gods": [
+    "witch",
+    "seer"
+   ],
+   "villagers": 4,
+   "roles": [
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "9": {
+   "ok": true,
+   "label": "9 人 · 3 狼 1 巫 1 预 1 猎 3 民",
+   "wolves": 3,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter"
+   ],
+   "villagers": 3,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "10": {
+   "ok": true,
+   "label": "10 人 · 3 狼 1 巫 1 预 1 猎 4 民",
+   "wolves": 3,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter"
+   ],
+   "villagers": 4,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "11": {
+   "ok": true,
+   "label": "11 人 · 3 狼 1 巫 1 预 1 猎 5 民",
+   "wolves": 3,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter"
+   ],
+   "villagers": 5,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "12": {
+   "ok": true,
+   "label": "12 人 · 4 狼 1 巫 1 预 1 猎 1 守 4 民",
+   "wolves": 4,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard"
+   ],
+   "villagers": 4,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "13": {
+   "ok": true,
+   "label": "13 人 · 4 狼 1 巫 1 预 1 猎 1 守 5 民",
+   "wolves": 4,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard"
+   ],
+   "villagers": 5,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "14": {
+   "ok": true,
+   "label": "14 人 · 4 狼 1 巫 1 预 1 猎 1 守 6 民",
+   "wolves": 4,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard"
+   ],
+   "villagers": 6,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "15": {
+   "ok": true,
+   "label": "15 人 · 5 狼 1 巫 1 预 1 猎 1 守 1 白 5 民",
+   "wolves": 5,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 5,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "16": {
+   "ok": true,
+   "label": "16 人 · 5 狼 1 巫 1 预 1 猎 1 守 1 白 6 民",
+   "wolves": 5,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 6,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "17": {
+   "ok": true,
+   "label": "17 人 · 5 狼 1 巫 1 预 1 猎 1 守 1 白 7 民",
+   "wolves": 5,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 7,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "18": {
+   "ok": true,
+   "label": "18 人 · 6 狼 1 巫 1 预 1 猎 1 守 1 白 7 民",
+   "wolves": 6,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 7,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "19": {
+   "ok": true,
+   "label": "19 人 · 6 狼 1 巫 1 预 1 猎 1 守 1 白 8 民",
+   "wolves": 6,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 8,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "20": {
+   "ok": true,
+   "label": "20 人 · 6 狼 1 巫 1 预 1 猎 1 守 1 白 9 民",
+   "wolves": 6,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 9,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "21": {
+   "ok": true,
+   "label": "21 人 · 7 狼 1 巫 1 预 1 猎 1 守 1 白 9 民",
+   "wolves": 7,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 9,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "22": {
+   "ok": true,
+   "label": "22 人 · 7 狼 1 巫 1 预 1 猎 1 守 1 白 10 民",
+   "wolves": 7,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 10,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "23": {
+   "ok": true,
+   "label": "23 人 · 7 狼 1 巫 1 预 1 猎 1 守 1 白 11 民",
+   "wolves": 7,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 11,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  },
+  "24": {
+   "ok": true,
+   "label": "24 人 · 8 狼 1 巫 1 预 1 猎 1 守 1 白 11 民",
+   "wolves": 8,
+   "gods": [
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot"
+   ],
+   "villagers": 11,
+   "roles": [
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "wolf",
+    "witch",
+    "seer",
+    "hunter",
+    "guard",
+    "idiot",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager",
+    "villager"
+   ]
+  }
+ }
+}

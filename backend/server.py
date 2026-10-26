@@ -35,14 +35,16 @@ from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-BASE = Path(__file__).parent
+BASE = Path(__file__).parent                      # backend/（py 模块的锚）
+ROOT = BASE.parent                                # 仓库根 h5/（.env / cert / 数据目录）
+FRONTEND = ROOT / "frontend"                      # 页面与静态资源（2026-10-26 前后端分离）
 
 
 # ---------------------------------------------------------------- 环境变量
 
 def _load_env() -> None:
     """极简 .env 读取，避免引入 python-dotenv。"""
-    p = BASE / ".env"
+    p = ROOT / ".env"
     if not p.exists():
         return
     for line in p.read_text(encoding="utf-8").splitlines():
@@ -138,7 +140,7 @@ def build_pipeline():
 # 这里只做两件事：**装配前**把 `_runtime.json` 的覆盖应用下去，**装配后**把路由挂上。
 import admin_api  # noqa: E402
 
-admin_api.apply_runtime_state(BASE)      # ⚠️ 必须在 build_pipeline() **之前**
+admin_api.apply_runtime_state(ROOT)      # ⚠️ 必须在 build_pipeline() **之前**（_runtime.json 保持仓库根）
 ADMIN_STATE = admin_api.STATE_PATH       # 面板与测试共用这一个状态文件路径
 
 
@@ -229,6 +231,20 @@ def _start_drive_pump() -> None:
 
 
 app = FastAPI(title="P0-talk", lifespan=lifespan)
+
+# 前后端分离联调（2026-10-26）：前端同学用 Live Server（localhost:5500 等）
+# 开发时也能直调本服务的 API。生产形态仍是同源（页面由本服务自己出），
+# 这里只是把联调期的跨域门打开 —— 协议契约见 docs/contract.md。
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5500", "http://127.0.0.1:5500",   # VS Code Live Server
+        "http://localhost:3000", "http://127.0.0.1:3000",   # 常见前端 dev server
+        "http://localhost:8080", "http://127.0.0.1:8080",
+    ],
+    allow_methods=["*"], allow_headers=["*"])
 
 # 对局 API（D4）：把规则引擎与 AI 玩家接到 HTTP 上
 import game_api  # noqa: E402
@@ -405,12 +421,12 @@ NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
 
 
 def _page(name: str) -> Response:
-    return Response((BASE / name).read_text(encoding="utf-8"),
+    return Response((FRONTEND / name).read_text(encoding="utf-8"),
                     media_type="text/html; charset=utf-8", headers=NO_STORE)
 
 
 def _asset(name: str, media: str) -> Response:
-    return Response((BASE / name).read_text(encoding="utf-8"),
+    return Response((FRONTEND / name).read_text(encoding="utf-8"),
                     media_type=media, headers=NO_STORE)
 
 
@@ -951,7 +967,7 @@ async def utter(request: Request, only: str = "") -> JSONResponse:
     # 留一份原始录音，方便事后离线分析（只有最近一次，探针阶段够用）
     if os.environ.get("SAVE_UPLOADS", "1") == "1":
         try:
-            (BASE / "_last_upload.wav").write_bytes(audio)
+            (ROOT / "_last_upload.wav").write_bytes(audio)
         except Exception:  # noqa: BLE001
             pass
 

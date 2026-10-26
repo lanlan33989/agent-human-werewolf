@@ -32,6 +32,8 @@ import urllib.request
 from pathlib import Path
 
 BASE = Path(__file__).parent
+# 2026-10-26 前后端分离：py 模块在 backend/ 下（server.py 等），启动器还在根
+sys.path.insert(0, str(BASE / "backend"))
 
 
 # ------------------------------------------------------------------ 端口检查

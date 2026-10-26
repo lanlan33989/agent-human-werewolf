@@ -35,6 +35,7 @@ os.environ.setdefault("MOCK_ASR", "1")
 os.environ.setdefault("MOCK_LLM", "1")
 os.environ.setdefault("MOCK_TTS", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 import game_api as _ga            # noqa: E402
 import night_script               # noqa: E402

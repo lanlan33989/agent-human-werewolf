@@ -25,6 +25,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/
 
 WS = os.environ.get("PLAY_BASE_WS", "ws://127.0.0.1:8000")
 TEXT = "天亮了，请各位睁眼。昨晚是平安夜，没有发生任何事。"

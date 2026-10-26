@@ -7,7 +7,8 @@
 直接注入等于教 AI 记住一个错误事实 —— 比不注入更糟。
 """
 import sys as _s, os as _o
-_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
+_s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
+_s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
 import re
 import sys
 
