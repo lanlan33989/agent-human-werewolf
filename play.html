@@ -369,10 +369,6 @@
       <div class="logo">面杀高手</div>
       <div class="sub">4 个人，玩出 8 人局的推理密度</div>
       <div class="tip" style="margin-top:22px">把这部手机放在桌子中央</div>
-      <!-- 2026-10-26：导出对局落盘日志（每次 AI 决策一行）——给提示词实验室复盘用 -->
-      <div style="margin-top:14px"><a href="#" id="btnExportLab"
-        style="font-size:12px;color:#8b8578;text-decoration:underline"
-        onclick="exportLabFile(event)">⤓ 导出对局文件（导入提示词实验室用）</a></div>
     </div>
     <div class="pad">
       <div class="h2">定几个人</div>
@@ -487,6 +483,9 @@
          战报只在局末可取 —— 接口层对局中访问会返回 409（战报会揭示所有人身份）。 -->
     <div id="endLinks" class="endlinks">
       <a id="lnkReport" class="bigbtn" target="_blank" rel="noopener">本局战报</a>
+      <!-- 2026-10-26（用户定）：导出对局文件挪到游戏结束末尾 —— 和战报一样，
+           只有打完才有意义；给提示词实验室复盘/回放用。 -->
+      <a id="lnkExportLab" class="bigbtn" href="#" onclick="exportLabFile(event)">⤓ 导出对局文件</a>
     </div>
 
     <!-- 交接浮层已并入轮盘（2026-10-05 用户定：取消所有黑色半透明半屏）。

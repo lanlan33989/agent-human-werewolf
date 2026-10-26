@@ -57,7 +57,8 @@
   .who-role{display:inline-block;margin-left:4px;padding:0 5px;border-radius:6px;font-size:10px;line-height:1.5}
   .who-role.wolf{background:#5b1d1d;color:#ff9b9b}
   .who-role.god{background:#1d3a5b;color:#9bc8ff}
-  .godline{padding:1px 0}
+  .chat-god{align-self:center;max-width:96%;font-size:11.5px;line-height:1.7;color:#b9a44c;
+            border:1px dashed #6b5d2e;border-radius:8px;padding:4px 10px;background:#171512;text-align:left}
   table{width:100%;border-collapse:collapse;font-size:12px}
   th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
   th{color:var(--dim);font-weight:500}
@@ -89,13 +90,10 @@
       <div class="flexline" id="chatHead"><span class="muted" id="chatInfo">未连接</span></div>
       <div class="flexline">
         <label style="margin:0" title="旁观的人类是上帝视角：AI 不知道的（身份、狼刀、女巫药、守卫挡刀、验人结果）这里全部可见。关掉则只看公开信息">
-          <input type="checkbox" id="godOn" checked style="width:auto;vertical-align:middle" onchange="renderGod()"> 👁 上帝视角（身份 + 每晚动作）
+          <input type="checkbox" id="godOn" checked style="width:auto;vertical-align:middle" onchange="chatTick(true)"> 👁 上帝视角（身份 + 每晚动作，融入直播流）
         </label>
         <button id="btnExitImport" title="导入的对局日志占住了直播间；点这里回到在线直播" onclick="exitImport()" hidden>回在线直播</button>
       </div>
-      <details open id="godWrap" style="margin-bottom:6px"><summary style="cursor:pointer;font-size:11.5px;color:#9a937f">上帝视角 · 每晚动作明细（谁刀了谁 / 女巫救没救 / 守卫挡刀 / 验人结果）</summary>
-        <div id="godBox" style="max-height:20vh;overflow:auto;font-size:11.5px;line-height:1.8;color:#8d867a;padding:4px 8px;background:#0f1218;border-radius:6px"></div>
-      </details>
       <div id="chatBox" class="empty"></div>
       <div class="flexline">
         <button title="暂停推进：对局停在下一步之前，此时可以改提示词" onclick="engPause(true)">⏸ 暂停</button>
@@ -512,10 +510,22 @@ function ingestExport(o, name){
   const tl=o.timeline||[];
   const box=document.getElementById('chatBox');
   box.innerHTML=''; box.classList.remove('empty');
-  tl.forEach(m=>box.insertAdjacentHTML('beforeend', chatBubble(m)));
+  _godDayN=0; _godNightDone={};
+  let dayN=0; const done={};
+  tl.forEach(m=>{
+    if(m.t==='sys'){
+      const nm=String(m.s||'').match(/第\s*(\d+)\s*夜/);
+      if(nm) dayN=parseInt(nm[1],10);
+      else if(/天亮|昨夜.*出局|平安夜/.test(String(m.s||''))){
+        const n=(_godNights||[])[dayN-1];
+        if(n&&!done[n.round||dayN]){ done[n.round||dayN]=true;
+          box.insertAdjacentHTML('beforeend', nightBubbleText(n)); }
+      }
+    }
+    box.insertAdjacentHTML('beforeend', chatBubble(m));
+  });
   _chatN=tl.length;
   if(!tl.length) box.innerHTML='<div class="chat-sys">（这个导出文件里没有时间线）</div>';
-  renderGod(o);
   const info=document.getElementById('chatInfo');
   if(info) info.innerHTML='<span class="badge b-ok">导入重放</span> '+esc(name||'')
     +' · '+tl.length+' 条 · '+(o.winner?('· '+(o.winner==='wolf'?'狼人胜':'好人胜')+' · '):'')
@@ -603,6 +613,8 @@ let _chatSnapAt=0;                 // 快照下拉上次刷新时刻（限频）
 let _godRoles=null;                // 上帝视角：seat(0基) → role value
 let _godNights=[];                 // 导入的逐夜记录（在线模式用 live 接口实时取）
 let _importMode=false;             // 导入对局日志占住直播间时，暂停在线轮询
+let _godDayN=0;                    // 上帝视角：渲染游标对应的"第几夜"
+let _godNightDone={};              // 已插入气泡的夜（防重）
 const PHASE_CN={night:'夜晚',dawn:'天亮',discuss:'白天发言',vote:'投票',exile:'结算',setup:'准备',ended:'结束'};
 function _phaseCn(p){ return PHASE_CN[p]||p||''; }
 const ROLE_CN={wolf:'狼人',seer:'预言家',witch:'女巫',guard:'守卫',hunter:'猎人',
@@ -645,68 +657,78 @@ async function chatTick(force){
         : '');
   const tl=j.timeline||[];
   const box=document.getElementById('chatBox');
-  if(tl.length<_chatN||force){ _chatN=0; box.innerHTML=''; box.classList.remove('empty'); }
+  if(j.god){ _godRoles=j.god.roles||null; _godNights=j.god.night_records||[]; }
+  if(tl.length<_chatN||force){ _chatN=0; _godDayN=0; _godNightDone={}; box.innerHTML=''; box.classList.remove('empty'); }
   if(_chatN===0&&!tl.length){ return; }
-  // 增量渲染：只追加 _chatN 之后的新条目
-  for(let k=_chatN;k<tl.length;k++){
-    box.insertAdjacentHTML('beforeend', chatBubble(tl[k]));
-  }
-  _chatN=tl.length;
-  if(tl.length) box.classList.remove('empty');
   // 🔴 2026-10-26 修：别把人拽回底部 —— 只有用户本来就贴在底部（距底 < 40px）
   // 才自动跟随；他往上滑看历史时，新消息不顶走他（对局结束没新消息更不该动）。
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  // 增量渲染：只追加 _chatN 之后的新条目；上帝视角气泡按夜晚位置融入
+  // （"🌙 第N夜"总结插在"天亮"播报之前，时间顺序与真实对局一致）
+  for(let k=_chatN;k<tl.length;k++){
+    const m=tl[k];
+    if(m.t==='sys'&&godOn()){
+      const nm=String(m.s||'').match(/第\s*(\d+)\s*夜/);
+      if(nm) _godDayN=parseInt(nm[1],10);
+      else if(/天亮|昨夜.*出局|平安夜/.test(String(m.s||''))){
+        const n=_godNights[_godDayN-1];
+        if(n&&!_godNightDone[n.round||_godDayN]){
+          _godNightDone[n.round||_godDayN]=true;
+          box.insertAdjacentHTML('beforeend', nightBubbleText(n));
+        }
+      }
+    }
+    box.insertAdjacentHTML('beforeend', chatBubble(m));
+  }
+  _chatN=tl.length;
+  if(tl.length) box.classList.remove('empty');
+  // 进行中的夜：流末一条实时气泡（id 去重：每拍更新内容而非追加）；
+  // 对局结束（winner 已定）就不再显示 —— 没有哪个夜还在"进行中"。
+  const oldNow=document.getElementById('godNow'); if(oldNow) oldNow.remove();
+  if(j.phase==='night'&&!j.winner&&godOn()&&j.god){
+    const gn=godNowBubble(j.god.night_now, j.round);
+    if(gn) box.insertAdjacentHTML('beforeend', gn);
+  }
   if(nearBottom) box.scrollTop=box.scrollHeight;
-  if(j.god){ _godRoles=j.god.roles||null; _godNights=j.god.night_records||[]; }
-  renderGod(j.god);
   // 步数变了就顺手刷新回退下拉（限频 5 秒，别每拍都拉）
   if(Date.now()-_chatSnapAt>5000){ _chatSnapAt=Date.now(); chatSnap(); chatSyncSteps(); }
 }
 
-/* 上帝视角渲染：身份开关关掉 = 气泡不显示角色徽标 + 这块整个隐藏 */
-function renderGod(god){
-  const on=document.getElementById('godOn');
-  const wrap=document.getElementById('godWrap');
-  if(!on||!wrap) return;
-  wrap.style.display=on.checked?'block':'none';
-  const box=document.getElementById('godBox'); if(!box) return;
-  const nrs=(god&&god.night_records)||_godNights||[];
-  const seatName=s=>s==null||s===-1?'空刀':(Number(s)+1)+' 号';
-  let html='';
-  (nrs||[]).forEach(n=>{
-    const parts=[];
-    parts.push('狼刀 → '+seatName(n.kill));
-    if(n.heal!=null&&n.heal!==-1) parts.push('女巫救 '+seatName(n.heal));
-    else parts.push('女巫没救');
-    if(n.poison!=null&&n.poison!==-1) parts.push('毒 '+seatName(n.poison));
-    if(n.guard!=null&&n.guard!==-1) parts.push('守卫守 '+seatName(n.guard));
-    if(n.investigate!=null&&n.investigate!==-1&&_godRoles){
-      const t=_godRoles[String(n.investigate)];
-      parts.push('预言家验 '+seatName(n.investigate)+'（'+((t==='wolf'||t==='werewolf')?'狼人':'好人')+'）');
-    }
-    if(n.pierced) parts.push('奶穿（同守同救仍死）');
-    let tail;
-    if(n.peaceful) tail='平安夜';
-    else if(n.saved_by_heal) tail='解药救回';
-    else if(n.saved_by_guard) tail='守卫挡刀';
-    else tail='倒牌';
-    html+='<div class="godline">🌙 第'+esc(n.round||'?')+'夜：'+esc(parts.join(' · '))+' ⇒ <b>'+esc(tail)+'</b></div>';
-  });
-  const nn=god&&god.night_now;
-  if(nn&&Object.keys(nn).length){
-    const pts=nn.wolf_points||{};
-    const line=[];
-    if(nn.kill_settled) line.push('刀口已定 → '+seatName(nn.kill));
-    else if(Object.keys(pts).length) line.push('狼队正在点人（'
-      +Object.keys(pts).map(s=>(Number(s)+1)+'号→'+seatName(pts[s])).join('，')+'）');
-    if(nn.heal!=null&&nn.heal!==-1) line.push('女巫已救 '+seatName(nn.heal));
-    if(nn.poison!=null&&nn.poison!==-1) line.push('已毒 '+seatName(nn.poison));
-    if(nn.guard!=null&&nn.guard!==-1) line.push('守卫已守 '+seatName(nn.guard));
-    if(nn.investigate!=null&&nn.investigate!==-1) line.push('已验 '+seatName(nn.investigate));
-    if(line.length) html+='<div class="godline" style="color:#b9a44c">⏳ 当前夜（进行中）：'+esc(line.join(' · '))+'</div>';
+/* 上帝视角（2026-10-26 二改，用户定）：不再单独成块 —— 夜晚动作明细以**气泡**
+   形式融入直播流，插在"天亮"播报之前（时间顺序与真实对局一致）；
+   进行中的夜以流末一条实时气泡呈现（对局结束即消失）。 */
+function godOn(){ const el=document.getElementById('godOn'); return !!(el&&el.checked); }
+function seatName(s){ return s==null||s===-1?'空刀':(Number(s)+1)+' 号'; }
+function nightBubbleText(n){
+  const parts=[];
+  parts.push('狼刀 → '+seatName(n.kill));
+  if(n.heal!=null&&n.heal!==-1) parts.push('女巫救 '+seatName(n.heal));
+  else parts.push('女巫没救');
+  if(n.poison!=null&&n.poison!==-1) parts.push('毒 '+seatName(n.poison));
+  if(n.guard!=null&&n.guard!==-1) parts.push('守卫守 '+seatName(n.guard));
+  if(n.investigate!=null&&n.investigate!==-1&&_godRoles){
+    const t=_godRoles[String(n.investigate)];
+    parts.push('预言家验 '+seatName(n.investigate)+'（'+((t==='wolf'||t==='werewolf')?'狼人':'好人')+'）');
   }
-  if(!html) html='<div class="godline">（还没有夜晚记录 —— 夜晚结束一晚这里就多一行）</div>';
-  box.innerHTML=html;
+  if(n.pierced) parts.push('奶穿（同守同救仍死）');
+  let tail='倒牌';
+  if(n.peaceful) tail='平安夜';
+  else if(n.saved_by_heal) tail='解药救回';
+  else if(n.saved_by_guard) tail='守卫挡刀';
+  return '<div class="chat-god">🌙 第'+esc(n.round||'?')+'夜：'+esc(parts.join(' · '))+' ⇒ <b>'+esc(tail)+'</b></div>';
+}
+function godNowBubble(now, round){
+  const pts=(now&&now.wolf_points)||{};
+  const line=[];
+  if(now&&now.kill_settled) line.push('刀口已定 → '+seatName(now.kill));
+  else if(Object.keys(pts).length) line.push('狼队正在点人（'
+    +Object.keys(pts).map(s=>(Number(s)+1)+'号→'+seatName(pts[s])).join('，')+'）');
+  if(now&&now.heal!=null&&now.heal!==-1) line.push('女巫已救 '+seatName(now.heal));
+  if(now&&now.poison!=null&&now.poison!==-1) line.push('已毒 '+seatName(now.poison));
+  if(now&&now.guard!=null&&now.guard!==-1) line.push('守卫已守 '+seatName(now.guard));
+  if(now&&now.investigate!=null&&now.investigate!==-1) line.push('已验 '+seatName(now.investigate));
+  if(!line.length) return '';
+  return '<div class="chat-god" id="godNow">⏳ 第'+esc(round||'?')+'夜（进行中）：'+esc(line.join(' · '))+'</div>';
 }
 function exitImport(){
   _importMode=false;
