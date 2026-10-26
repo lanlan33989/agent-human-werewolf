@@ -1003,7 +1003,10 @@ function renderNightDial(seatNo, v, acts){
   players.forEach(function(p){ alive[p.seat] = p.alive; });
   var n = players.length;
   var act = null;
-  ['kill', 'guard', 'investigate', 'poison', 'vote'].forEach(function(a){
+  /* 🔴 2026-10-27（用户在面板画廊里发现）：清单漏了 shoot —— 猎人开枪
+     走拨号盘（2026-10-12 定稿统一），但 act=null ⇒ 号码按钮全部没有
+     onclick，只有「不开枪」能按。真实对局同样复现（demo 墙里抓到的）。 */
+  ['kill', 'guard', 'investigate', 'poison', 'vote', 'shoot'].forEach(function(a){
     if (act === null && acts.indexOf(a) >= 0) act = a;
   });
   var isHeal = acts.indexOf('heal') >= 0;

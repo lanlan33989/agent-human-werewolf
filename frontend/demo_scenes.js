@@ -82,7 +82,8 @@ var DEMO_SCENES = {
   /* 夜 · 狼刀：轮盘 + 队友/刀口标记 */
   night_wolf: {
     title: "夜 · 狼人刀人",
-    note: "先「请把手机交给 1 号」认领 → 轮盘选目标；🐺=队友，🔪=队友已点过。",
+    note: "先「请把手机交给 1 号」认领 → 拨号盘选刀口；🐺=队友，🔪=队友已点过。提交后自动进入确认场景。",
+    next: "wolf_confirm",
     public: _pub(function (p) {
       p.night_node = "wolf";
       p.pending = "human_night:wolf";
@@ -100,7 +101,8 @@ var DEMO_SCENES = {
   /* 夜 · 女巫（✓✕ + 被刀标记） */
   night_witch: {
     title: "夜 · 女巫（解药 ✓✕）",
-    note: "被刀者标 ☠️；空刀夜解药按钮置灰。",
+    note: "被刀者标 ☠️；空刀夜解药按钮置灰。提交后进毒药问。",
+    next: "witch_poison",
     public: _pub(function (p) {
       p.night_node = "witch_heal";
       p.pending = "human_night:witch_heal";
@@ -117,7 +119,8 @@ var DEMO_SCENES = {
   /* 夜 · 预言家 */
   night_seer: {
     title: "夜 · 预言家（验人）",
-    note: "点号码 = 决定验谁；验完出好人/坏人大字。",
+    note: "点号码 = 决定验谁；验完出好人/坏人大字。提交后进白天。",
+    next: "day_say",
     public: _pub(function (p) {
       p.night_node = "seer";
       p.pending = "human_night:seer";
@@ -133,7 +136,8 @@ var DEMO_SCENES = {
   /* 白天 · 轮到真人发言 */
   day_say: {
     title: "白天 · 轮到真人发言",
-    note: "大圆发言模式：点一下开始录音（phase=discuss + actions=[speak]）。",
+    note: "大圆发言模式：点一下开始录音（phase=discuss + actions=[speak]）。提交后进投票。",
+    next: "vote",
     public: _pub(function (p) {
       p.phase = "discuss"; p.round = 1; p.night_node = null; p.night_plan = [];
       p.pending = "human_say";
@@ -154,7 +158,8 @@ var DEMO_SCENES = {
   /* 投票进行中 */
   vote: {
     title: "投票（点号码 → 圆心确认）",
-    note: ".sel = 已选中待确认；投票允许投自己。",
+    note: ".sel = 已选中待确认；投票允许投自己。提交后出票型。",
+    next: "vote_result",
     public: _pub(function (p) {
       p.phase = "vote";
       p.pending = "human_vote";
@@ -203,7 +208,8 @@ var DEMO_SCENES = {
   /* 夜 · 女巫毒药问 */
   witch_poison: {
     title: "夜 · 女巫（毒药问）",
-    note: "解药答完后同一晚的第二问；拨号盘选毒药目标。",
+    note: "解药答完后同一晚的第二问；拨号盘选毒药目标。提交后进白天。",
+    next: "day_say",
     public: _pub(function (p) {
       p.night_node = "witch_poison";
       p.pending = "human_night:witch_poison";
@@ -219,7 +225,8 @@ var DEMO_SCENES = {
   /* 夜 · 狼刀确认（多狼：第二狼 confirm） */
   wolf_confirm: {
     title: "夜 · 狼刀确认（多狼共屏第二步）",
-    note: "队友已提议刀口 🔪，你点圆心 = 确认本夜刀口。",
+    note: "队友已提议刀口 🔪，你点圆心 = 确认本夜刀口。提交后进白天。",
+    next: "day_say",
     public: _pub(function (p) {
       p.night_node = "wolf";
       p.pending = "human_night:wolf";
@@ -237,7 +244,8 @@ var DEMO_SCENES = {
   /* 猎人开枪（轮盘形态） */
   hunter: {
     title: "猎人开枪（轮盘 · 可放弃）",
-    note: "shoot 不在拨号盘清单里 —— 走大圆轮盘；wheelExtra 有「不开枪」。",
+    note: "shoot 统一拨号盘（含 🔪 标记与「不开枪」）。提交后进遗言。",
+    next: "last_words",
     public: _pub(function (p) {
       p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
       p.pending = "human_night:shoot";
@@ -256,6 +264,7 @@ var DEMO_SCENES = {
   last_words: {
     title: "出局遗言（AI 发言播报中）",
     note: "无面板：法官播报 + AI 遗言逐句上屏（pending=working，看播报队列节奏）。",
+    next: "ended",
     public: _pub(function (p) {
       p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
       p.pending = "working";
@@ -281,3 +290,6 @@ var DEMO_SCENES = {
     })
   }
 };
+
+/* 所有场景共享的座位身份表（非 cards 场景的 seat 接口兜底用） */
+DEMO_SCENES.roles = DEMO_ROLES;

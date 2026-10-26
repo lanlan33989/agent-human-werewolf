@@ -609,7 +609,17 @@ async function api(path, opts){
       return out;
     }
     if (path.indexOf('/pending_seats') > 0) return DEMO.ps || { seats: [] };
-    return DEMO.public;                    /* /public、/act、/arm… 全给场景静态数据 */
+    if (path.indexOf('/act') > 0 && DEMO.next && window.DEMO_SCENES
+        && DEMO_SCENES[DEMO.next]){
+      /* 🔴 2026-10-27：提交后**推进到下一场景**（demo_scenes.js 里每个场景
+         用 next 串成一条链）—— 否则静态数据永远停在原状态，提交后底部
+         一直显示"AI 正在想…"误导人以为卡了。 */
+      var _nx = DEMO_SCENES[DEMO.next];
+      DEMO = { public: nx.public, roles: nx.roles || DEMO_SCENES.roles || null,
+               ps: nx.public._ps || { seats: [] }, next: nx.next || null };
+      PUBLIC = DEMO.public;
+    }
+    return { ok: true };                   /* /act、/arm… 提交一律成功 */
   }
   var r = await fetch(path, opts);
   if (!r.ok){ throw new Error(r.status + ' ' + (await r.text()).slice(0, 120)); }
