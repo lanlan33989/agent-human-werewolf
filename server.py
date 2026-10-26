@@ -33,7 +33,7 @@ from typing import Optional
 import httpx
 from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 BASE = Path(__file__).parent
 
@@ -188,7 +188,44 @@ async def lifespan(_app: FastAPI):
             _WARMED["cloud"] = False
             print(f"[server] 云端 ASR 预热失败（不影响启动）：{type(e).__name__}: {e}",
                   flush=True)
+    _start_drive_pump()
     yield
+
+
+# ---------------------------------------------------------------- 推进水泵
+# 🔴 2026-10-23（用户点名，参考队友局域网版 server/room.ts + pacing.ts）：
+#    他们的状态机是"服务端双层定时器"驱动：AI 水泵（单 setTimeout 链持续推进）
+#    + 独立的 deadlineGuard（到点裁决）—— 推进**不依赖客户端轮询**。
+#    我们原来把推进全挂在 GET /public 上：页面关了 / 轮询被卡住 / 客户端只在
+#    面板页才轮询，状态机就停摆（夜间面板不弹、窗口到点不收人，都是这条链的病）。
+#    现在补上服务端水泵：后台线程周期性把每一局往前推。/public 的 drive()
+#    降级为"赶上进度"的补充信号（双层保留客户端这一拍：谁先到谁干活，s.lock 互斥）。
+_PUMP_STARTED = {"v": False}
+
+
+def _start_drive_pump() -> None:
+    """启动推进水泵（**进程级去重**：start.py 的两个 uvicorn 实例共用本进程
+    的模块状态，与上面的 `_WARMED` 同一套路；若按进程分开跑，各自 SESSIONS
+    也是各自进程的，多一个空转水泵无害）。"""
+    if _PUMP_STARTED["v"]:
+        return
+    _PUMP_STARTED["v"] = True
+
+    def _loop() -> None:
+        while True:
+            time.sleep(0.3)
+            for s in list(game_api.SESSIONS.values()):
+                try:
+                    if s.game.winner is None:
+                        # drive() 内部自己拿 s.lock（与 /act、/public 互斥）；
+                        # 人类有待办时 auto_advance 立刻返回，这里几乎零开销。
+                        s.drive(0.15)
+                except Exception as e:  # noqa: BLE001
+                    # 单局故障不能拖死水泵：打日志、继续推别的局
+                    print(f"[pump] {s.id}: {type(e).__name__}: {e}", flush=True)
+
+    threading.Thread(target=_loop, name="drive-pump", daemon=True).start()
+    print("[server] 推进水泵已启动（0.3s 节拍）", flush=True)
 
 
 app = FastAPI(title="P0-talk", lifespan=lifespan)
@@ -377,9 +414,13 @@ def _asset(name: str, media: str) -> Response:
                     media_type=media, headers=NO_STORE)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", include_in_schema=False)
 def index() -> Response:
-    return _page("index.html")
+    # 🔴 2026-10-23（用户："这几个页面全删了吧，非游戏画面，好几次拉起你就拉起这个"）：
+    #    根路径原来挂着 Day-1 的 P0-talk 探针页（index.html，只验证"说一句话→
+    #    听→回→说"那条链）—— 对局早已不需要它，每次开局还要再拼 /play。
+    #    探针页已删，根路径现在直接落对局页。
+    return RedirectResponse("/play", status_code=302)
 
 
 @app.get("/rec.js")
@@ -415,6 +456,17 @@ def speech_ui_js() -> Response:
     否则浏览器拿到 404、页面静默少一块（这次差点让整块播报队列消失）。
     """
     return _asset("speech_ui.js", "application/javascript")
+
+
+@app.get("/judge_voice.js")
+def judge_voice_js() -> Response:
+    """法官播报本地合成通道（2026-10-22 双通道改造）。
+
+    法官台词（sys）在 speech_ui 播报队列里优先走浏览器 speechSynthesis 本地合成
+    （零 HTTP 往返，夜间相位切换不再被云端链路拖住）；AI 发言仍走云端。
+    本通道不可用（无 speechSynthesis / 无中文音色）时由播报队列逐句回落云端。
+    """
+    return _asset("judge_voice.js", "application/javascript")
 
 
 @app.get("/tableui.js")
@@ -886,7 +938,7 @@ async def utter(request: Request, only: str = "") -> JSONResponse:
     识别完直接提交。它先前借用的这条链路会顺带跑一次 LLM + 一次 TTS，
     然后把结果整个丢掉。LLM 现在是 mock 所以看不出来；接真模型后，
     每按一次「按住说话」就会白花一次模型调用 + 一次语音合成。
-    探针页（`index.html`）走完整链路，不带这个参数。
+    （原探针页 index.html 走完整链路不带这个参数——该页已于 2026-10-23 删除。）
     """
     audio = await request.body()
     rate = int(request.headers.get("X-Sample-Rate", "16000"))

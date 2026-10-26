@@ -127,7 +127,7 @@ p2 = ((BASE / "play.html").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js（1900 行硬线，见 §2.1.4）
       # ⇒ 扫描的**文件清单跟着走**（判据一字未改、强度不变；同 §10.7 2026-10-02 那次）。
       + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
-index = (BASE / "index.html").read_text(encoding="utf-8")
+# 🔴 2026-10-23：探针页 index.html 已删（用户：非游戏画面）—— 它的 5 条判据随之退役
 
 # 🔴 2026-10-07（`tableui.js → speech_ui.js` 拆分时踩到的坑，值得单独上锁）：
 #    本站静态资源是 server.py 里**一个文件一条路由**（不是 StaticFiles 挂目录）——
@@ -139,26 +139,16 @@ check("★ 每个被 play.html 引用的 js 都有 server.py 路由（拆文件�
       bool(_refs) and all('"/%s"' % s in _srv for s in _refs),
       "被引用：" + str(sorted(_refs)))
 check("play.html 引用了共享录音模块", '<script src="/rec.js"></script>' in p2)
-check("index.html 引用了共享录音模块", '<script src="/rec.js"></script>' in index)
 
 # 录音上行只该跑需要的那一段：
 #   对局界面只要转写（识别完直接提交），带 asrOnly 免得白跑一次 LLM + TTS
-#   探针页要的就是完整链路，不带这个开关
 check("play.html 的录音只走 ASR（不白跑 LLM / TTS）",
       "Rec.transcribe(r.blob, { asrOnly: true })" in p2)
-check("index.html 的探针仍走完整链路（听写 + 回复 + 语音）",
-      "Rec.transcribe(r.blob)" in index and "asrOnly" not in index)
 
 check("play.html：有麦克风入口（#hoSay，大圆发言模式复用）",
       "hoSay" in p2 and "startSay" in p2)
 check("play.html：时间线播报有并发保护（半双工）",
       "if (SPEAKING || !VOICE_ON" in p2)
-
-check("index.html 不再自己实现录音编码（防漂移）",
-      "encodeWav" not in index and "mergeChunks" not in index and "ensureAudio" not in index)
-check("index.html 用共享模块", "Rec.start()" in index and "Rec.transcribe" in index)
-check("index.html 保留空直方图判定提示",
-      "没有转出文字" in index)
 
 print("=" * 74)
 print("④ 新对局页 /play（界面照 demo/index.html，数据走真引擎）")
@@ -173,8 +163,10 @@ check("/table.js 返回 JS 且带排座算法",
       and "function equalChord(" in r.text,
       f"{r.status_code} {len(r.text)}B")
 r = c.get("/play")
+# 🔴 2026-10-23 修正陈旧判据：日志区已于 2026-10-12 在所有页面彻底删除
+#    （play.html renderLog 注释：公有信息以法官播报为准），#logbox 元素早就不在了。
 check("/play 返回 HTML 且照 demo 的牌桌结构", r.status_code == 200
-      and 'id="p4"' in r.text and 'id="tablewrap"' in r.text and 'id="logbox"' in r.text,
+      and 'id="p4"' in r.text and 'id="tablewrap"' in r.text,
       str(r.status_code))
 check("play.html 引用了共享的样式 / 排座 / 录音模块",
       '/table.css' in r.text and '/table.js' in r.text and '/rec.js' in r.text)

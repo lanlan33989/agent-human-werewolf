@@ -134,9 +134,17 @@ def run_night(seed=7, humans=4, ais=5, scale=0.12, verbose=False, skip_heal=Fals
             # ---- I4：**arm 之后**倒计时一定存在（第二起事故：恒为 None）
             if now.get("started") and not now.get("until"):
                 stat["until_missing"] += 1
-            # ---- I7：**arm 之前**倒计时必须是 None（第四起事故：节点一开始就读秒）
-            if (not now.get("started")) and now.get("until") is not None:
-                stat["early_until"].append((now.get("node"), round(now["until"], 1)))
+            # ---- I7（v4 契约，2026-10-22）：**started 之前**，until_left 必须
+            #      还盖着「播报剩余 + 整窗」。旧断言（"没 arm 前 until 必须是 None"）
+            #      随 v4 起算权收回服务端而退役 —— 第四起回归闸的新形态：
+            #      若 deadline 退化成 open+W（不等播报），此刻 until_left ≤ W。
+            if (not now.get("started")) and isinstance(
+                    now.get("until_left"), (int, float)):
+                _w7 = (night_script.window_of(now.get("node") or "")
+                       if now.get("node") else None)
+                if _w7 and now["until_left"] <= _w7 * 0.95:
+                    stat["early_until"].append(
+                        (now.get("node"), round(now["until_left"], 1)))
         # ---- I5：同一拍只给一个人一套指令
         if kind in ("wheel", "speak", "vote", "shoot") and now.get("seat") is None:
             stat["multi_seat"].append(kind)
@@ -249,8 +257,8 @@ def report(title, st):
         check(f"{title} I8 人类女巫在毒药窗口**一定有面板**"
               f"（第四起·续：解药答过/到点都不许掐死毒药那一问）",
               any(k == "wheel" for k, _s in st["poison_saw"]), str(st["poison_saw"][:4]))
-    check(f"{title} I7 ★ **没念完（没 arm）之前倒计时必须是 None**"
-          f"（第四起事故：'节点开始过早 / 没按约定的播完起算'的回归闸）",
+    check(f"{title} I7 ★ **节点起算不早于『估算播完 +2s』**（第四起回归闸；"
+          f"v4：起算权在服务端，started 之前 until_left 必须盖满播报剩余+整窗）",
           not st["early_until"], str(st["early_until"][:3]))
     check(f"{title} I10 ★ 夜里下发**整张夜表**（alarm ②）且当前节点必在表上",
           not st.get("plan_bad"),

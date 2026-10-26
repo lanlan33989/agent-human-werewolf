@@ -263,7 +263,11 @@ function connect(url) {
      「刷新之后出现接回按钮」那条新断言（实测：就是它把锚点清了，按钮才不出现）。 */
   await send('Page.navigate', { url: BASE + '/play' }, sessionId);
   await sleep(2600);
-  log('装配：' + (await ev2(`document.getElementById('health').textContent`)));
+  /* 2026-10-22：#health 是旧 /game 页的遗物，play.html 里早就没有这个元素 ——
+     原写法直接 .textContent 抛 Uncaught，走查**第一步就退出**（exit=2），
+     _playwalk.err 里躺着的正是这一条。改成空安全，只报装配状态，不再拦路。 */
+  log('装配：' + (await ev2(`(function(){ var h = document.getElementById('health');
+       return h ? h.textContent : '(无 #health 元素，页面已加载)'; })()`)));
   await ev2('VOICE_ON = false');                    /* headless 没声卡，关掉播报省时间 */
   await shot('01-封面');
 

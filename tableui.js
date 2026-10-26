@@ -146,7 +146,14 @@ function closeSpeakerMode(){
   var _bi2 = $('bigIcon'), _bt2 = $('bigTitle');
   if (_bi2) _bi2.style.display = '';
   if (_bt2) _bt2.style.display = '';
-  $('sayCtl').classList.remove('on');
+  /* 🔴 2026-10-22（用户实机·第二晚全崩的根因）：play.html 里**没有 #sayCtl
+     元素**（只剩 CSS 残留），这句裸调在 SPK_MODE 非空时抛 TypeError ——
+     抛点在 tick 的面板闸之前，被外层 catch 吞掉后**该拍 455-490 的面板逻辑
+     整段跳过**：轮询活着、面板永不弹、页面冻在上一个屏（用户看到的就是
+     "卡在投票公示 + 所有面板没弹 + 播报自顾自快速放完"）。
+     第一晚不炸是因为用户还没开过麦（SPK_MODE=null 时函数第一行就 return）。 */
+  var _sc = $('sayCtl');
+  if (_sc) _sc.classList.remove('on');
   var tip = $('spkTip');
   if (tip) tip.style.display = 'none';
   /* 🔴 回合切换**必须清场**（2026-10-02 实局）：内置识别会静音自续（rec.js 的
@@ -276,18 +283,24 @@ async function tick(){
        ⇒ 麦克风按钮抢在夜间播报结束前冒出来（用户听到的就是"夜里还没结束就能开麦"）。
        `voicedUp()` 就是那条"整队播报门"（语音关掉时它恒真 ⇒ 不会憋死）。
        `now.kind === 'none'` 也放行：那一拍没有面板，需要它去把旧面板收掉。 */
-    /* 三档口径（都在播报之后）：wheel/shoot = 那句念完（linePlayed）；speak/vote = voicedUp；none = 放行。 */
+    /* 三档口径（2026-10-23 起）：wheel/shoot = **服务端 started**；speak/vote = voicedUp；none = 放行。 */
     var _gateOk = NOW
       ? (NOW.kind === 'none'
          || ((NOW.kind === 'wheel' || NOW.kind === 'shoot')
-             /* ⚠️ 这里**只许用 `linePlayed`**，不许再 `|| NOW.started`（2026-10-07 第七起：
-                用户实机"预言家面板弹出过早，居然在女巫闭眼播报时弹出来了"）。
-                原因：服务端的 arm 失联兜底会在**半个窗口**时把 `started` 置真，
-                而"女巫请闭眼"那句还要念几秒才轮到"预言家请睁眼" ⇒ 面板抢跑。
-                "面板不许被播报永久否决"这条已经由 `linePlayed` **自己**兜住了
-                （它内部有"最近一次念完已过 8 秒 ⇒ 音频坏了，放行"），
-                而"人类拿得到整窗"由服务端 `_nn_deadline` 保证（不再依赖前端）。 */
-             ? linePlayed(NOW.node) : voicedUp()))
+             /* 🔴 2026-10-23（用户实机："狼人/解药面板依旧不弹、毒药读秒 12→14→13"）：
+                面板门改听**服务端的 started**。v4 已把起算权收回服务端
+                （est = 估算"念完+2s"，水泵按墙钟走窗口），而旧门 `linePlayed`
+                锚在本机音频游标（SPOKE_DONE 追 panel_line）—— 客户端队列一慢
+                （本地合成慢 / 切后台节流 / TTS 悬挂），游标就追不上，面板整窗
+                不开，而服务端窗口照收 ⇒ 狼/解药面板永远错过。
+                started 与读秒同源（同一服务端时钟）⇒ 面板弹出那一刻读秒必是
+                满窗，"弹出即起走"从机制上成立。
+                （2026-10-07 第七起的"面板抢跑"另有真因：那时 started 由 arm
+                 失联兜底在半窗置真 —— v4 的 started 已改为精确 est，不再有
+                 那个半窗抢跑源。）
+                老服务端不下发 started ⇒ 退回 linePlayed（音频卡死兜底仍在其内）。 */
+             ? (typeof NOW.started === 'boolean' ? NOW.started : linePlayed(NOW.node))
+             : voicedUp()))
       : nightReady(top);
     /* 记下"这个节点的窗口第一次被看到"的时刻（上面 arm 兜底用） */
     if (!NOW || NOW.node !== _nodeSeenNode){
@@ -297,7 +310,13 @@ async function tick(){
     /* 倒计时（2026-10-07 第三期）：优先用 `now.until`（**窗口结束的墙上时刻**），
        本地只做减法 —— 不再"剩余秒数 + 收到它的时刻"这种近似（轮询间隔会漂）。
        老服务端没有 `until` 时退回 `seconds_left`。 */
-    if (NOW && typeof NOW.until === 'number' && NOW.until > 0){
+    /* 🔴 2026-10-22：优先用服务端的**剩余秒数**（until_left）本地起算 ——
+       until 是服务器墙钟，设备时钟有偏差时（手机 vs 服务端）倒计时一出来
+       就像"已经走了好久"。until_left 与面板 arm 同拍下发 ⇒ 面板与倒计时
+       天然同时出、且从满窗起走（用户定稿口径）。老服务端没有该字段时回退 until。 */
+    if (NOW && typeof NOW.until_left === 'number'){
+      NIGHT_CD = { left: Math.max(0, NOW.until_left), at: Date.now() };
+    } else if (NOW && typeof NOW.until === 'number' && NOW.until > 0){
       NIGHT_CD = { left: Math.max(0, NOW.until - Date.now() / 1000),
                    at: Date.now() };
     } else if (top && typeof top.seconds_left === 'number'){
@@ -359,8 +378,19 @@ async function tick(){
       var _tlC = (PUBLIC && PUBLIC.timeline) || [];
       var _dueLn = (NOW && typeof NOW.panel_line === 'number' && NOW.panel_line >= 0)
         ? (_tlC[NOW.panel_line] || null) : null;
+      /* 🔴 2026-10-22 v3（用户实机："投票播报还未结束狼队刀人面板就弹出"）：
+         v2 的"应播时刻已过 8 秒"分不清**卡死**和**排队** —— 白天投票的播报
+         积压时，夜间句的 at+delay 早就过了 8 秒，但队列还在念前面的话；
+         v2 条件全真 ⇒ 抢跑 arm ⇒ started 提前置真 ⇒（bug1 的闸失效）面板
+         和倒计时全部提前。补两条判据：
+           · "队列已推进到这句" = SPOKEN > panel_line（这句已开念）；
+           · "还没念完"       = SPOKE_DONE 没越过它。
+         两者同时成立才是真卡死（正在播但 audio 事件不来）；还在排队 ⇒ 不兜底。 */
       var _armFallback = !!(_dueLn && _dueLn.at
-                            && (Date.now() / 1000 - (_dueLn.at + (_dueLn.delay || 0))) > 8);
+                            && (Date.now() / 1000 - (_dueLn.at + (_dueLn.delay || 0))) > 8
+                            && typeof SPOKEN === 'number'
+                            && SPOKEN > NOW.panel_line
+                            && (!SPOKE_DONE || SPOKE_DONE.idx < NOW.panel_line));
       var done = _armFallback
                  || (NOW ? linePlayed(_armNode)
                      : ((jx < 0) || !VOICE_ON || PAUSED
@@ -483,7 +513,12 @@ async function tick(){
       var _nodeMoved = WHEEL && WHEEL.mode === 'act' && WHEEL.forNode
                        && PUBLIC.now && PUBLIC.now.node
                        && WHEEL.forNode !== PUBLIC.now.node;
-      if ((!sameMine || _nodeMoved) && !(SAY_REC || SAY_PENDING) && !(mine && selecting)
+      /* 🔴 2026-10-22（用户实机："女巫毒药面板没弹"）：selecting 挡重建只该挡
+         **本窗口内**的重建 —— 节点都换了（解药→毒药），旧窗口里未确认的选择
+         留着毫无意义（还可能被带进毒药窗口误当毒药目标），必须放行重建。
+         否则解药屏选中过号码的用户，毒药窗口整窗停在解药屏上。 */
+      if ((!sameMine || _nodeMoved) && !(SAY_REC || SAY_PENDING)
+          && !(mine && selecting && !_nodeMoved)
           && !showingResult && !(WHEEL && WHEEL.batch)){
         closeHandoff();                     /* 手上这屏过期了，先撤掉 */
         if (top) openHandoff(top, null);
@@ -779,10 +814,22 @@ function openHandoff(need, allies){
     var _dueB = (PUBLIC.now && typeof PUBLIC.now.panel_line === 'number'
                  && PUBLIC.now.panel_line >= 0)
       ? (_tlD[PUBLIC.now.panel_line] || null) : null;
+    /* 🔴 2026-10-22 v3：与 arm 兜底同款判据 —— 投票播报积压时不许把"排队"
+       误判成"卡死"而放行面板（否则面板抢在法官念到之前弹出）。 */
     var _stalled = !!(_dueB && _dueB.at
-                      && (Date.now() / 1000 - (_dueB.at + (_dueB.delay || 0))) > 8);
-    var _expired = (PUBLIC.now.until != null
-                    && PUBLIC.now.until <= Date.now() / 1000);
+                      && (Date.now() / 1000 - (_dueB.at + (_dueB.delay || 0))) > 8
+                      && typeof SPOKEN === 'number'
+                      && SPOKEN > (PUBLIC.now.panel_line || 0)
+                      && (!SPOKE_DONE
+                          || SPOKE_DONE.idx < (PUBLIC.now.panel_line || 0)));
+    /* 🔴 2026-10-22：过期判定优先用剩余秒数（until_left<=0）—— 墙钟比较
+       （until<=本地now）在设备时钟有偏差时会**误杀整窗面板**（手机快 10 秒
+       ⇒ 窗口明明还剩 10s 却判过期 ⇒ 面板不开）。until_left 是服务端在
+       arm 同拍下发的剩余秒数，用它本地衰减，免疫时钟差。老服务端回退墙钟。 */
+    var _expired = (typeof PUBLIC.now.until_left === 'number')
+      ? (PUBLIC.now.until_left <= 0)
+      : (PUBLIC.now.until != null
+         && PUBLIC.now.until <= Date.now() / 1000);
     if ((PUBLIC.now.started === false && !_stalled) || _passed || _expired){
       closeHandoff();
       return false;
@@ -929,6 +976,10 @@ var DIAL_NAMES = { wolf: '狼人', witch_heal: '女巫', witch_poison: '女巫',
 function paintDialKnives(v){
   var d = $('nightDial');
   if (!d || !v) return;
+  /* 🔴 2026-10-22（用户实机：投票界面出现隔夜的刀子图案）：投票和夜间动作
+     共用同一个拨号盘，而这个函数没有 paintWheelKnives 那样的 phase 守卫 ——
+     白天投票时 MYVIEW 里还挂着昨晚的 wolf_points，刀标就画上去了。 */
+  if (v.phase && v.phase !== 'night') return;
   d.querySelectorAll('button[data-no]').forEach(function(b){
     if (b.textContent.indexOf('🔪') === 0) b.textContent = b.getAttribute('data-no');
   });
@@ -998,7 +1049,11 @@ function renderNightDial(seatNo, v, acts){
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'pass', null, null); };
   } else if (act === 'vote'){
     extra.textContent = '弃票';
-    extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'vote', seatNo, null); };
+    /* 🔴 2026-10-22（用户定，推翻 2026-09-17 的"弃票=自投"先例）：
+       弃票就是弃票 —— 引擎本来就支持 target=-1（cast_vote 的 docstring、
+       tally_text/tally_speech 的弃票口径都是现成的），之前是这里把 -1
+       实现成了 seatNo。真·弃票不计入任何人的票。 */
+    extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'vote', -1, null); };
   } else if (act === 'guard'){
     extra.textContent = '空守';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'guard', -1, null); };
@@ -1282,7 +1337,7 @@ function renderWheelAct(seatNo, v, actsOverride){
     var kd = $('hoPass0');
     if (kd) kd.onclick = function(ev){ ev.stopPropagation(); wheelSelect('kill', -1); };
     var ab = $('hoAbstain');
-    if (ab) ab.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'vote', seatNo, null); };  /* 弃票=自投（2026-09-17 先例） */
+    if (ab) ab.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'vote', -1, null); };  /* 弃票=弃票（2026-10-22 用户定，推翻自投先例；引擎 -1 口径现成） */
     var cf = $('hoConfirm');
     if (cf) cf.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'confirm', null, null); };
     var bk = $('hoBack');

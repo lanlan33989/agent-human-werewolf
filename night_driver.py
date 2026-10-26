@@ -174,6 +174,50 @@ def _nn_humans_of(self, node_id: str) -> List[int]:
     return out
 
 
+def _nn_ready_mono(self, node_id: str) -> Optional[float]:
+    """估算「本节点那句播完 + 2 秒」的时刻（**monotonic**）。
+
+    🔴 2026-10-22 v4（参考队友局域网版架构，源码存 `_teammate_ref/`）：
+    他们的状态机只认「phase + deadline」，客户端拿 deadline 自己渲染倒计时，
+    **根本没有"前端说播完了才起算"这条链** —— 我们这几天修的 arm 兜底
+    v2/v3、stall 放行、过期闸，全都是这条链上的补丁。
+    v4 把"起算权"收回服务端：timeline 里每句都有 at/delay/文本，服务端自己
+    按**本地合成口径**（rate 0.98 的中文 ≈ 每 3.4 字 1 秒 + 0.5s 起步）模拟
+    客户端的逐句播放，推到本节点那句念完，再 +2s（用户定稿口径）。
+      · 估算 ≤ 真实（音频慢/云 TTS 卡）：客户端 arm（真实念完）会把窗口
+        往后延 —— `max(est, armed)`，谁晚听谁的；
+      · 估算 ≥ 真实（本地合成正常）：面板与倒计时按估算同弹出，满窗起走。
+    返回 None = 时间线里找不到该节点（老对局/无播报句），调用方自行兜底。
+    """
+    tl = self.timeline or []
+    idx = next((i for i, x in enumerate(tl) if x.get("node") == node_id), -1)
+    if idx < 0:
+        return None
+    # ⚠️ 估算的每个成分（留白/字数时长/+2s 尾巴）都按 win_scale 缩放：
+    #    测试把窗口缩到 2% 时没有真实语音，播报节奏必须跟着缩，
+    #    否则"测试无客户端 → est 拖 3s/句 → 短跑测试直接超预算"（实测踩坑）。
+    _sc = night_script.win_scale()
+    # 🔴 2026-10-23 实机修复（用户："狼队、女巫毒药面板都没弹出"）：
+    #    回溯累加只统计**夜间剧本句**（带 `node` 字段的）—— timeline 里还躺着
+    #    上一个白天的玩家长发言（几百字/句，按 3.4 字/秒一算单句就虚增几十秒），
+    #    把起算时刻推到一分钟后 ⇒ 面板/倒计时全被拖死。
+    #    白天句不进夜间播报队列；万一真有队列积压（上一节点的闭眼句还没念完），
+    #    它带 node，串行累加照样会算进去，客户端 arm（真实念完）再兜一层。
+    t = None
+    for j in range(idx + 1):
+        x = tl[j]
+        if "node" not in x:
+            continue                  # 白天发言 / 公示日志：不在夜间播报队列里
+        start = (x.get("at") or x.get("ts") or 0.0) + _sc * (x.get("delay") or 0.0)
+        if t is not None and t > start:
+            start = t                 # 队列串行：上一句没念完不能开下一句
+        t = start + _sc * (0.5 + len(x.get("s") or "") / 3.4)
+    if t is None:
+        return None
+    ready_wall = t + _sc * 2.0
+    return time.monotonic() + (ready_wall - time.time())   # 墙钟 → monotonic
+
+
 def _nn_deadline(self, node_id: str) -> float:
     """窗口结束时刻（monotonic 时间戳）。
 
@@ -189,15 +233,24 @@ def _nn_deadline(self, node_id: str) -> float:
     win = night_script.window_of(node_id)
     base = self._nn_at
     if getattr(self, "_nn_need_arm", False):
-        armed = getattr(self, "human_wait_since", None)
-        if armed is not None:
-            base = max(base, armed)         # 人类窗口从 arm 起算（念完那一刻）
+        # 🔴 v4：没 arm 时不再"往后推半个窗口"（粗兜底），改用**服务端自己的
+        #    播报完成估算**精确起算（念完 +2s）—— 倒计时从满窗起走，面板与
+        #    倒计时同拍。
+        # 🔴 2026-10-23 实机（用户："毒药读秒 12→14→13、预言家从 16 开始"）：
+        #    arm **不再延长窗口**。原来 max(est, armed) 谁晚听谁 —— 面板弹出
+        #    （音频门晚于 est）那一刻窗口已走到中段，arm 一落地 deadline 又
+        #    往后跳 ⇒ 读秒先见到 12、又回涨到 14。起算权既已收回服务端（v4），
+        #    窗口就只由 est 裁决：面板弹出（= started）与读秒同拍、整窗走满。
+        #    估算失效（None）⇒ 才退回 arm / 半窗兜底（老对局没有估算依据）。
+        est = _nn_ready_mono(self, node_id)
+        if est is not None:
+            base = max(base, est)
         else:
-            # 没 arm（前端没通知 / 面板还没出来）⇒ 窗口往后推半个窗口再起算：
-            # **人类仍拿得到一个整窗**。⚠️ 这里**只动窗口**，**绝不置 `human_wait_since`**
-            # —— 置了的话 `now.started` 会跟着变真、前端就开始显示读秒（用户实机：
-            # "倒计时开始的时点不对，应该在『狼人请睁眼』播报完成后"）。
-            return base + win * 1.5
+            armed = getattr(self, "human_wait_since", None)
+            if armed is not None:
+                base = max(base, armed)     # 老对局：arm 是唯一"念完了"的信号
+            else:
+                base = base + win * 0.5     # 连 arm 都没有：退回旧的半窗兜底
     return base + win
 
 

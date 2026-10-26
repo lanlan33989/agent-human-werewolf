@@ -56,8 +56,11 @@ check("mock 模式启用 MockLlm", j.get("llm") == "MockLlm", str(j))
 check("mock 模式启用 MockTts", j.get("tts") == "MockTts", str(j))
 
 # ---- 首页 ----
+# 🔴 2026-10-23：探针页 index.html 已删（用户："非游戏画面，好几次拉起就拉起它"），
+#    根路径 302 直落对局页 —— TestClient 默认跟随重定向，落点应是 /play 的牌桌。
 r = client.get("/")
-check("首页返回 HTML", r.status_code == 200 and "P0-talk" in r.text, str(r.status_code))
+check("首页直落对局页 /play（探针页已删）",
+      r.status_code == 200 and 'id="tablewrap"' in r.text, str(r.status_code))
 
 # ---- 正常一次说话 ----
 wav = make_wav()

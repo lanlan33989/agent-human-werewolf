@@ -144,12 +144,34 @@ async function speakQueue(){
          切到云端 TTS（TTS=qwen）才听得出区别；本地 SAPI 会静默忽略 voice。 */
       var voice = line.voice || '';
 
-      /* 优先走**流式播报**（/ws/tts）：首片音频 ~0.5 秒就出声，合成在后台继续。
-         起不来（中继不通 / 云端拒绝 / 不是云端 TTS）⇒ **静默回落**成"合成完再播"：
-         任何一环坏了都不该变成"AI 说不出话"。
-         调试开关：地址后面加 ?nostream=1 就强制走老路。 */
+      /* 🔴 2026-10-22 双通道：法官台词（sys）优先走**浏览器本地** speechSynthesis
+         （judge_voice.js）—— 文本到手就开口，无 HTTP 往返，夜间相位切换不再被
+         云端链路（~1s/句起步）拖住。AI 发言（say）仍走云端 —— 音色人格在那条通道。
+         降级链（保命设计，不能砍）：speechSynthesis 不存在 / 音色列表没到 /
+         没有中文音色（部分国产 Android ROM）⇒ 本地失败或不可用，**逐句**回落
+         现有云端通道，一个字都不会少念。
+         打断规则：相位切换类（天黑/天亮）interrupt=true 立即打断旧播报；
+         其余法官台词排队不打断。 */
+      var _loc = false;
+      if (line.t === 'sys' && typeof JudgeVoice !== 'undefined' && JudgeVoice.usable()){
+        try {
+          var _lv0 = time_ms();
+          await JudgeVoice.speakAwait(txt, JudgeVoice.isPhaseSwitch(txt));
+          _loc = true;
+          /* at_lag_ms = 服务端时间戳 → 本地出声的全程延迟（验收指标 <300ms 的观测值；
+             跨设备时含本机与服务端的时钟差，桌面同机测量最准）。 */
+          LAST_TTS = { ok: true, how: 'local', ms: time_ms() - _lv0,
+                       at_lag_ms: Math.max(0, Math.round(
+                         (Date.now() / 1000 - (line.at || Date.now() / 1000)) * 1000)),
+                       text: txt.slice(0, 40) };
+        } catch (e) {
+          /* 本地任何异常都按"不可用"处理：记诊断、_loc 保持 false ⇒ 照走云端 */
+          LAST_TTS = { ok: false, how: 'local', err: String(e).slice(0, 80),
+                       text: txt.slice(0, 40) };
+        }
+      }
       var spoke = false, sp = null;
-      if (VOICE_STREAM){
+      if (!_loc && VOICE_STREAM){
         try {
           sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent(txt)
                                + (voice ? ('&voice=' + encodeURIComponent(voice)) : ''));
@@ -165,7 +187,7 @@ async function speakQueue(){
         }
       }
       _t1 = time_ms();
-      if (!spoke){
+      if (!_loc && !spoke){
         try {
           /* 🔴 2026-10-12（用户实机：开局首段播报迟迟不出、面板随之不出）：
              TTS 请求原来**没有超时** —— 服务端冷启动/网络一卡，队列就整个挂住。

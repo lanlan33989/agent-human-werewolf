@@ -730,6 +730,35 @@ def style_rules(level: Optional[str]) -> str:
     return _STYLE_COMMON.format(style=_STYLE_GORE if spec["gore"] else _STYLE_TAME)
 
 
+# ================================================================ 防捏造 / 心理隔离（2026-10-22，移植自队友局域网版 brain.ts）
+#
+# 队友源码（`_teammate_ref/werewolf-app-src/src/server/ai/brain.ts`）的三块实战
+# 提示词，措辞按我们的体系改写：
+#   · NO_FABRICATION_BLOCK（≈ 那边的 NO_FABRICATION_BLOCK）：信息必须有出处、
+#     不确定就说不知道 —— ANTI_INJECTION 防的是"别人往它嘴里塞话"，
+#     这块防的是"它自己编"（实测高频：评价还没发言的人、引用没发生的票型）。
+#   · HIDE_WOLF_SPEAK_BLOCK（≈ hideWolf）：狼白天发言前的"心理隔离"。狼队频道
+#     内容结构上就不在 prompt 里（L0-L2 隔离），但模型仍可能**自己脑补**
+#     "作为狼，我们昨晚商量过…"；这句话把"那场对话从未发生"钉死，给
+#     leak_check 减负（泄露命中重试的往返远贵过一句提示词）。
+#   · HARD_INFO_RULE（≈ HARD_INFO_BLOCK）：人格只管"怎么说"，不管"说不说全"
+#     —— 防止"惜字如金"类人格把报验人缩成半句，好人拿不到信息。
+NO_FABRICATION_BLOCK = """【绝对不能编造】
+你说的每一条信息，都要能在这次给你的材料里找到出处：
+- 不要评价还没发言的人，更不要替他们编内容、编站边；
+- 不要引用还没发生的事（还没投票就不要聊票型，天没黑就不要说今晚谁出局）；
+- 不确定的事就说"我不确定/没听清"，不要把猜的当成事实说出来。
+场上的人一听就能发现你在编——这会直接毁掉你这轮发言的可信度。"""
+
+HIDE_WOLF_SPEAK_BLOCK = """【重要 · 你现在在公开场合说话】
+你昨晚可能与狼队队友有过任何默契、商量或打算，但那些只有狼知道。
+现在所有人都在看着你：那些事从你的视角从未发生过，任何人都无从知道。
+绝不要引用、转述、暗示——哪怕换个说法也不行。
+你的发言只能基于所有人都能看到的信息：谁公开说了什么、谁投了谁。"""
+
+HARD_INFO_RULE = """另外：性格只决定你怎么说，不决定你说不说全。
+该报的硬信息（验的是几号、金水还是查杀、第几晚验的）一个都不能省。"""
+
 SYSTEM_TEMPLATE = """你是 {seat} 号。你们这些人被关在同一间屋里，其中有几个是披着人皮的狼。
 每个夜晚它们会咬死一个人；每个白天，你们要投票把一个人扔出去。
 
@@ -739,8 +768,10 @@ SYSTEM_TEMPLATE = """你是 {seat} 号。你们这些人被关在同一间屋里
 {experiences}
 {anti_injection}
 {anti_bomb}
+{no_fabrication}
 说话要求：
 {style_rules}
+{hard_info}
 
 {private}
 """
@@ -1153,6 +1184,8 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
         experiences=_experiences_block(experiences),
         anti_injection=ANTI_INJECTION,
         anti_bomb=ANTI_BOMB,
+        no_fabrication=NO_FABRICATION_BLOCK,
+        hard_info=HARD_INFO_RULE,
         style_rules=style_rules(level),
         private=private_block(view),
     )
@@ -1208,6 +1241,10 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
                 _marks.append(f"{_s + 1}号○还没说")
         _sp_line = (SPEECH_PROGRESS_HEAD
                     + " → ".join(_marks) + "\n\n")
+        # 🔴 2026-10-22 移植（队友 timelineBlock 的核心思想：把"哪些还没发生"
+        #    点名，而不是笼统说"别编"）：
+        if any(_s not in (_sp.get("spoken") or []) for _s in _sp["order"]):
+            _sp_line += "（标 ○ 的人一句都还没开口——不要评价、转述或替他们编任何发言。）\n\n"
     # 发言只有一轮（2026-10-02 用户加）：FACT_ONE_ROUND（模块级，配置台可改）。
     user = (
         f"{hard_facts(view)}\n\n"
@@ -1501,6 +1538,20 @@ class Agent:
             #    ③ 啰嗦。④ 第一轮最先发言的狼人必须悍跳（有预言家的局跳预言家，
             #    只有女巫的局什么都不跳）。四条都进 speak 的任务文案。
             task += SPEAK_RULES_REMINDER.format(round=int(view.get("round") or 1))
+            # 🔴 2026-10-22 移植（backup 分支，队友 hideWolf / antiRepeatBlock）：
+            #    狼白天发言前的心理隔离（system 里的结构隔离管不住"自己脑补"）；
+            #    以及"别跟前面的人撞开场句"——发言多样性实测最大的失分点。
+            if str(view.get("role", "")) == "wolf":
+                task += "\n\n" + HIDE_WOLF_SPEAK_BLOCK
+            _recent = [h for h in (history or []) if "：" in h][-8:]
+            if _recent:
+                _frag = "；".join(
+                    h.split("：", 1)[0].strip() + "「"
+                    + h.split("：", 1)[1].strip()[:10] + "」"
+                    for h in _recent)
+                task += ("\n\n【别跟前面的发言撞句】最近开口的人是这样开头的：\n"
+                         + _frag
+                         + "\n你的开场必须和他们每一个人都不一样（换切入点，不是换同义词）。")
         try:
             import run_archive as _ra
             _ra.set_ask_ctx(task_key, view)
