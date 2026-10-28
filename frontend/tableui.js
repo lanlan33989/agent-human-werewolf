@@ -1574,6 +1574,12 @@ function diagRefresh(){
     /* 🔴 2026-10-05「AI 不发声」：把最近一次播报的结果直接摆出来 ——
        到底是"还没播过"（null）、合成失败（ok:false + 原因）、还是播放被拦，
        一眼可见，不再靠猜。 */
+    /* 法官走的是浏览器本地合成（judge_voice.js），与 AI 的云端通道完全两条路 ——
+       只显示 LAST_TTS 会漏掉这一层（最近一句可能正好是 AI 的）。手机上"法官没声"
+       要能一眼分清：没中文音色 / 被静音标记挡住 / 合成器不回调。 */
+    ['法官通道', (typeof JudgeVoice !== 'undefined' && JudgeVoice.diagText)
+      ? JudgeVoice.diagText()
+      : '<span class="bad">judge_voice.js 未加载（/judge_voice.js 是不是 404？）</span>'],
     ['最近播报', LAST_TTS
       ? ((LAST_TTS.ok ? '<span class="ok">ok</span>' : '<span class="bad">失败</span>')
          + '｜' + (LAST_TTS.how || '?')
@@ -1592,7 +1598,7 @@ function diagRefresh(){
   }).join('') +
     '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
     '<button id="diagRetry" class="bigbtn" style="padding:8px 12px;font-size:13px">重试麦克风</button>' +
-    '<button id="diagSpeak" class="bigbtn" style="padding:8px 12px;font-size:13px">试一句 AI 语音</button>' +
+    '<button id="diagSpeak" class="bigbtn" style="padding:8px 12px;font-size:13px">试语音（AI + 法官）</button>' +
     '<button id="diagEngine" class="bigbtn" style="padding:8px 12px;font-size:13px">切换识别引擎</button>' +
     '<button id="diagClose" class="bigbtn" style="padding:8px 12px;font-size:13px">收起</button>' +
     '</div>';
@@ -1625,6 +1631,14 @@ function diagRefresh(){
       await sp.promise;
       DIAG_ASR_ERR = sp.error() ? ('TTS 出错：' + sp.error()) : '（TTS 正常，刚才听到声音了吗？）';
     } catch (e) { DIAG_ASR_ERR = 'TTS 失败：' + e; }
+    /* 同一颗按钮顺带测**法官本地通道** —— 两条路互不相干（云端 vs 浏览器合成），
+       必须都过一遍才知道哑的是哪一条。 */
+    if (typeof JudgeVoice !== 'undefined' && JudgeVoice.speakAwait){
+      try {
+        await JudgeVoice.speakAwait('诊断：法官播报测试', true);
+        DIAG_ASR_ERR += ' ｜法官本地合成已调起（第二声是法官）';
+      } catch (e) { DIAG_ASR_ERR += ' ｜法官合成抛错：' + e; }
+    }
     diagRefresh();
   };
 }

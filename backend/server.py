@@ -886,7 +886,13 @@ async def tts(text: str, rate: int = 0, volume: int = 100, voice: str = "") -> R
     if not text:
         return Response(content=b"", media_type="audio/wav")
     try:
-        out = await run_in_threadpool(TTS.synth, text, rate, volume,
+        # 下面这行的关键字传参不是风格问题：MockTts.synth 的签名是 (text, **kw)，
+        # 只吃关键字 —— 2026-10-28 之前这里传位置参数，于是 **MOCK 模式下 /api/tts
+        # 必 500**（TypeError: takes 2 positional arguments but 4 were given）。
+        # 表现就是"整局一点声音都没有"，而所有冒烟测试都跑在 MOCK=1 下，
+        # 却没有一条打过这个接口，所以一直没被发现。改关键字后各实现
+        # （QwenTts / SapiTts / MockTts / DoubaoHttpTts）都能收。
+        out = await run_in_threadpool(TTS.synth, text, rate=rate, volume=volume,
                                       voice=(voice or None))
     except NotImplementedError as e:
         return JSONResponse({"error": str(e), "kind": "not_implemented"}, status_code=501)

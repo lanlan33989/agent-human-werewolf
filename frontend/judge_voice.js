@@ -270,8 +270,40 @@ window.JudgeVoice = (function () {
     } catch (e) { /* ignore */ }
   }, 1000);
 
+  /* ---------------------------------------------------------- 诊断（给 play.html 的 🩺 面板用）
+     为什么单独给一个：法官走的是**浏览器本地合成**这条独立通道，与 AI 的云端通道
+     没有任何共享状态。面板只显示「最近播报」(LAST_TTS) 会漏掉这一层 —— 最近一句
+     可能正好是 AI 的。手机上"法官没声"时，要能一眼分清是三种里的哪一种：
+       ① 没有中文音色（国产 Android ROM 常见）⇒ 本应回落云端
+       ② 被静音标记挡住（localStorage.werewolf.muted=1）⇒ 静默且**不回落**（最像"消失"）
+       ③ 合成器不回调（无声卡/被系统接管）⇒ 看门狗 TTL 内一律走云端
+     只输出 HTML 片段，样式类由 play.html 的 .ok/.bad 提供。 */
+  function diagText() {
+    try {
+      var syn = window.speechSynthesis;
+      if (!syn) return '<span class="bad">此浏览器没有 speechSynthesis（法官只能走云端）</span>';
+      var vs = syn.getVoices() || [], zh = 0;
+      for (var i = 0; i < vs.length; i++)
+        if (/^zh/i.test(vs[i].lang || '') || /中文|Chinese/i.test(vs[i].name || '')) zh++;
+      var v = pickVoice();
+      var bits = [usable() ? '<span class="ok">可用</span>'
+                           : '<span class="bad">不可用（已回落云端）</span>',
+        '音色 ' + (v ? (v.name + (v.localService ? '（本地）' : '（在线）')) : '（无中文音色）'),
+        '音色表 ' + vs.length + ' 个 / 中文 ' + zh + ' 个'];
+      if (muted()) bits.push('<span class="bad">被静音标记挡住（werewolf.muted=1）</span>');
+      if (_brokenSince) {
+        var left = 5 * 60 * 1000 - (Date.now() - _brokenSince);
+        bits.push(left > 0
+          ? ('<span class="bad">合成器不回调，' + Math.ceil(left / 1000) + 's 内全走云端</span>')
+          : '看门狗已过 TTL');
+      }
+      return bits.join(' ｜ ');
+    } catch (e) { return '<span class="bad">诊断失败：' + String(e).slice(0, 60) + '</span>'; }
+  }
+
   /* ---------------------------------------------------------- 导出 */
   return {
+    diagText: diagText,
     speak: speak,
     speakAwait: speakAwait,
     stopSpeaking: stopSpeaking,
