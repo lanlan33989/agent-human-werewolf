@@ -222,10 +222,13 @@ var DEMO_SCENES = {
       /* 后端 engine.get_view_for 的 runoff 结构（stage=2 加时投票） */
       p.runoff = { stage: 2, candidates: [1, 4], votable: [1, 4], can_vote: true,
                    first_votes: { "0": 1, "1": 4, "2": 1, "3": 4, "4": 0, "5": 1 } };
-      p.public_log.push("投票结果：2 号 2 票、5 号 2 票、1 号 1 票（1 人弃票）。");
+      /* 票型框的数据（2026-10-28：法官不再念票型，改由底部框显示）。
+         首轮票型：1/3/6 号投 2 号，2/4 号投 5 号，5 号投 1 号 */
+      p.vote_board = { round: 1, runoff: false, first_round: true,
+                       groups: [{ target: 1, voters: [0, 2, 5] }, { target: 4, voters: [1, 3] },
+                                { target: 0, voters: [4] }],
+                       abstain: [], lines: ["1，3，6→2", "2，4→5", "5→1"] };
       p.public_log.push("2 号、5 号票数相同，进入加时。2 号、5 号请各再说一轮。");
-      p.timeline.push({ t: "sys", s: "投票结果：2 号 2 票、5 号 2 票、1 号 1 票。",
-                        voice: "Neil", ts: 1793034458 });
       p.timeline.push({ t: "sys", s: "2 号、5 号票数相同，进入加时。", voice: "Neil", ts: 1793034460 });
       p.timeline.push({ t: "sys", s: "加时投票开始：只能投给 2 号、5 号中的一位，或者弃票。",
                         voice: "Neil", ts: 1793034464 });
@@ -237,15 +240,19 @@ var DEMO_SCENES = {
     })
   },
 
-  /* 票型大字 */
+  /* 票型框（2026-10-28：法官不再念票型，改成底部窄条计票） */
   vote_result: {
-    title: "投票结果（票型大字）",
-    note: "#voteBig 只摆票型，不显示 AI 文本。",
+    title: "投票结果（底部票型框）",
+    note: "窄条约屏宽 15%，内容多了可上下滑动；每行一条「2，3→5」。",
     public: _pub(function (p) {
       p.phase = "day"; p.night_node = null; p.night_plan = [];
       p.votes = { "0": 2, "1": 2, "3": 0, "4": 2, "5": 4 };
       p.voted_seats = [0, 1, 3, 4, 5];
-      p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
+      /* 1/2/5 号投 3 号，4 号投 1 号，6 号投 5 号 */
+      p.vote_board = { round: 1, runoff: false, first_round: false,
+                       groups: [{ target: 2, voters: [0, 1, 4] }, { target: 0, voters: [3] },
+                                { target: 4, voters: [5] }],
+                       abstain: [], lines: ["1，2，5→3", "4→1", "6→5"] };
       p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
       p.players[2].alive = false; p.players[2].lives = 0;
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
@@ -331,7 +338,6 @@ var DEMO_SCENES = {
     public: _pub(function (p) {
       p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
       p.pending = "working";
-      p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
       p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
       p.players[2].alive = false; p.players[2].lives = 0;
       p.timeline.push({ t: "say", s: "我是好人……昨天投我的人今天盯紧 4 号，他的发言太滑了。", seat: 2, voice: "Grace", spoken: false });
@@ -352,7 +358,7 @@ var DEMO_SCENES = {
       p.winner = "good";
       p.pending = "ended";
       p.timeline.push({ t: "sys", s: "最后一名狼人出局。", voice: "Neil", ts: 1793034700 });
-      p.timeline.push({ t: "sys", s: "游戏结束：好人胜利！", voice: "Neil", ts: 1793034702 });
+      p.timeline.push({ t: "sys", s: "游戏结束，好人胜利。", voice: "Neil", ts: 1793034702 });
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
     })
   }

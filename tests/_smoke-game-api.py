@@ -985,7 +985,10 @@ try:
     _s_pre = _ga.Session(humans=0, ais=9, seed=7)
     check("★ 第二期：天黑即预跑 —— 决策在后台跑，驱动器**不等满**（先报 working）",
           _s_pre.pending == "working", str(_s_pre.pending))
-    _t_h = _tm.monotonic() + 15
+    # ★ 2026-10-28（用户定「以窗口结束时的选择为准」）：刀口**只在窗口闭眼那一刻**
+    #   才结算，不再"狼都点完就立刻定案"。所以等待上限必须是**整窗 + 余量** ——
+    #   原来写死的 15 秒够不到 9 人局的 60 秒窗口，会在刀口落地前就放弃。
+    _t_h = _tm.monotonic() + night_script.window_of("wolf", 9) + 10
     while _tm.monotonic() < _t_h:
         _s_pre.drive(0.3)
         if _s_pre.game.night.get("kill") is not None:
@@ -1002,13 +1005,21 @@ check("★ 第二期：预跑结果被收割 —— 决策在**预跑线程**里
 
 # ⑥ AI 投票 5 秒弃票兜底（定稿：最后一个人类投完后等 5s，还没投 = 弃票）
 _sg = _ga.Session(humans=1, ais=3, seed=11)
-for _ in range(200):
+# ★ 2026-10-28：狼刀窗口改成"按人数定死、到点才结算"之后，一夜最短也是 30 秒
+#   （4 人桌按最近档 6 人局算），**固定 200 次循环**不够用了 —— 换成墙上时间上限。
+_t6 = _tm.monotonic() + 90
+while _tm.monotonic() < _t6:
     _g_sg = _sg.game
     if _g_sg.phase is _ga.Phase.VOTE and (_sg.pending == "human_vote"
                                           or _sg._all_voted()):
         break
     _need = [(p.seat, _g_sg.actions_for(p.seat)) for p in _g_sg.players
-             if p.kind == "human" and p.alive and _g_sg.actions_for(p.seat)]
+             if p.kind == "human" and p.alive and _g_sg.actions_for(p.seat)
+             # ★ 2026-10-28：人狼点过刀之后 `kill` 仍整窗挂着（可随时改刀）。
+             #   不跳过的话机器人会一直重复提交同一点子 ⇒ 时间不流逝 ⇒
+             #   永远走不到投票相位。
+             and not (p.seat in (_g_sg.night.get("wolf_points") or {})
+                      and set(_g_sg.actions_for(p.seat)) <= {"kill", "confirm"})]
     if not _need:
         if _sg.drive(0.3) == "ended":
             break

@@ -356,6 +356,8 @@ class Game:
         # ⚠️ 存它们**不是**为了给 AI 一段对话历史（那会把不该记的也带进去），
         #    而是为了按 §4.5 的规矩，通过 get_view_for(自己的座位) 显式喂给它。
         self.vote_history: List[Dict[int, int]] = []     # 每轮结算后的票型快照
+        # 最近一次票型是**加时那一轮**结算的吗（界面票型框上打个"加时"标记）
+        self.vote_board_runoff: bool = False
         self.speeches: List[Dict[str, Any]] = []         # {"round", "seat", "text"}
 
         roles = list(board.roles)
@@ -442,7 +444,9 @@ class Game:
                       "poison": None, "witch_asked": False,
                       "guard": None, "guard_asked": False,
                       "wolf_points": {}, "wolf_confirm": [], "wolf_order": [],
-                      "wolf_followed": [], "kill_settled": False, "wolf_steps": 0}
+                      "wolf_followed": [], "kill_settled": False, "wolf_steps": 0,
+                      # wolf_quiet：协商步数到顶后停止内耗（不是定案，见 wolf_force_settle）
+                      "wolf_quiet": False}
         self.log(f"第 {self.round} 夜，天黑请闭眼。")
 
     # ---- 夜间动作 ----
@@ -454,8 +458,8 @@ class Game:
         · target >= 0 → 点这个座位；**允许自刀**（target == actor，面杀本来就有）
         · target == -1 → 提议空刀
         · 改点会把自己从"已确认"里移除（改了就得重新确认）
-        · **单狼局：点即定案** —— 保持旧行为，也让夜晚能直接往下走
-        · 多狼局：等全员确认后由 _settle_wolf_kill() 定案
+        · **窗口内不定案**：点子只作记录，刀口由窗口结束时按多数决定
+          （见 `settle_wolf_window`）—— 用户 2026-10-28 定："这期间可任意修改刀口"
 
         为什么要有这套：以前只有一只狼能定刀，其余狼（含 AI 狼）连"队友点了谁"
         都不知道。白天投票时狼各投各的、一只跟大势一只咬好人 ⇒ 立刻暴露。
@@ -485,12 +489,13 @@ class Game:
             # 空转（点回同一个点）不算一步 —— 否则"步数上限兜底"会被重按刷爆，
             # 变成"玩家多按几下就把刀口强行定了"。
             self.night["wolf_steps"] = self.night.get("wolf_steps", 0) + 1
-        wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        if len(wolves) <= 1:
-            self.night["kill"] = target
-            self.night["kill_settled"] = True
-            return
-        self._settle_wolf_kill()
+        # ★ 2026-10-28（用户定）：**窗口内不再定案**。
+        #   以前单狼"点即定案"、多狼"全员确认即定案"，都会立刻把 kill_settled
+        #   置真 ⇒ `_actions_available` 把 kill 摘掉 ⇒ 面板在窗口中途消失。
+        #   用户的要求是"这期间可任意修改刀口，以窗口结束时的选择为准"，
+        #   所以这里只记点子，真正的结算推迟到窗口关闭
+        #   （driver 的 `_nn_close` 调 `settle_wolf_window`）。
+        return
 
     def wolf_agree_kill(self, target: int) -> None:
         """
@@ -520,10 +525,11 @@ class Game:
 
     def night_confirm(self, actor: int) -> None:
         """
-        狼人**确认**自己当前的点（多狼局定案的最后一步）。
+        狼人**确认**自己当前的点。
 
-        首次确认时把座位压进 wolf_order —— 这就是"先落地"的顺序，
-        分歧时用它决定刀口（用户定的规则：两个人狼分别点了不同好人，就刀第一个被投的）。
+        ★ 2026-10-28 之后它只是"表态完成"的记号：定案发生在狼刀窗口结束时
+        （多数决），不再由"全员确认"触发 —— 因为用户要求整段窗口内都能改刀。
+        首次确认仍然压进 wolf_order（老局/战报还会看这个顺序）。
         """
         self._require_phase(Phase.NIGHT)
         p = self.player(actor)
@@ -537,61 +543,65 @@ class Game:
         if actor not in conf:
             conf.append(actor)
         self.night["wolf_steps"] = self.night.get("wolf_steps", 0) + 1
+
+    def settle_wolf_window(self) -> None:
+        """★ 2026-10-28（用户定）：狼刀窗口**结束时**结算，以当时的点子为准。
+
+        规则（用户逐字）：出现意见不合时按刀口对象最多者执行（2、3 打 5，4 打 7
+        ⇒ 刀 5）；刀口平票则在并列的对象里随机；**空刀不参与刀口票计数**。
+
+        为什么放在窗口末而不是"全员确认即定"：用户明确要求这几十分钟里
+        狼可以任意改刀，"以结束时的选择为准"。所以协商过程只记点子，
+        定案只发生在这里（driver 的 `_nn_close` 调）。
+        """
         self._settle_wolf_kill()
 
     def _settle_wolf_kill(self) -> None:
-        """
-        全员确认 ⇒ 定案。规则（用户定，照面杀）：
-          · 点子一致 → 就刀那个
-          · 有分歧   → 刀**第一个落地的人**点的那个（时间序，不是座位号）
+        """按**刀口多数决**定案（用户定的规则，照面杀）。
+
+        · 统计每只活狼此刻点的座位；**空刀(-1) 与没表态都不进计数**
+        · 票数唯一最高 ⇒ 那就是今夜的刀口
+        · 并列最高 ⇒ 在并列对象里**随机**取一个（`self.rng`，可复现）
+        · 一张有效票都没有 ⇒ 空刀（kill = -1）
         """
         wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        conf = self.night.get("wolf_confirm") or []
-        if not wolves or not all(s in conf for s in wolves):
+        if not wolves:
+            self.night["kill"] = -1
+            self.night["kill_settled"] = True
             return
         pts = self.night.get("wolf_points") or {}
-        targets = [pts.get(s) for s in wolves]
-        if len(set(targets)) == 1:
-            final = targets[0]
+        counts: Dict[int, int] = {}
+        for s in wolves:
+            t = pts.get(s)
+            if t is None or t < 0:      # 没表态 / 空刀：不参与计票（用户定）
+                continue
+            counts[t] = counts.get(t, 0) + 1
+        if not counts:
+            final = -1
         else:
-            # 分歧时的优先级（用户定，照面杀）：
-            #   ① **人狼们自己一致** → 听人狼的（"平票就刀人狼票的人"）
-            #   ② 否则 → 听**第一个提议**的那个（"两个人狼分别票两个好人，就刀第一个被投的"）
-            humans = [q.seat for q in self.alive if q.role.is_wolf and q.kind == "human"]
-            human_targets = {pts.get(s) for s in humans}
-            if humans and len(human_targets) == 1:
-                final = human_targets.pop()
-                # ⚠️ note 而不是 log：这句话进公共播报就等于宣布"狼队商量过、
-                #    人狼的意见赢了" ⇒ 人狼立刻暴露。它只该出现在内部备注里。
-                self.note("狼队刀口有分歧，按人狼那一票定。")
-            else:
-                first = next((s for s in (self.night.get("wolf_order") or []) if s in wolves),
-                             wolves[0])
-                final = pts.get(first)
-                self.note(f"狼队刀口有分歧，按先提议的 {first + 1} 号的意见。")
-        self.night["kill"] = -1 if final is None else final
+            top = max(counts.values())
+            leaders = sorted(t for t, n in counts.items() if n == top)
+            final = leaders[0] if len(leaders) == 1 else self.rng.choice(leaders)
+            if len(leaders) > 1:
+                self.note("狼队刀口平票（"
+                          + "、".join(str(t + 1) for t in leaders)
+                          + " 号），随机定刀。")
+        self.night["kill"] = final
         self.night["kill_settled"] = True
 
     def wolf_force_settle(self) -> None:
-        """
-        兜底：协商步数超上限时强行定案（取先落地的意见）。
+        """兜底：协商来回太多时让狼队**停止协商**（不是定案）。
+
+        ★ 2026-10-28 改语义：以前这里直接把刀口定下来（kill_settled=True），
+        那会让狼刀面板在窗口中途消失。现在只立一个 `wolf_quiet` 旗停止 AI 内耗，
+        刀口仍旧等窗口结束按多数决定（`settle_wolf_window`）。
 
         纯 AI 狼队理论上会自己在有限步内收敛（跟随 = 点队友的点），
         但"固执"的人格将来会让它反复改主意 —— 必须有这条兜底，
         否则一夜能无限来回，表现就是"卡在夜里不动"。
         """
-        pts = self.night.get("wolf_points") or {}
-        order = self.night.get("wolf_order") or []
-        wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        first = next((s for s in order if s in wolves), None)
-        if first is None:
-            first = next((s for s in pts if s in wolves), None)
-        if first is None:
-            self.night["kill"] = -1
-        else:
-            self.note(f"狼队协商超时，按先落地的 {first + 1} 号的意见。")
-            self.night["kill"] = pts.get(first)
-        self.night["kill_settled"] = True
+        self.night["wolf_quiet"] = True
+        self.note("狼队协商步数到顶，停止继续协商，按窗口结束时的点子定夺。")
 
     def night_investigate(self, actor: int, target: int) -> Optional[bool]:
         """预言家验人。返回结果，同时写入自己的 L2 私有记录。"""
@@ -799,7 +809,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
 
     # ---- 夜晚结算 ----
 
@@ -892,7 +902,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
             return events
         self.phase = Phase.DAWN
         return events
@@ -1166,6 +1176,47 @@ class Game:
             for target, voters in order
         )
 
+    def vote_board(self) -> Dict[str, Any]:
+        """最近一次**已公开**的票型，专供界面底部的「票型框」（2026-10-28 用户定）。
+
+        可见性纪律与播报完全一致：投票进行中没有任何票型可看，结算之后才出现。
+        加时期间给的是**第一轮**那套（它已经因为"平票进入加时"而公开），
+        加时结算之后再换成加时那一轮。
+
+        返回的 `lines` 就是界面上要显示的那几行，格式是用户点名的紧凑写法：
+            2，3→5        （2 号、3 号投给 5 号）
+            弃票：4        （4 号弃票 / 空刀不算票）
+        票数多的组在前、同票座位号小的在前 —— 与 `tally_text()` 同一套排序。
+        """
+        votes: Optional[Dict[int, int]] = None
+        in_runoff = self.runoff_stage in (1, 2)
+        if in_runoff and self.runoff_first_votes:
+            votes = self.runoff_first_votes
+        elif self.vote_history:
+            votes = self.vote_history[-1]
+        if not votes:
+            return {}
+        groups: Dict[int, List[int]] = {}
+        abstain: List[int] = []
+        for voter, t in votes.items():
+            if t is None or int(t) < 0:
+                abstain.append(int(voter))
+                continue
+            groups.setdefault(int(t), []).append(int(voter))
+        order = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        lines = ["，".join(str(v + 1) for v in sorted(voters)) + "→" + str(t + 1)
+                 for t, voters in order]
+        if abstain:
+            lines.append("弃票：" + "，".join(str(v + 1) for v in sorted(abstain)))
+        return {
+            "round": len(self.vote_history) or self.round,
+            "runoff": bool(self.vote_board_runoff) and not in_runoff,
+            "first_round": in_runoff,
+            "groups": [{"target": t, "voters": sorted(v)} for t, v in order],
+            "abstain": sorted(abstain),
+            "lines": lines,
+        }
+
     def knife_target(self) -> Optional[int]:
         """今晚真正被刀的座位；**空刀返回 None**。
 
@@ -1246,8 +1297,10 @@ class Game:
         self.runoff_first_votes = dict(self.votes)
         self._runoff_speech_mark = len(self.speeches)
 
-        # 票型与"接下来怎么走"一起播报 —— 与第一轮同款（先票型后结果）
-        self.log("投票结果：" + self.tally_speech())
+        # ★ 2026-10-28（用户定）：**不再念票型**。票型改由界面底部的「票型框」展示
+        #   （`vote_board` 下发给前端），法官这 30~90 秒里少念一大段数字，
+        #   也不再出现"2 号 2 票（1 号、3 号投的）"这种听着费力的句子。
+        #   这里只播报"接下来怎么走"。
         _names = "、".join(f"{s + 1} 号" for s in self.runoff_candidates)
         self.log(f"{_names}票数相同，进入加时。{_names}请各再说一轮，"
                  f"之后其余玩家重新投票，只能投给 {_names}中的一位，也可以弃票。")
@@ -1300,18 +1353,17 @@ class Game:
         if exiled is None and len(leaders) > 1 and self.runoff_stage == 0:
             return self._open_runoff(leaders)
 
-        # 存档这一轮的票型。用途有两个，都在"结算之后"：
+        # 存档这一轮的票型。用途有三个，都在"结算之后"：
         #   · AI 能从自己的视图里看到「我投给了谁」（get_view_for 的 my_votes）
-        #   · 完整票型进 public_log，AI 下一轮能看到 —— **投票进行中看不到**
-        #     （public_log 是这一行才写入的，进行中它里面根本没有本轮票型）
+        #   · 完整票型进 vote_history / vote_patterns，AI 下一轮能看到 —— **投票进行中看不到**
+        #   · 界面底部「票型框」从 `vote_board()` 读（2026-10-28 用户定：不再语音念票型）
         self.vote_history.append(dict(self.votes))
+        self.vote_board_runoff = (self.runoff_stage == 2)
 
-        # 票型先播报，再播报结果 —— 顺序与 demo/index.html 一致
-        # （「投票结果：…」在前，「x号玩家投票出局」在后）。
-        # 它进的是 public_log，所以界面上的日志、时间线、以及语音播报都会自动带上，
-        # 前端不需要再单独画一块「投票板」。
-        # 播报用**口语版**（人类靠耳朵抓信息）；紧凑版留给 AI/界面（tally_text）
-        self.log("投票结果：" + self.tally_speech())
+        # ★ 2026-10-28（用户定）：**删掉汉字票型播报**（原来这里会念
+        #   "3 号 2 票（1 号、4 号投的）…"）。票型只进结构化数据 `vote_board()`，
+        #   由界面底部的票型框用「2，3→5」的紧凑写法展示。
+        #   法官这一步只播报结果（出局 / 平票），耳朵不用再跟一串数字。
 
         if exiled is None:
             # 平票 / 全员弃票都算"这一轮没出人"。节奏维度要看它 ——
@@ -1357,7 +1409,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
         return exiled
 
     def can_vote(self, seat: int) -> bool:
@@ -1678,9 +1730,11 @@ class Game:
             acts = []
             if p.role.is_wolf and not self.night.get("kill_settled"):
                 acts.append("kill")
-                # 点过之后还要"确定"。多狼局里不确认 = 没表态，刀口定不下来；
-                # 单狼局点即定案（kill_settled 立刻为真），走不到这一支。
-                if seat not in (self.night.get("wolf_confirm") or []):
+                # 点过之后还要"确定"。多狼局里不确认 = 没表态；
+                # ★ 2026-10-28：定案改到**窗口结束**，所以确认现在只是"表态完成"的
+                #   记号 —— 但它仍然只对多狼局有意义（单狼一个人没什么可确认的）。
+                if (len([q for q in self.alive if q.role.is_wolf]) > 1
+                        and seat not in (self.night.get("wolf_confirm") or [])):
                     acts.append("confirm")
             if p.role is Role.SEER and self.night.get("investigate") is None:
                 acts.append("investigate")

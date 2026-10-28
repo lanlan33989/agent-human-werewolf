@@ -256,7 +256,7 @@ for seed in range(1, 11):
     g, _ = play_full_game(3, 3, seed)
     for line in g.public_log:
         # 结束时的胜负播报是必须公开的，不算泄露
-        if line in ("狼人胜利。", "好人胜利。"):
+        if line in ("游戏结束，狼人胜利。", "游戏结束，好人胜利。"):
             continue
         if "狼人" in line or "预言家" in line or "女巫" in line:
             leak = True
@@ -271,7 +271,7 @@ ended_lines = set()
 for seed in range(1, 11):
     g, _ = play_full_game(3, 3, seed)
     for line in g.public_log:
-        if line in ("狼人胜利。", "好人胜利。"):
+        if line in ("游戏结束，狼人胜利。", "游戏结束，好人胜利。"):
             ended_lines.add(line)
 check("结束时会公开宣布胜负", len(ended_lines) > 0, str(sorted(ended_lines)))
 
@@ -293,8 +293,15 @@ check("票型文本与 demo 同格式（同票的归一组、票数多的在前�
       tv.tally_text() == "1，2→3；3→1", tv.tally_text())
 
 tv.resolve_vote()
-check("结算时把票型写进了公共日志（日志/时间线/语音播报都会自动带上）",
-      any(x.startswith("投票结果：") for x in tv.public_log), str(tv.public_log[-2:]))
+# ★ 2026-10-28（用户定）：法官**不再念票型**，票型只走结构化数据（界面底部票型框）。
+check("结算后公共日志里**没有**票型播报（不再念那串数字）",
+      not any(x.startswith("投票结果：") for x in tv.public_log), str(tv.public_log[-2:]))
+_vb = tv.vote_board()
+check("vote_board 给出票型框要的行（含弃票那行）",
+      _vb.get("lines") == ["1，2→3", "3→1", "弃票：4"], str(_vb.get("lines")))
+check("vote_board 的分组带投票人与目标",
+      _vb.get("groups") == [{"target": 2, "voters": [0, 1]}, {"target": 0, "voters": [2]}],
+      str(_vb.get("groups")))
 
 tv2 = Game(SEER4, ["human"] * 4, seed=1)
 tv2.start()
@@ -722,11 +729,15 @@ check("★ 协商没全员确认时不定案（刀口空着，女巫也不会被
       _n1.night.get("kill") is None and not _n1.night.get("kill_settled"),
       f"kill={_n1.night.get('kill')} settled={_n1.night.get('kill_settled')}")
 _n1.night_confirm(_w1[1])
-check("★ 点子一致 + 全员确认 ⇒ 就刀那个",
+check("★ 全员确认也**不当场定案**（窗口内还能改刀，2026-10-28 用户定）",
+      _n1.night.get("kill") is None and not _n1.night.get("kill_settled"),
+      f"kill={_n1.night.get('kill')}")
+_n1.settle_wolf_window()
+check("★ 点子一致 + 窗口结束 ⇒ 就刀那个",
       _n1.night.get("kill") == _g1 and _n1.night.get("kill_settled"),
       f"kill={_n1.night.get('kill')}")
 
-# ② 分歧 + 无人类狼 ⇒ 听第一个提议的（先手优先）
+# ② 分歧 + 无人类狼 ⇒ 刀口平票，随机取一个（2026-10-28 用户定）
 _n2 = Game(_B2, kinds=["ai"] * 5, seed=32)
 _n2.start()
 _w2 = _wolves_of(_n2)
@@ -735,10 +746,11 @@ _n2.night_kill(_w2[0], _g2[0])
 _n2.night_kill(_w2[1], _g2[1])
 _n2.night_confirm(_w2[0])
 _n2.night_confirm(_w2[1])
-check("★ 分歧（无人类狼）⇒ 刀第一个提议的人点的那个（先手优先）",
-      _n2.night.get("kill") == _g2[0], f"kill={_n2.night.get('kill')} 期望={_g2[0]}")
+_n2.settle_wolf_window()
+check("★ 分歧 1:1 ⇒ 在两个刀口里随机（不再按'先手'）",
+      _n2.night.get("kill") in (_g2[0], _g2[1]), f"kill={_n2.night.get('kill')}")
 
-# ③ 分歧 + 两只人狼意见一致 ⇒ 听人狼的（哪怕它提议得更晚）
+# ③ 三狼分歧 2:1 ⇒ 按多数决
 _n3 = Game(_B3, kinds=["ai"] * 5, seed=33)
 _n3.start()
 _w3 = _wolves_of(_n3)
@@ -750,7 +762,8 @@ _n3.night_kill(_w3[1], _g3[0])
 _n3.night_kill(_w3[2], _g3[0])
 for _s3 in _w3:
     _n3.night_confirm(_s3)
-check("★ 分歧且人狼意见一致 ⇒ 听人狼的（人狼票的人优先于先手）",
+_n3.settle_wolf_window()
+check("★ 分歧按**刀口多数决**（2 票 1 票 ⇒ 刀 2 票那个）",
       _n3.night.get("kill") == _g3[0], f"kill={_n3.night.get('kill')} 期望={_g3[0]}")
 
 # ④ 确认后改点 ⇒ 确认被撤销
@@ -765,13 +778,17 @@ check("确认后改点 ⇒ 确认被撤销（必须重新确认，不能替它�
       _w4[0] not in _n4.night.get("wolf_confirm", [])
       and not _n4.night.get("kill_settled"))
 
-# ⑤ 单狼：点即定案
+# ⑤ 单狼：**窗口内不定案**（2026-10-28 用户定：整段窗口都能改刀）
 _n5 = Game(_B1, kinds=["ai"] * 4, seed=35)
 _n5.start()
 _w5 = _wolves_of(_n5)[0]
 _g5 = next(p.seat for p in _n5.alive if not p.role.is_wolf)
 _n5.night_kill(_w5, _g5)
-check("单狼局：点即定案（不用确认，否则夜晚白等一个确定）",
+check("单狼局：点刀只记点子（窗口内不定案，面板不消失）",
+      _n5.night.get("kill") is None and not _n5.night.get("kill_settled"),
+      f"kill={_n5.night.get('kill')}")
+_n5.settle_wolf_window()
+check("单狼局：窗口结束才定案（就是它点的那个）",
       _n5.night.get("kill") == _g5 and _n5.night.get("kill_settled"))
 
 # ⑥ 自刀 / 空刀都合法
@@ -779,10 +796,12 @@ _n6 = Game(_B1, kinds=["ai"] * 4, seed=36)
 _n6.start()
 _w6 = _wolves_of(_n6)[0]
 _n6.night_kill(_w6, _w6)
+_n6.settle_wolf_window()
 check("自刀合法（狼可以刀自己 —— 面杀本来就有这手）", _n6.night["kill"] == _w6)
 _n7 = Game(_B1, kinds=["ai"] * 4, seed=37)
 _n7.start()
 _n7.night_kill(_wolves_of(_n7)[0], -1)
+_n7.settle_wolf_window()
 check("空刀合法（-1 = 空刀，不是「没刀」）",
       _n7.night["kill"] == -1 and _n7.night.get("kill_settled"))
 
@@ -795,8 +814,12 @@ _n8.night_kill(_w8[0], _g8[0])
 _n8.night_kill(_w8[1], _g8[1])
 _n8.night_confirm(_w8[0])
 _n8.wolf_force_settle()
-check("★ 协商超时的兜底：必须定案（否则这一夜推不下去）+ 取先提议的意见",
-      _n8.night.get("kill_settled") and _n8.night.get("kill") == _g8[0],
+check("★ 协商超时的兜底：只叫停协商（wolf_quiet），不当场定案",
+      _n8.night.get("wolf_quiet") and not _n8.night.get("kill_settled"),
+      f"quiet={_n8.night.get('wolf_quiet')} settled={_n8.night.get('kill_settled')}")
+_n8.settle_wolf_window()
+check("……定案仍在窗口末发生（1:1 平票 ⇒ 两个对象之一）",
+      _n8.night.get("kill_settled") and _n8.night.get("kill") in (_g8[0], _g8[1]),
       f"kill={_n8.night.get('kill')}")
 
 # ⑧ 隔离：协商状态只给狼；**一个字都不能进公共播报**
@@ -815,6 +838,7 @@ check("★ 好人的视图里没有协商状态（L1 只给狼）",
       "wolf_points" not in _n9.get_view_for(_g9[0])
       and "wolf_confirmed" not in _n9.get_view_for(_g9[0])
       and "kill_settled" not in _n9.get_view_for(_g9[0]))
+_n9.settle_wolf_window()          # 1:1 平票 ⇒ 这一拍会写一条内部备注
 check("★★ 狼队协商的分歧/定案依据绝不进公共播报（进了就等于宣布谁是狼）",
       not any("狼队" in x for x in _n9.public_log), str(_n9.public_log[-3:]))
 check("但它必须留在内部备注里（否则排查时什么都看不到）",
@@ -832,7 +856,8 @@ check("★ 点回同一个目标不撤销确认（幂等）—— 否则玩家�
       _w10[0] in _n10.night.get("wolf_confirm", []), str(_n10.night.get("wolf_confirm")))
 _n10.night_kill(_w10[1], _g10)
 _n10.night_confirm(_w10[1])
-check("……而且照样能定案", _n10.night.get("kill") == _g10 and _n10.night.get("kill_settled"))
+_n10.settle_wolf_window()
+check("……而且窗口末照样定得下来", _n10.night.get("kill") == _g10 and _n10.night.get("kill_settled"))
 
 # ================================================================ 挑战式发言顺序（2026-09-18）
 # 用户定：X 的发言里对 Y（或 Y、Z）有负面指向 ⇒ Y（Z）依次回应，之后 X 再回应，

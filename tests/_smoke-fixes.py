@@ -228,9 +228,13 @@ def play(sess, max_steps: int = 80) -> None:
     for _ in range(max_steps):
         if sess.game.phase.value == "ended":
             return
+        # ★ 2026-10-28：已点过刀口的人狼不再重复提交（kill 整窗都挂着，见 settle_wolf_window）
+        _wpt = sess.game.night.get("wolf_points") or {}
         need = [(p.seat, sess.game.actions_for(p.seat))
                 for p in sess.game.players
-                if p.kind == "human" and p.alive and sess.game.actions_for(p.seat)]
+                if p.kind == "human" and p.alive and sess.game.actions_for(p.seat)
+                and not (p.seat in _wpt
+                         and set(sess.game.actions_for(p.seat)) <= {"kill", "confirm"})]
         if not need:
             # 🔴 2026-10-07 第三期：夜里是**墙上时间**的固定节拍（读秒不可跳过），
             # 人类动作交完也可能还在走节拍 ⇒ 不能"没人待办就 return"。
@@ -304,12 +308,12 @@ print("⑤ 前端静态检查（防同类 bug 回潮）")
 #     握持继续轮询 / 不重建面板（p2 的加密轮询 + WHEEL.pick 断言）、
 #     DRAFT（大圆录音直接提交，无输入框草稿场景）、日志折叠（#logbox 常显）、
 #     pickActions（轮盘取代按钮列表，女巫改为分步问句）。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = ((BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 # 🔴 2026-10-23：探针页 index.html 已删（用户：非游戏画面），相关判据随之退役
-server_py = (BASE / "server.py").read_text(encoding="utf-8")
+server_py = (BASE / "backend" / "server.py").read_text(encoding="utf-8")
 
 check("play.html：渲染的是服务端 timeline（不自己拼接历史）",
       "PUBLIC.timeline" in p2)
@@ -327,7 +331,7 @@ print("⑥ 入口与报错路径（run_https / start.py 的调用关系）")
 # 对推荐入口 `python start.py` 不成立。下面两条各测一侧。
 import builtins  # noqa: E402
 
-run_https_src = (BASE / "run_https.py").read_text(encoding="utf-8")
+run_https_src = (BASE / "backend" / "run_https.py").read_text(encoding="utf-8")
 start_src = (BASE / "start.py").read_text(encoding="utf-8")
 
 check("run_https.py 是双用途：可被 import，也有 __main__ 独立入口",
@@ -552,7 +556,7 @@ import threading  # noqa: E402
 import time as _time  # noqa: E402
 
 
-def _race_round(seed, seconds=1.8):
+def _race_round(seed, seconds=3.5):
     """
     一边不停轮询（drive），一边替人类做动作（act）—— 复现并发推进。
 
@@ -594,8 +598,11 @@ def _race_round(seed, seconds=1.8):
         g = s.game
         if g.phase.value == "ended":
             break
+        _wpt = g.night.get("wolf_points") or {}
         need = [(p.seat, g.actions_for(p.seat)) for p in g.players
-                if p.kind == "human" and p.alive and g.actions_for(p.seat)]
+                if p.kind == "human" and p.alive and g.actions_for(p.seat)
+                and not (p.seat in _wpt
+                         and set(g.actions_for(p.seat)) <= {"kill", "confirm"})]
         if not need:
             _time.sleep(0.003)
             continue
@@ -623,6 +630,7 @@ def _race_round(seed, seconds=1.8):
 def _round_problems(tl):
     """每一轮里，**所有存活者都必须恰好发过一次言**（跳过最后一个发言人会被抓到）。"""
     alive, speakers, out = None, [], []
+    runoff = False
     for x in tl:
         s = x["s"]
         if x["t"] == "sys":
@@ -637,7 +645,15 @@ def _round_problems(tl):
                 m = re.search(pat, s)
                 if m and alive is not None:
                     alive.discard(int(m.group(1)) - 1)
+            # ★ 2026-10-28 平票加时：平票者的"最后一轮陈述"只有平票的人说话，
+            #   拿"全员都发过言"去卡它必然误报 ⇒ 加时那一轮整体跳过。
+            if "进入加时" in s:
+                runoff = True
             if "开始投票" in s and alive is not None:
+                if runoff:                  # 加时后的重投：不参与"全员发言"判据
+                    runoff = False
+                    speakers = []
+                    continue
                 _miss = sorted(a + 1 for a in (alive - set(speakers)))
                 _dup = len(speakers) != len(set(speakers))
                 if _miss or _dup:
@@ -665,6 +681,10 @@ for _seed in range(3):
         if _x["t"] == "sys":
             if "开始投票" in _x["s"]:
                 _vopen = True
+            # ★ 2026-10-28 平票加时：加时那一轮"平票者再各说一轮"发生在「开始投票」之后，
+            #   它是**规则允许的**发言 —— 关掉窗口，别把最后的陈述判成"被挤到投票之后"。
+            if "进入加时" in _x["s"]:
+                _vopen = False
             if "天亮了" in _x["s"] or ("第" in _x["s"] and "夜" in _x["s"]):
                 _vopen = False
             continue
@@ -686,7 +706,7 @@ print("=" * 74)
 print("⑪ /act 必须有预算：真人说完一句话，不许把后面所有 AI 的发言都跑完才返回")
 check("★ 归票判据用 can_vote（不是 alive）—— 否则翻牌白痴会让归票永远等下去（D5）",
       # 2026-10-06 P2：_all_voted 随驱动器搬到 night_driver.py
-      "g.can_vote(p.seat)" in (BASE / "night_driver.py").read_text(encoding="utf-8"))
+      "g.can_vote(p.seat)" in (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
 # 机制：act() 里以前是**无预算**的 auto_advance() ⇒ 6 人局 4 个 AI × 每次 2.3 秒 ≈ 9 秒，
 # 而前端是拿到响应才开始念第一句 ⇒ 体感就是「我说完，等好久 AI 才开口」。
 # 这里把每个 AI 发言放慢到 0.6 秒，然后看「这一次请求里跑了几个 AI 发言」。
@@ -730,13 +750,21 @@ print("⑫ 12 人局（含守卫/猎人）能从开局跑到分出胜负")
 errs12 = []
 s12 = game_api.Session(humans=1, ais=11, seed=3)
 reached_end = False
-for _i in range(500):
+# ★ 2026-10-28：狼刀改成"整窗可改、到点才结算"之后，人狼点过的 `kill` 会一直挂在
+#   待办里；不跳过的话机器人只会反复提交同一个点子、从不 drive ⇒ 墙上时间不走 ⇒
+#   整局卡在第一夜（实测轮次=1、kill_settled=False）。
+#   同时把循环次数放宽：窗口按人数定死（12 人局 90 秒，本文件缩到 0.02 倍 =
+#   1.8 秒/节点），旧的 500 拍够不到一局打完。
+for _i in range(3000):
     g = s12.game
     if g.phase.value == "ended":
         reached_end = True
         break
+    _wpt12 = g.night.get("wolf_points") or {}
     need = [(p.seat, g.actions_for(p.seat)) for p in g.players
-            if p.kind == "human" and g.actions_for(p.seat)]
+            if p.kind == "human" and g.actions_for(p.seat)
+            and not (p.seat in _wpt12
+                     and set(g.actions_for(p.seat)) <= {"kill", "confirm"})]
     if not need:
         s12.drive(0.05)
         continue

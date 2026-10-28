@@ -68,7 +68,7 @@ def _pre_kick(self, seat: int, kind: str, window: float) -> bool:
         fn = lambda: ag.decide_yes(view, speech, kind)         # noqa: E731
     else:
         fn = lambda: ag.decide_target(view, speech, kind)      # noqa: E731
-    win = night_script.window_for_act(kind)          # 窗口只认剧本表
+    win = night_script.window_for_act(kind, _table_size(self))   # 窗口只认剧本表
     if window:
         win = float(window)
     return pre.submit(seat, kind, fn, win)
@@ -218,6 +218,15 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     return time.monotonic() + (ready_wall - time.time())   # 墙钟 → monotonic
 
 
+def _table_size(self) -> int:
+    """这一桌多少人（狼刀窗口按人数算：6→30s / 9→60s / 12→90s）。
+
+    只读 `game.players`，不缓存 —— 人数在一局里不会变，但缓存一个
+    "开局人数" 会让测试里临时拼的小局算错档位。
+    """
+    return len(getattr(self.game, "players", []) or [])
+
+
 def _nn_deadline(self, node_id: str) -> float:
     """窗口结束时刻（monotonic 时间戳）。
 
@@ -230,7 +239,7 @@ def _nn_deadline(self, node_id: str) -> float:
     —— 那个计数会被 `pending` 在 `working`/`human_night` 之间来回切反复清零，
     实测**时灵时不灵**（预言家段生效、狼/女巫段不生效，正是这个原因）。
     """
-    win = night_script.window_of(node_id)
+    win = night_script.window_of(node_id, _table_size(self))
     base = self._nn_at
     if getattr(self, "_nn_need_arm", False):
         # 🔴 v4：没 arm 时不再"往后推半个窗口"（粗兜底），改用**服务端自己的
@@ -300,6 +309,7 @@ def _nn_open(self, i: int) -> None:
     self._nn_i = i
     self._nn_at = time.monotonic()
     self._nn_need_arm = bool(_nn_humans_of(self, nid))
+    self._nn_tick15 = False                  # 每个节点重置「还剩15秒」只喊一次
     self.human_wait_since = None            # 换节点 ⇒ 换窗口：旧 arm 一律作废
     self.human_wait_pending_since = None
     if nd.get("say"):
@@ -331,6 +341,12 @@ def _nn_close(self, nd: Dict) -> None:
             _inject_default(self, seat, self.game.actions_for(seat), nid)
     finally:
         self._nn_injecting = False
+    # ★ 2026-10-28（用户定）：狼刀**在窗口结束的这一刻**结算 ——
+    #   按刀口多数决、平票随机、空刀不参与计票（见 engine.settle_wolf_window）。
+    #   顺序很重要：先注入人类默认动作（没点刀的人狼按 follow_kill 跟随队友），
+    #   再结算；反过来的话"人狼一次没动"会被当成一张空刀票，等于让 AFK 废掉刀口。
+    if nid == "wolf":
+        self.game.settle_wolf_window()
     if nd.get("close"):
         self.timeline.append({"t": "sys", "s": nd["close"], "voice": JUDGE_VOICE,
                               "delay": nd.get("close_gap", night_script.GAP),
@@ -357,6 +373,7 @@ def _night_clock(self) -> bool:
         self._nn_at = 0.0
         self._nn_need_arm = False
         self._nn_hard: set = set()
+        self._nn_tick15 = False
         self.human_wait_since = None
         self.human_wait_pending_since = None
     out = False
@@ -384,11 +401,30 @@ def _night_clock(self) -> bool:
         if not self._nn_need_arm and _nn_humans_of(self, nd["id"]):
             self._nn_need_arm = True
             self.human_wait_pending_since = None
+        # ★ 2026-10-28（用户定）：狼刀窗口**剩 15 秒**时法官喊一句「还剩15秒」。
+        #   只对狼刀节点、只在窗口比 15 秒长的时候发；每个节点只发一次。
+        #   ⚠️ 这一条**故意不带 `node` 字段**：前端的 `linePlayed(node)` 取的是
+        #     "最后一条带该 node 的播报"，挂上 node 会让狼刀面板等到这句念完才弹
+        #     （= 面板晚 15 秒出现）。它只是播报，不是门控。
+        if (nd["id"] == "wolf" and not getattr(self, "_nn_tick15", False)
+                and night_script.wolf_has_last_call(_table_size(self))):
+            _size = _table_size(self)
+            _dl15 = _nn_deadline(self, nd["id"])
+            _win15 = night_script.window_of("wolf", _size)
+            _off = night_script.wolf_last_call_offset(_size)
+            _earliest = self._nn_at + max(0.0, _win15 - _off)
+            if time.monotonic() >= _earliest and time.monotonic() >= _dl15 - _off:
+                self._nn_tick15 = True
+                self.timeline.append({"t": "sys", "s": night_script.WOLF_LAST_CALL_SAY,
+                                      "voice": JUDGE_VOICE, "delay": 0,
+                                      "tick": "wolf_15", "at": time.time()})
+                out = True
         if time.monotonic() < _nn_deadline(self, nd["id"]):
             break
         _nn_close(self, nd)
         self._nn_i += 1
         self._nn_need_arm = False
+        self._nn_tick15 = False
         self.human_wait_since = None
         self.human_wait_pending_since = None
         if self._nn_i < len(self._nn_nodes):
@@ -518,7 +554,7 @@ def _human_night_timeout(self) -> None:
                 #    比窗口**短**才来得及。现在改成 **半个窗口内必起算** ⇒
                 #    不变式：**任何情况下人类都拿得到一个整窗**（arm 之后满 W，
                 #    因为 `_nn_deadline` = max(节点开始, arm 时刻) + 窗口）。
-                _win = night_script.window_of(_nn_cur(self) or "")
+                _win = night_script.window_of(_nn_cur(self) or "", _table_size(self))
                 if now - self.human_wait_pending_since > min(8.0, _win * 0.5):
                     pass   # 🔴 2026-10-07 第九起：**绝不替前端 arm** —— 一置上
                     # `now.started` 就变真、前端立刻开始读秒（用户实机："倒计时开始
@@ -541,7 +577,7 @@ def _human_night_timeout(self) -> None:
             self.human_wait_since = now
         return
     acts = g.actions_for(wait.seat)
-    if now - self.human_wait_since < night_script.window_for_acts(acts):
+    if now - self.human_wait_since < night_script.window_for_acts(acts, _table_size(self)):
         return
     _inject_default(self, wait.seat, acts)
     self.human_wait_since = None
@@ -571,7 +607,7 @@ def auto_advance(self, max_steps: int = 300,
             if _w:
                 g.winner = _w
                 g.phase = Phase.ENDED
-                g.log("狼人胜利。" if _w == "wolf" else "好人胜利。")
+                g.log("游戏结束，" + ("狼人胜利。" if _w == "wolf" else "好人胜利。"))
                 self.pending = "ended"
                 return self.pending
         for _ in range(max_steps):
@@ -660,7 +696,44 @@ def _advance_night(self) -> str:
     if r == "wait":
         # AI 决策还在后台跑（预跑没到收割点）⇒ 报 working，让前端继续轮询。
         return "working"
+    # ★ 2026-10-28：狼刀窗口拉长之后会出现「**没人该动，纯粹在等窗口**」的时刻
+    #   （全 AI 狼队：点子都点完了，但要等 30~90 秒的窗口才闭眼结算）。
+    #   这时若仍报 `human_night`，调用方会以为"该递手机了"而立刻返回 ⇒
+    #   墙上时间不再流逝（drive 只在 working 时才睡），窗口就永远走不完。
+    #   报 working 才是实话：服务端还在推进，只是没有人类待办。
+    if not any(_human_blocking(g, p) for p in g.players
+               if p.kind == "human" and p.alive):
+        return "working"
     return "human_night"
+
+
+def _human_blocking(g, p) -> bool:
+    """这位人类是不是**真的卡住了流程**（决定要不要报 human_night）。
+
+    🔴 2026-10-28（狼刀整窗可改的连带修正）：按用户定的「这期间可任意修改刀口，
+    以窗口结束时的选择为准」，`kill` 会在**整个窗口**里一直挂在待办列表上 ——
+    它是"随时可改"，不是"还没交"。
+
+    可 `_advance_night` 的老判据只看"待办列表空不空"，于是人类狼一睁眼 pending
+    就整窗停在 `human_night`：调用方把它读成"该递手机了"⇒ 立刻返回 ⇒ 墙上时间
+    不再流逝（`drive()` 只在 `working` 时才在锁外 sleep）⇒ 30/60/90 秒的窗口
+    永远走不完，局面卡死在第一夜。
+
+    所以这里把"只剩 kill/confirm、且这位狼**已经交过点子**"判为**不阻塞**：
+    面板照旧开着（前端靠 `/pending_seats` 决定画不画，不看 pending），
+    但消费者知道服务端还在推进，该等窗口就等窗口。
+
+    ⚠️ 只判 kill/confirm —— 女巫的 heal/poison/pass、预言家的 investigate
+    都是"交了就消失"的一次性待办，它们留在列表里就是**真待办**，不能放行。
+    """
+    acts = g.actions_for(p.seat)
+    if not acts:
+        return False
+    if set(acts) <= {"kill", "confirm"}:
+        pts = g.night.get("wolf_points") or {}
+        if p.seat in pts:            # -1（空刀）也算交过了
+            return False
+    return True
 
 
 def _advance_shoot(self) -> str:

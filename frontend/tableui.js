@@ -243,6 +243,10 @@ async function tick(){
   speakQueue();
   if (PUBLIC.phase === 'ended'){
     foot('本局结束：' + (PUBLIC.winner === 'wolf' ? '狼人胜利' : '好人胜利'));
+    /* ★ 2026-10-28（用户定）：法官念完「游戏结束，狼人/好人胜利」后弹终局框。
+       显隐与时机全在 renderEndPop()（play.html）里，这里只负责每拍喂一次 ——
+       判断播报有没有念到那句靠的是 SPOKEN 游标，不能在这里自己算。 */
+    try { renderEndPop(); } catch (e) { /* 老页面没有这个函数：不影响结束态 */ }
     /* 局末才亮出「本局战报」：战报会解密所有人身份，
        接口层对局中访问返回 409，所以这两个出口恰好出现在正确的位置。 */
     var _el = $('endLinks');

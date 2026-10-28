@@ -76,7 +76,9 @@ def _step_ai_wolf(self) -> bool:
     所以"AI 抢走人类狼的操作"不存在：**票没齐就定不了案**。
     """
     g = self.game
-    if g.night.get("kill_settled"):
+    # ★ 2026-10-28：定案搬到狼刀窗口结束时（engine.settle_wolf_window）。
+    #   窗口内再多点子都只是"改刀"，所以这里只在**真的定案**或**协商被叫停**时收手。
+    if g.night.get("kill_settled") or g.night.get("wolf_quiet"):
         return False
     wolves = [p for p in g.alive if p.role.is_wolf]
     if not wolves:

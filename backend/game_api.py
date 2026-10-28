@@ -567,6 +567,11 @@ class Session:
             # 下一轮 open_vote() 会清空 g.votes，所以「进行中」天然拿不到上一轮的票。
             "voted_seats": sorted(g.votes.keys()) if g.phase is Phase.VOTE else [],
             "votes": {} if g.phase is Phase.VOTE else dict(g.votes),
+            # ★ 2026-10-28（用户定）：界面底部「票型框」的数据源。
+            #   法官不再念票型（那串"3 号 2 票（1 号、4 号投的）"听着费力），
+            #   改成这个小框：`lines` 就是直接显示的行，形如 "2，3→5"。
+            #   可见性纪律由 engine.vote_board() 保证 —— 投票进行中它拿不到本轮票型。
+            "vote_board": g.vote_board(),
             "pending": self.pending,
             # 这一局是哪一档（娱乐/认真/硬核/地狱）。界面显示用；将来的战报和
             # 六维指标也必须按档分组 —— 不分档的胜率没有意义（不同档的 AI 不是一回事）。

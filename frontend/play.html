@@ -254,11 +254,31 @@
   animation:pickBreathe 1.5s ease-in-out infinite; }
 #p4 .tcenter.rec{ border-color:#ff5a5a;
   box-shadow:0 0 0 8px rgba(255,90,90,.25); }
-/* 票型大字：贴在大圆下方，投票结算后一直显示到下一次投票 */
-#voteBig{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
-  max-width:94%; text-align:center; font-size:27px; font-weight:800;
-  color:#FFE08A; text-shadow:0 2px 12px rgba(0,0,0,.65);
-  pointer-events:none; z-index:5; line-height:1.4; display:none; }
+/* 票型框（2026-10-28 用户定）：法官不再念票型，改由底部这个窄条显示计票。
+   · 宽度约竖屏的 15%（锚在 #phone 上，所以 15% 就是手机宽度的 15%）
+   · 内容多时**可上下滚动**（overflow-y:auto + 触摸惯性）
+   · 每行一条："2，3→5"（2 号、3 号投给 5 号）；弃票单列一行 */
+#voteBox{ position:absolute; left:10px; bottom:16px; width:15%; min-width:54px; max-width:110px;
+  max-height:38%; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+  background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.16); border-radius:10px;
+  padding:6px 3px; z-index:6; display:none; touch-action:pan-y; }
+#voteBox .vb-t{ font-size:10px; line-height:1.3; color:rgba(255,255,255,.55);
+  text-align:center; margin-bottom:3px; letter-spacing:1px; }
+#voteBox .vb-l{ font-size:12px; font-weight:700; color:#FFE08A; text-align:center;
+  line-height:1.55; word-break:break-all; text-shadow:0 1px 6px rgba(0,0,0,.6); }
+/* 终局弹框（2026-10-28 用户定）：法官念完「游戏结束，狼人/好人胜利」之后再弹。
+   它只盖住手机框内部（#phone 是定位容器），不影响右上角的 ⏭ / ↻。 */
+#endPop{ position:absolute; left:0; right:0; top:0; bottom:0; z-index:40; display:none;
+  align-items:center; justify-content:center; background:rgba(0,0,0,.55); padding:26px; }
+#endPop.on{ display:flex; }
+#endPop .eb{ width:100%; max-width:330px; background:#1b1530;
+  border:1px solid rgba(255,224,138,.45); border-radius:18px; padding:26px 20px 20px;
+  text-align:center; box-shadow:0 18px 48px rgba(0,0,0,.65); }
+#endPop .eb-who{ font-size:30px; font-weight:800; color:#FFE08A; letter-spacing:2px; }
+#endPop .eb-sub{ margin-top:10px; font-size:13px; color:rgba(255,255,255,.68); line-height:1.6; }
+#endPop .eb-btn{ margin-top:18px; width:100%; padding:12px 0; border-radius:12px;
+  font-size:16px; font-weight:700; border:1px solid rgba(255,255,255,.28);
+  background:rgba(255,255,255,.10); color:#fff; font-family:inherit; }
 /* 大圆发言模式下的提示行与按钮（2026-10-02）：
    提示行 = 录音状态唯一可见处（● 红 = 正在录音）；按钮 = 过 / 打字 */
 #spkTip{ position:absolute; left:50%; bottom:calc(14px + 44px + 54px); transform:translateX(-50%);
@@ -474,8 +494,9 @@
       <!-- 座位号码标识排列：2026-10-07 用户定「直接去掉」。
            （`renderDots` / `moveDotCursor` 都自带 `if (!wrap) return`，删掉这个容器即可
             变成空操作；CSS 里的 #seatDots/#dotCursor/.seatdot 已成死样式，下次清理。） -->
-      <!-- 票型大字（2026-10-02 用户定：不显示 AI 文本，只把票型大字展示） -->
-      <div id="voteBig"></div>
+      <!-- 票型框（2026-10-28 用户定）：法官不再念票型，改由这个小框显示计票。
+           宽度约竖屏 15%，内容多时上下滚动；每行一条 "2，3→5"。 -->
+      <div id="voteBox"></div>
       <!-- 拨号盘（2026-10-12 用户定稿）：夜间操作 + 投票；顶部角色大字 + 倒计时 -->
       <div id="dialHead"><div class="r"></div><div class="cd" id="dialCd"></div></div>
       <div id="nightDial"></div>
@@ -503,6 +524,16 @@
       <!-- 2026-10-26（用户定）：导出对局文件挪到游戏结束末尾 —— 和战报一样，
            只有打完才有意义；给提示词实验室复盘/回放用。 -->
       <a id="lnkExportLab" class="bigbtn" href="#" onclick="exportLabFile(event)">⤓ 导出对局文件</a>
+    </div>
+
+    <!-- 终局弹框（2026-10-28 用户定）：法官念完「游戏结束，狼人/好人胜利」后弹出。
+         静态 DOM，由 renderEndPop() 控制显隐（tableui.js 的 ended 分支每拍调一次）。 -->
+    <div id="endPop">
+      <div class="eb">
+        <div class="eb-who" id="endPopWho">—</div>
+        <div class="eb-sub" id="endPopSub">本局结束。下面的「本局战报」可以看完整复盘。</div>
+        <button class="eb-btn" id="endPopOk">知道了</button>
+      </div>
     </div>
 
     <!-- 交接浮层已并入轮盘（2026-10-05 用户定：取消所有黑色半透明半屏）。
@@ -1089,20 +1120,74 @@ function paintSeats(){
   });
 }
 
+/* ---------------------------------------------------------- 票型框 / 终局弹框 */
+
+/* 票型框（2026-10-28 用户定）：
+   · 法官**不再念票型**（那串"3 号 2 票（1 号、4 号投的）"听着费力），
+     票型改由底部这个窄条显示，每行一条 "2，3→5"。
+   · 数据来自 `PUBLIC.vote_board.lines`（后端已经排好序、格式化好）。
+   · ⚠️ 内容没变时**绝不重画** —— 这个函数每 0.3 秒被调一次，
+     重画会把用户正在滚动的票型框弹回顶部（"能滑动但一滑就回弹"）。 */
+var _VB_HTML = '';
+function renderVoteBox(){
+  var box = $('voteBox');
+  if (!box) return;
+  var vb = (PUBLIC && PUBLIC.vote_board) || null;
+  var lines = (vb && vb.lines) || [];
+  if (!lines.length){
+    if (_VB_HTML !== ''){ box.innerHTML = ''; _VB_HTML = ''; }
+    box.style.display = 'none';
+    return;
+  }
+  var title = vb.first_round ? '计票·首轮' : (vb.runoff ? '计票·加时' : '计票');
+  var html = '<div class="vb-t">' + title + '</div>';
+  for (var i = 0; i < lines.length; i++){
+    html += '<div class="vb-l">'
+          + String(lines[i]).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          + '</div>';
+  }
+  if (html !== _VB_HTML){ box.innerHTML = html; _VB_HTML = html; }
+  box.style.display = 'block';
+}
+
+/* 终局弹框：法官念完「游戏结束，狼人/好人胜利」之后才弹。
+   判定用播报游标（SPOKEN 越过那一句）。三个兜底，缺一不可：
+     · 语音关掉时 SPOKEN 不推进（speakQueue 开头就 return）⇒ 直接弹
+     · 老服务端没有这句 ⇒ idx < 0 ⇒ 直接弹
+     · 播报卡住（TTS 悬挂）⇒ 进终局 8 秒后照弹，不能因为念不出来就不给结果 */
+var _END_AT = 0, _END_SHOWN = false;
+function renderEndPop(){
+  var p = $('endPop');
+  if (!p) return;
+  if (!PUBLIC || PUBLIC.phase !== 'ended'){
+    p.classList.remove('on');
+    _END_AT = 0; _END_SHOWN = false;
+    return;
+  }
+  if (!_END_AT) _END_AT = Date.now();
+  var who = PUBLIC.winner === 'wolf' ? '狼人胜利'
+          : (PUBLIC.winner === 'good' ? '好人胜利' : '本局结束');
+  var whoEl = $('endPopWho');
+  if (whoEl) whoEl.textContent = who;
+  var idx = -1;
+  ((PUBLIC.timeline) || []).forEach(function(x, i){
+    if (x.t === 'sys' && String(x.s || '').indexOf('游戏结束') === 0) idx = i;
+  });
+  var spoken = (idx < 0) || !VOICE_ON
+            || (typeof SPOKEN === 'number' && SPOKEN > idx)
+            || (Date.now() - _END_AT > 8000);
+  if (!spoken || _END_SHOWN) return;
+  _END_SHOWN = true;
+  p.classList.add('on');
+}
+
+if ($('endPopOk')) $('endPopOk').onclick = function(){ $('endPop').classList.remove('on'); };
+
 function renderLog(){
   /* 🔴 2026-10-12（用户：日志区在所有页面**彻底删除**）—— 时间线不再上屏，
-     公有信息以法官播报为准。本函数只保留票型大字（voteBig）的更新；
-     合规提醒走 longUse 横幅，不再有日志出口。 */
-  var vote = null;
-  ((PUBLIC && PUBLIC.timeline) || []).forEach(function(x){
-    if (x.t !== 'sys') return;
-    if (x.s.indexOf('投票结果') === 0) vote = x.s;
-  });
-  var vb = $('voteBig');
-  if (vb){
-    if (vote){ vb.textContent = vote.replace(/^投票结果：/, ''); vb.style.display = 'block'; }
-    else vb.style.display = 'none';
-  }
+     公有信息以法官播报为准。
+     2026-10-28：票型从"大字"改成底部窄条票型框（法官不再念票型，见 renderVoteBox）。 */
+  renderVoteBox();
 }
 
 /* ---------------------------------------------------------- 底部控制 */
@@ -1130,6 +1215,8 @@ $('btnAgain').onclick = function(){
 /* 回到开始界面：留住"还能接回"的锚点、显示接回按钮、停轮询（tick 自己会停）、换页。 */
 function backToCover(){
   if (GID) localStorage.setItem('tt.gid', GID);   /* 锚点留着 ⇒ 那一局还能接回 */
+  /* 终局弹框不能带到封面上（tick 停了就没人收它） */
+  if ($('endPop')) $('endPop').classList.remove('on');
   showResumeButton(GID
     ? ('继续上一局（局号 ' + GID + '，'
        + (PUBLIC && PUBLIC.phase === 'ended' ? '已结束' : '进行中') + '）')

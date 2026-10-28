@@ -53,9 +53,15 @@ def play(sess, max_steps: int = 80) -> None:
         if sess.game.phase.value == "ended":
             return
         need = []
+        # ★ 2026-10-28：狼刀窗口内 kill 会一直挂在待办里（用户可以随时改刀，
+        #   见 engine.settle_wolf_window）。机器人若反复提交同一个刀口只会**空转**
+        #   —— 墙上时间不流逝，窗口永远走不完。点过就当这一步交完了。
+        _wpt = sess.game.night.get("wolf_points") or {}
         for p in sess.game.players:
             if p.kind == "human" and p.alive:
                 a = sess.game.actions_for(p.seat)
+                if a and p.seat in _wpt and set(a) <= {"kill", "confirm"}:
+                    continue
                 if a:
                     need.append((p.seat, a))
         if not need:
@@ -161,10 +167,10 @@ print("③ 前端：真人局可用性（静态检查）")
 #     nightops 夜间暗屏 4 条（2026-10-05 用户定取消所有半透明遮罩，机制整体移除）、
 #     「再来一局」直接同板子重开（2026-10-01 用户定改为回封面再按开始）、
 #     LOCAL_LINES 换局清零（新局走整页重建，形态不同）。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = ((BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 
 check("① 一场统计：显示开始时间/时长（renderSeries，跨局累计）",
       'id="series"' in p2 and "本场 " in p2 and "function seriesSince" in p2)
@@ -234,11 +240,13 @@ check("② 构造成功：票已齐，但 pending 还停在过期的 human_vote"
       s1._all_voted() and s1.pending == "human_vote",
       f"all_voted={s1._all_voted()} pending={s1.pending}")
 
-before = len([x for x in s1.game.public_log if x.startswith("投票结果")])
+# ★ 2026-10-28：判据从"出现了「投票结果」这句播报"换成"票型已结算"
+#   （法官不再念票型，票型走 vote_history / vote_board）。
+before = len(s1.game.vote_history)
 s1.drive(0.5)
-after = len([x for x in s1.game.public_log if x.startswith("投票结果")])
+after = len(s1.game.vote_history)
 check("★ 轮询一次就归票（旧实现会永远卡在 human_vote 上）", after > before,
-      f"「投票结果」{before}→{after}，pending={s1.pending}")
+      f"vote_history {before}→{after}，pending={s1.pending}")
 
 # 反向断言：放宽闸门之后，drive() 仍然**不能**替人类出手
 # 🔴 2026-10-05：不再写死 seed=3 —— 4 人局人类可能第一夜就被刀死、局直接 ended，
@@ -289,16 +297,16 @@ check("④ 读取失败后仍要排下一次轮询（旧实现一次网络抖动
 # 2026-10-02：play.html 拆出了 tableui.js（大屏 UI 状态机 + 对局驱动：
 # sigOf/voicedUp/tick/openHandoff/renderHandoff/startSay… 都搬了过去）。
 # 这些检查是**源码扫描**，所以把两个文件拼起来扫 —— 拆分不该让防线失明。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = ((BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 # ⚠️ 2026-10-07：交接层（交接认领 / 轮盘操作屏）全部在 tableui.js 里；
 #    play.html 里的「请把手机交给 N 号」是**身份牌**那一页的文案，是另一回事。
 #    下面那条"认领步骤已删"的断言原来扫的是 p2（两文件拼接）⇒ 被身份牌文案
 #    误伤，**基线就是红的**（`_smoke-map.py` 只比对"通过数"、不查退出码，所以一直没报）。
 #    断言写错了，不是实现错了 ⇒ 改成只扫 tableui.js（判据强度不变）。
-pui = (BASE / "tableui.js").read_text(encoding="utf-8")
+pui = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
 check("★ play.html：手上这屏的判据包含「动作」而不只是座位",
       "function sigOf" in p2 and "sigOf(mine) === HANDOFF_SIG" in p2
       # sigOf 本身必须仍然把「动作」算进签名
@@ -359,7 +367,7 @@ check("★ tableui：狼**空刀**时解药那一屏照常出、按钮**置灰�
       "（2026-10-07 用户定：照常走解药播报和面板流程，只是解药按钮置灰）",
       "无人被刀" in pui and "_yesBtn.disabled = true" in pui
       and "healBlocked" in pui and "healBlocked" in p2
-      and "#wheelYes.off" in (BASE / "play.html").read_text(encoding="utf-8"))
+      and "#wheelYes.off" in (BASE / "frontend" / "play.html").read_text(encoding="utf-8"))
 check("★ play.html：狼夜里也要加密轮询（实时盘子要看队友的点/锁定，700ms 一轮）",
       "PUBLIC.phase === 'night') ? 700 : 1200" in p2)
 # 2026-10-06：以下三条原守 game.html（voicedUp 同款 / 2.5s 快档 / 动作变换屏），
