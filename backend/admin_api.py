@@ -112,6 +112,11 @@ PROMPT_STATIC = (
     ("agents", "HEAD_MY_PLAN", "段落标题（user 消息）", "夜末预案段标题"),
     ("agents", "HEAD_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段标题（挑战式发言）"),
     ("agents", "TAIL_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段收尾（回应提醒）"),
+    # 2026-10-28 平票加时：候选集被收窄 + 「这是最后一轮陈述」两句都要显式讲。
+    ("agents", "HEAD_RUNOFF_SPEAK", "段落标题（user 消息）",
+     "平票加时·最后一轮陈述段（加时发言时注入）"),
+    ("agents", "HEAD_RUNOFF_VOTE", "段落标题（user 消息）",
+     "平票加时·加时投票规则段；{names} 是候选座位占位符，**别删**"),
     ("agents", "HEAD_WOLF_TERMS", "段落标题（user 消息）", "桌上通用说法段标题"),
     ("agents", "HEAD_PLAYBOOK", "段落标题（user 消息）", "身份常规打法段标题"),
     ("agents", "HEAD_TASK", "段落标题（user 消息）", "任务段标题"),

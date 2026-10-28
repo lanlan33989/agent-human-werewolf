@@ -1039,8 +1039,13 @@ if _sg.game.phase is _ga.Phase.VOTE:
         _sg._vote_grace_at = _tm.monotonic() - 6     # 5s 兜底已过期
         _sg.drive(0.3)
         _vh = _sg.game.vote_history[-1] if _sg.game.vote_history else {}
+        # ★ 2026-10-28 平票加时：第一轮如果平票，这一轮的票型**不进 vote_history**
+        #   （那张表是"每天一条"的口径，战报/my_votes 都按轮次索引），而是暂存在
+        #   `runoff_first_votes` 里。断言要看的是"这一票被补成了弃票"，两个位置都算。
+        if not _vh and _sg.game.runoff_first_votes:
+            _vh = dict(_sg.game.runoff_first_votes)
         _graced = _vh.get(_aiv.seat) == -1
-        _gdetail = f"seat={_aiv.seat} votes={_vh}"
+        _gdetail = f"seat={_aiv.seat} votes={_vh} phase={_sg.game.phase.value}"
 check("★ 第二期：AI 投票 5s 兜底 —— 超时未决策直接记弃票（-1）", _graced, _gdetail)
 
 # ⑦ 狼**空刀**：人类女巫照常走「解药问 + 毒药问」，只是解药**用不了**

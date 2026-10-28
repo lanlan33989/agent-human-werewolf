@@ -722,6 +722,11 @@ def _advance_vote(self) -> str:
         #    下一拍 dispatch 到 _advance_shoot，开完枪回 EXILE 由 _advance_exile 进夜。
         if g.phase is Phase.SHOOT:
             return "continue"
+        # ★ 平票加时（2026-10-28 用户定）：resolve_vote 在第一轮平票时把相位切回
+        #   DISCUSS（= 平票者再发一轮言）。这里必须**放手让循环走发言**，
+        #   不能像原来那样一律 next_night —— 那等于把加时整段跳过。
+        if g.phase is Phase.DISCUSS:
+            return "continue"
         if g.phase is not Phase.ENDED:
             g.next_night()
             self._flush_log()
@@ -743,11 +748,17 @@ def _advance_vote(self) -> str:
 def _pump_vote_pre(self) -> None:
     """进入一轮投票时，把 AI 的投票决策一次性发到后台（用户定：最后发言结束即触发）。
 
-    换轮（g.round 变）就换一个新池并把兜底计时清零。
+    换轮（`g.round` 变）就换一个新池并把兜底计时清零。
+
+    ★ 2026-10-28 平票加时：加时投票**不换轮**（同一天），但它是另一次投票 ——
+      决策输入完全不同（候选被收窄到平票者、自己可能没有投票权）。
+      所以池子的键必须带上 `runoff_stage`，否则会直接收割第一轮的预跑结果：
+      表现是"加时投票里 AI 投了一个不在候选里的号"，引擎拒绝、整局卡住。
     """
     g = self.game
-    if getattr(self, "_pre_vote_round", None) != g.round:
-        self._pre_vote_round = g.round
+    _key = (g.round, int(getattr(g, "runoff_stage", 0) or 0))
+    if getattr(self, "_pre_vote_key", None) != _key:
+        self._pre_vote_key = _key
         pre = getattr(self, "_pre", None)
         if pre is not None:
             pre.discard_all()

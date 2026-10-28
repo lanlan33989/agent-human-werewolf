@@ -209,6 +209,34 @@ var DEMO_SCENES = {
     })
   },
 
+  /* 加时投票（2026-10-28 后端新增：平票 → 平票者再发言 → 其余人重投） */
+  vote_runoff: {
+    title: "加时投票（只能投平票候选）",
+    note: "平票后加时：平票者不投票，其余人只能投 2 号或 5 号（或弃票）—— 其他号码点不动。",
+    next: "vote_result",
+    public: _pub(function (p) {
+      p.phase = "vote";
+      p.pending = "human_vote";
+      p.votes = { "1": 4 };
+      p.voted_seats = [1];
+      /* 后端 engine.get_view_for 的 runoff 结构（stage=2 加时投票） */
+      p.runoff = { stage: 2, candidates: [1, 4], votable: [1, 4], can_vote: true,
+                   first_votes: { "0": 1, "1": 4, "2": 1, "3": 4, "4": 0, "5": 1 } };
+      p.public_log.push("投票结果：2 号 2 票、5 号 2 票、1 号 1 票（1 人弃票）。");
+      p.public_log.push("2 号、5 号票数相同，进入加时。2 号、5 号请各再说一轮。");
+      p.timeline.push({ t: "sys", s: "投票结果：2 号 2 票、5 号 2 票、1 号 1 票。",
+                        voice: "Neil", ts: 1793034458 });
+      p.timeline.push({ t: "sys", s: "2 号、5 号票数相同，进入加时。", voice: "Neil", ts: 1793034460 });
+      p.timeline.push({ t: "sys", s: "加时投票开始：只能投给 2 号、5 号中的一位，或者弃票。",
+                        voice: "Neil", ts: 1793034464 });
+      var need = { seat: 0, node: "vote", actions: ["vote", "pass"], seconds_left: 15 };
+      p.now = { kind: "wheel", seat: 0, node: "vote", need: need,
+                until: Date.now() / 1000 + 15, until_left: 15,
+                started: true, why: "加时投票：只能投 2 号或 5 号" };
+      p._ps = { seats: [need] };
+    })
+  },
+
   /* 票型大字 */
   vote_result: {
     title: "投票结果（票型大字）",

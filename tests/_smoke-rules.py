@@ -62,8 +62,11 @@ SPEC = [
      "engine._actions_available（DISCUSS 分支在 can_vote 之前）"),
     ("I3", "白痴", "③ 已翻牌的白痴不能再被投票出局（多数版本）",
      "engine.resolve_vote"),
-    ("T1", "全局", "平票默认无人出局（开关 tie_vote_rule）",
-     "engine.resolve_vote"),
+    # 🔴 2026-10-28 用户改判例：平票**不再直接平安日** —— 先让平票者再发一轮言、
+    #    其余人重投（只能投平票者或弃票）；**再平票**才无人出局、进黑夜。
+    ("T1", "全局", "平票先加时（平票者再发言、其余人重投，2026-10-28 用户定）；"
+     "加时再平票才算无人出局",
+     "engine.resolve_vote → _open_runoff / open_vote / cast_vote"),
     # ⚠️ T2 不在 05b 那张表里：它是 2026-09-17 用户定的（引擎里写在 cast_vote 的 docstring）。
     #    补进来的理由：**只写在注释里的规则等于没有规则** —— 前端目标列表、引擎校验、
     #    测试三处要一致，而"投自己算不算合法"正是那种三处会各说各话的地方
@@ -327,20 +330,41 @@ record("I2", _g.current_speaker() == _id and _speaks,
        f"轮到白痴发言时 current={_g.current_speaker()} actions={_g.actions_for(_id)}")
 
 # ---------------------------------------------------------------- 全局
-# T1 平票默认无人出局
+# T1 平票：先加时（平票者再发言 + 其余人重投），**再平票**才无人出局（2026-10-28 用户定）
 _g = Game(_B_IDIOT, kinds=_K4, seed=70)
 _g.start()
 peaceful_night(_g)
 _g.open_discuss()
 _g.open_vote()
 _alive = [p.seat for p in _g.alive]
-_g.cast_vote(_alive[0], _alive[1])       # 2 票投 A
-_g.cast_vote(_alive[2], _alive[1])
-_g.cast_vote(_alive[1], _alive[3])       # 2 票投 B
-_g.cast_vote(_alive[3], _alive[3])
+_a, _b = _alive[1], _alive[3]
+_g.cast_vote(_alive[0], _a)              # 2 票投 A
+_g.cast_vote(_alive[2], _a)
+_g.cast_vote(_alive[1], _b)              # 2 票投 B
+_g.cast_vote(_alive[3], _b)
 _exiled3 = _g.resolve_vote()
-record("T1", _exiled3 is None and _g.tie_count == 1 and all(p.alive for p in _g.players),
-       f"exiled={_exiled3} tie_count={_g.tie_count} votes={_g.vote_history[-1] if _g.vote_history else {}}")
+# 第一轮：不判平安日，转入加时发言；候选人 = 平票的那两位；这一轮**不算**"无人出局"
+_round1 = (_exiled3 is None
+           and _g.phase is Phase.DISCUSS
+           and _g.runoff_stage == 1
+           and set(_g.runoff_candidates) == {_a, _b}
+           and _g.tie_count == 0
+           and all(p.alive for p in _g.players))
+# 平票者各说一句，然后加时投票**再平票** ⇒ 这才记"无人出局"
+_g.end_speech()
+_g.end_speech()
+_g.open_vote()
+_voters = [s for s in _alive if _g.can_vote(s)]
+if len(_voters) >= 2:
+    _g.cast_vote(_voters[0], _a)
+    _g.cast_vote(_voters[1], _b)
+_round2 = (_g.resolve_vote() is None
+           and _g.tie_count == 1
+           and all(p.alive for p in _g.players))
+record("T1", _round1 and _round2,
+       f"首轮平票→加时：{_round1}（cand={_g.runoff_candidates}）；"
+       f"加时再平票→平安日：{_round2}（tie_count={_g.tie_count}）；"
+       f"vote_history={_g.vote_history}")
 
 # T2 允许投自己（自投 ≈ 弃权的一种表达）
 _g = Game(_B_IDIOT, kinds=_K4, seed=71)

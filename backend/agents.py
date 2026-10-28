@@ -330,6 +330,26 @@ HEAD_MY_PLAN: str = "### 你昨晚天亮前写下的战术预案（私有；局�
                     "照不照打由你判断）\n"
 HEAD_WHY_TURN: str = "### 为什么现在轮到你\n"
 TAIL_WHY_TURN: str = "（这是回应，不是新一轮自由发言：只针对这一问说，不要重复你上一句）\n\n"
+# ★ 平票加时（2026-10-28 用户定）：放逐投票平票 ⇒ 平票者再发一轮言，然后其余人重投
+#   （只能投平票者之一或弃票）；再平票才是平安日。
+#   这两段**必须显式写进 prompt**：候选集被收窄、以及"这是最后一轮陈述"，
+#   都不在模型的常识里 —— 它看到的世界仍然是"全场都能投"，写别人的号会被判废票；
+#   不告诉它这是加时，它会照常做一轮普通发言，白白浪费这个位置。
+HEAD_RUNOFF_SPEAK: str = (
+    "### 这是你的最后一轮陈述（加时发言）\n"
+    "刚才的投票里票数并列最高，没人被投出去，所以现在加时再给你一轮：\n"
+    "- **先替自己辩**：为什么不该投你 —— 你的票、你的发言、你手上的身份信息都可以用\n"
+    "- **再给出出口**：如果大家一定要在并列的人里出一个，你认为该是谁、为什么\n"
+    "- 这一轮**每人只有这一次**，说完立刻重投；不要寒暄，也不要重复白天的发言\n\n"
+)
+HEAD_RUNOFF_VOTE: str = (
+    "### 这是加时投票（规则和刚才不一样）\n"
+    "上一轮平票，{names}刚才各说了一轮。这一票**只能投给 {names}中的一位，"
+    "或者弃票**：\n"
+    "- 写其他座位会被判废票（那些号这一轮根本不在候选里）\n"
+    "- 你刚才那一票已经作废，按他们这次的陈述重新想，不要照抄上一票\n"
+    "- 想清楚再投：**这一轮再平票就是平安日**，谁都不出局\n\n"
+)
 HEAD_WOLF_TERMS: str = "### 桌上通用的说法\n"
 HEAD_PLAYBOOK: str = "### 你这个身份的常规打法\n"
 HEAD_TASK: str = "### 你现在的任务\n"
@@ -1307,6 +1327,18 @@ def build_messages(view: Dict[str, Any], public_history: List[str],
     _why = view.get("speech_reason")
     if _why:
         user += (HEAD_WHY_TURN + _why + TAIL_WHY_TURN)
+
+    # ★ 平票加时（2026-10-28）：规则只在对应阶段注入。stage 与候选集都由引擎算
+    #   （get_view_for 的 `runoff`），这里只负责把它翻译成人话 —— 两边各写一份
+    #   候选判断一定会漂：引擎改了收窄口径，prompt 还按旧口径放行别人的号。
+    _ro = view.get("runoff") or None
+    if _ro:
+        _stage = int(_ro.get("stage") or 0)
+        _nums = "、".join(f"{int(s) + 1} 号" for s in (_ro.get("candidates") or []))
+        if _stage == 1:
+            user += HEAD_RUNOFF_SPEAK
+        elif _stage == 2:
+            user += HEAD_RUNOFF_VOTE.format(names=_nums)
 
     # 桌上通用的短说法（L0）：放在任务之前，让它先想到"这些词可以直接用"。
     user += HEAD_WOLF_TERMS + WOLF_TERMS + "\n\n"

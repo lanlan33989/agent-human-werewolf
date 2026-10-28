@@ -446,6 +446,11 @@ def _fallback_target(self, seat: int, kind: str) -> Optional[int]:
     g = self.game
     if kind == "kill":
         pool = [p.seat for p in g.good_alive() if p.seat != seat]
+    elif kind == "vote" and getattr(g, "runoff_stage", 0) == 2:
+        # ★ 平票加时投票（2026-10-28）：唯一合法目标集是平票候选人。
+        #   不加这一支的话，兜底会从"全体活人"里挑 —— 那一票必然被引擎拒。
+        pool = [s for s in g.runoff_candidates
+                if g.player(s).alive and s != seat]
     else:                       # vote / investigate：任何活人都可以
         pool = [p.seat for p in g.alive if p.seat != seat]
     return self.rng.choice(pool) if pool else None
@@ -458,7 +463,7 @@ def _run_one_ai_vote(self):
     order = g.vote_order or [p.seat for p in g.alive]
     actor = next((g.player(s) for s in order
                   if s not in g.votes and g.player(s).kind == "ai"
-                  and g.player(s).alive), None)
+                  and g.can_vote(s)), None)
     if actor is None:
         return False
     r = self._pick_ai_vote(actor.seat)
@@ -467,7 +472,16 @@ def _run_one_ai_vote(self):
     if r == "giveup":
         g.cast_vote(actor.seat, -1)        # 超时未决策 ⇒ 弃票
         return True
-    g.cast_vote(actor.seat, r)
+    target = int(r)
+    # ★ 平票加时投票（2026-10-28）目标的兜底：模型看到的是"全场都还能投"，
+    #   给出的号可能不在候选里。`cast_vote` 会明确拒绝（不替玩家改票），
+    #   但**不能把整局卡在这儿** —— 换成候选里的一个（同 _fallback_target 的口径：
+    #   这一票必须投出去，否则归票永远不成立）。
+    if g.runoff_stage == 2 and target != -1 and target not in g.runoff_candidates:
+        target = self._fallback_target(actor.seat, "vote")
+        if target is None:
+            target = -1
+    g.cast_vote(actor.seat, target)
     return True
 
 

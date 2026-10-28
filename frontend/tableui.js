@@ -1012,7 +1012,17 @@ function renderNightDial(seatNo, v, acts){
   var isHeal = acts.indexOf('heal') >= 0;
   var pool = {};
   if (act === 'vote'){
-    players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });  // 投票可自投
+    /* ★ 平票加时（2026-10-28，后端 engine.cast_vote 硬拦）：
+       平票者不投票，其余人只能投平票者之一或弃票。
+       候选集**只认服务端**（v.runoff.votable）—— 前端按 alive 自己推断的话，
+       玩家会点到引擎必然拒绝的号码，表现成"点了没反应 / 报错"。
+       没有 v.runoff 就是普通投票，口径一字不变。 */
+    var _ro = v.runoff;
+    if (_ro && _ro.stage === 2){
+      (_ro.votable || []).forEach(function(s){ pool[s] = true; });
+    } else {
+      players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });  // 投票可自投
+    }
   } else if (act){
     others(v).forEach(function(p){ if (p.alive) pool[p.seat] = true; }); // 其余不含自己
   }
@@ -1032,6 +1042,13 @@ function renderNightDial(seatNo, v, acts){
         b.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'heal', no0 + 1, null); };
       } else if (act && pool[no0]){
         b.onclick = function(ev){ ev.stopPropagation(); wheelSelect(act, no0 + 1); };
+      } else if (act === 'vote' && v.runoff && v.runoff.stage === 2){
+        /* ★ 加时投票（2026-10-28）：不在候选里的号码**明确画成不可点**。
+           只靠"没有 onclick"的话，玩家会以为界面坏了（点下去毫无反应）——
+           而服务端其实会拒（engine.cast_vote 的加时校验）。 */
+        b.disabled = true;
+        b.style.opacity = '0.3';
+        b.style.cursor = 'default';
       }
       d.appendChild(b);
     })(i);
@@ -1080,7 +1097,18 @@ function renderNightDial(seatNo, v, acts){
   var bc = $('bigCircle');
   if (bc) bc.style.visibility = 'hidden';
   var _ht = DIAL_NAMES[(PUBLIC.now && PUBLIC.now.node)];
-  if (!_ht && act === 'vote') _ht = seatNo + ' 号投票';   /* 用户：投票界面要显示当前投票的人 */
+  if (!_ht && act === 'vote'){
+    /* 用户：投票界面要显示当前投票的人。★ 加时投票（2026-10-28）另外标明候选，
+       否则玩家会以为还能投全场（那一票会被引擎判废）。 */
+    var _ro2 = v.runoff;
+    if (_ro2 && _ro2.stage === 2){
+      _ht = '加时投票 · 只能投 '
+            + (_ro2.votable || []).map(function(s){ return (s + 1) + ' 号'; }).join('/')
+            + ' 或弃票';
+    } else {
+      _ht = seatNo + ' 号投票';
+    }
+  }
   head.querySelector('.r').textContent = _ht || '请操作';
   head.classList.add('on');
   /* WHEEL 状态照旧写（走查/自检按它判"卡住"） */
@@ -1272,9 +1300,16 @@ function renderWheelAct(seatNo, v, actsOverride){
       : '';
     $('bigTitle').textContent = TITLE[a] || '操作';
     $('bigIcon').textContent = '🎯';
-    $('bigWho').textContent = victimNote + { kill: '要刀谁？点他的号码', investigate: '要验谁？点他的号码',
-                                poison: '要毒谁？点他的号码', guard: '要守谁？点他的号码',
-                                vote: '投给谁？点他的号码' }[a];
+    /* ★ 平票加时（2026-10-28）：加时投票的候选只有平票者，问句与候选集都跟着收窄 */
+    var _roW = (a === 'vote') ? v.runoff : null;
+    var _roWNames = (_roW && _roW.stage === 2)
+      ? (_roW.votable || []).map(function(s){ return (s + 1) + ' 号'; }).join('、')
+      : '';
+    $('bigWho').textContent = victimNote + (_roWNames
+      ? '加时投票：只能投给 ' + _roWNames + '（或弃票）'
+      : { kill: '要刀谁？点他的号码', investigate: '要验谁？点他的号码',
+          poison: '要毒谁？点他的号码', guard: '要守谁？点他的号码',
+          vote: '投给谁？点他的号码' }[a]);
     /* 毒药屏也把被刀号标红（heal 问句屏标过，但 renderWheelBase 重建刻度会清掉） */
     if (a === 'poison' && v.night_victim != null){
       var vEl2 = $('hoActs').querySelector('.wnum[data-no="' + (v.night_victim + 1) + '"]');
@@ -1286,7 +1321,14 @@ function renderWheelAct(seatNo, v, actsOverride){
        · 刀允许自刀（2026-10-04 用户定）
        · 其余从活人里选（不含自己） */
     var pool;
-    if (a === 'vote' || a === 'kill'){
+    if (a === 'vote'){
+      /* ★ 加时投票（2026-10-28）：候选只认服务端给的 votable；普通投票口径不变 */
+      pool = (_roW && _roW.stage === 2)
+        ? (v.players || []).filter(function(p){
+            return (_roW.votable || []).indexOf(p.seat) >= 0;
+          })
+        : (v.players || []).filter(function(p){ return p.alive; });
+    } else if (a === 'kill'){
       pool = (v.players || []).filter(function(p){ return p.alive; });
     } else {
       pool = others(v);

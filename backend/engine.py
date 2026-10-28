@@ -312,6 +312,23 @@ class Game:
         self._slot_reason: Dict[int, str] = {}
         # 投票顺序：与发言同一套轮转（用户定的规则：都从前一晚被刀的人开始顺时针）
         self.vote_order: List[int] = []
+        # ★ 平票加时（2026-10-28 用户定）：
+        #     第一轮投票平票 ⇒ **平票的人再发一轮言**，然后其余玩家重投一次
+        #     （平票者不投票，且只能投给平票者之一或弃票）；**再平票才算平安日**。
+        #   `runoff_stage`：0 = 正常投票；1 = 加时发言中；2 = 加时投票中。
+        #     用"阶段号"而不是新相位，是因为发言/投票的驱动、面板、倒计时全都是
+        #     按 `Phase.DISCUSS` / `Phase.VOTE` 分派的 —— 加一个 Phase 要同时改
+        #     驱动表、面板协议和前端三处；而这里真正变化的只是"谁能说、谁能投"。
+        #   `runoff_candidates`：平票的座位（0 基，升序）。加时投票的唯一合法目标集。
+        #   `runoff_first_votes`：第一轮的票型快照。第一轮**不进 vote_history**
+        #     （见 resolve_vote 的说明），但 AI 在加时投票时要用它，所以单独留一份。
+        self.runoff_stage: int = 0
+        self.runoff_candidates: List[int] = []
+        self.runoff_first_votes: Dict[int, int] = {}
+        # 加时发言从第几条 `speeches` 之后开始记。`speech_progress` 要靠它把
+        # "白天那轮的发言"和"加时这一轮的发言"分开 —— 否则候选人一开口，
+        # 进度里所有人都是"已发言"，AI 会误判现场没人还没说话。
+        self._runoff_speech_mark: int = 0
         # 上一轮**最后一个发言的人**。只用于一件事：平安夜的中性起点
         # （见 _neutral_anchor —— 平安夜不能拿"被刀的人"当起点，那会泄漏夜里发生了什么）。
         # 在 open_vote() 里落定：那一刻本轮发言才真正结束。
@@ -1007,7 +1024,10 @@ class Game:
             return None
         _slot = self.speak_cursor          # 这一句所在的**光标位**（讨论位判定要用它）
         self.speak_cursor += 1
-        if self.rules.speech_mode == "challenge":
+        # 平票加时发言（runoff_stage == 1）**不启用**挑战式插队：这一轮只有平票者
+        # 说话，让他们互相点名插队会把"最后一轮陈述"拖成无休止的对呛，而加时的目的
+        # 恰恰是让每个人把话说完、然后立刻重投。
+        if self.rules.speech_mode == "challenge" and not self.runoff_stage:
             rec = self.speeches[-1] if self.speeches else None
             self._queue_challenge(spk, rec, _slot)
         return self.current_speaker()
@@ -1074,7 +1094,20 @@ class Game:
             raise RuntimeError("还没到投票阶段")
         self.phase = Phase.VOTE
         self.votes = {}
+        # ★ 平票加时（2026-10-28 用户定）：加时发言结束后开的是"加时投票"。
+        #   与第一轮的区别只有两条：**平票者不投票**、**只能投平票者或弃票**。
+        #   投票顺序因此要重新过滤一遍（手机依次递给谁，也靠这个字段）。
+        if self.runoff_stage == 1:
+            self.runoff_stage = 2
+            _rc = set(self.runoff_candidates)
+            self.vote_order = [s for s in self._rotation_from(self._night_anchor())
+                               if s not in _rc and self.can_vote(s)]
+            _names = "、".join(f"{s + 1} 号" for s in self.runoff_candidates)
+            self.log(f"加时投票开始：只能投给 {_names}中的一位，或者弃票；"
+                     f"{_names}本轮不参加投票。")
+            return
         # 本轮发言到此结束 ⇒ 记下"最后发言的人"，给下一个平安夜当中性起点用。
+        # ⚠️ 加时发言**不覆盖**它：那只是平票者的最后陈述，不是"今天的发言结束"。
         self.last_speaker = self.speaking_order[-1] if self.speaking_order else None
         # 投票顺序与发言**必须同一套轮转**（用户定的规则）。
         # ⚠️ 这里不能直接拿 self.night["kill"] 当锚点：平安夜时那等于把发言顺序
@@ -1091,9 +1124,20 @@ class Game:
         ⚠️ 2026-09-17 起**允许投自己**（用户定）：标准局里自投≈弃权的一种表达，
         引擎没必要拦。`tally_text` 与 `resolve_vote` 会照常把他算进那一组，
         和面杀里"举手投自己"的表现一致。
+
+        ★ 加时投票（runoff_stage == 2）例外：**平票的人不投票**，其余人**只能
+        投平票的人**或弃票。这两条在这里硬拦 —— 前端也会把候选收窄，但人类可能
+        带着上一屏的缓存点下去，AI 更可能给出一个不在候选里的座位号。
+        静默改成别的票是不行的（那等于替玩家改票），所以要明确报错。
         """
         self._require_phase(Phase.VOTE)
         self._require_alive(voter)
+        if self.runoff_stage == 2:
+            if voter in self.runoff_candidates:
+                raise ValueError(
+                    f"{self.player(voter).display} 是本轮平票候选人，不参加加时投票")
+            if target != -1 and target not in self.runoff_candidates:
+                raise ValueError("加时投票只能投给平票候选人，或者弃票")
         if target != -1:
             self._require_alive(target)
         self.votes[voter] = target
@@ -1177,8 +1221,61 @@ class Game:
             return out if tied else out + f"{top[0] + 1} 号票最多。"
         return "；".join(parts) + "。全部弃票。"
 
+    def _open_runoff(self, leaders: List[int]) -> Optional[int]:
+        """
+        平票加时（2026-10-28 用户定）：平票的人**再发一轮言**，然后其余人重投。
+
+        规则原文：「若放逐投票环节出现平票，则由平票玩家再发一轮言后再次投票
+        （平票玩家不参加投票，其余玩家只能将票投给平票玩家中的一位或弃票），
+        若再次平票才为平安日，进入黑夜」。
+
+        为什么是 DISCUSS + `runoff_stage`，而不是新相位：发言与投票的驱动、
+        面板、语音播报全部按 Phase 分派，新相位要同时动驱动表、now_state、
+        前端三处；这里真正变的只有"谁说、谁能投"。stage 让这三处**零改动**地复用。
+
+        调用方 `resolve_vote` 此时已经能确定"第一轮没人出局"，所以：
+          · 第一轮票型先播报（票已结算，公开不违反暗投纪律）
+          · 第一轮票型**不进 `vote_history`** —— 那张表是"每天一条"的口径
+            （`vote_patterns` / `my_votes` / 战报都按 round 索引），
+            平票这天塞两条会让后面每一天的轮次都错位一格。
+            加时结算时再写，写的是**决定出局的那一轮**。
+          · 这里返回 None：本函数"返回被放逐的座位"，加时这一个瞬间没人出局。
+        """
+        self.runoff_stage = 1
+        self.runoff_candidates = sorted(leaders)
+        self.runoff_first_votes = dict(self.votes)
+        self._runoff_speech_mark = len(self.speeches)
+
+        # 票型与"接下来怎么走"一起播报 —— 与第一轮同款（先票型后结果）
+        self.log("投票结果：" + self.tally_speech())
+        _names = "、".join(f"{s + 1} 号" for s in self.runoff_candidates)
+        self.log(f"{_names}票数相同，进入加时。{_names}请各再说一轮，"
+                 f"之后其余玩家重新投票，只能投给 {_names}中的一位，也可以弃票。")
+
+        # 发言顺序：沿用本轮投票的轮转，只留下平票者（用户没规定顺序，
+        # 沿用轮转的好处是"和刚才发言、投票是同一套顺序"，桌上不用重新适应）。
+        order = [s for s in self.vote_order if s in self.runoff_candidates]
+        for s in self.runoff_candidates:          # 兜底：vote_order 异常时也别漏人
+            if s not in order:
+                order.append(s)
+        self.phase = Phase.DISCUSS
+        self.speaking_order = order
+        self.speak_cursor = 0
+        # 三个闸门清零的语义与 open_discuss 一致（都是"这一轮"的范围）。
+        # 加时发言里不启用挑战式插队（见 end_speech）—— 这一轮只有平票者说话，
+        # 让他们互相点名插队会把"最后一轮陈述"拖成无休止的对呛。
+        self._discussion_slots = set()
+        self._responded = set()
+        self._inserted = 0
+        self._slot_reason = {
+            i: "你在本轮投票里票数并列最高：现在做最后一轮陈述 —— "
+               "说服大家不投你，或者把票集中到另一位候选人身上。"
+            for i in range(len(order))
+        }
+        return None
+
     def resolve_vote(self) -> Optional[int]:
-        """结算投票，返回被放逐的座位（None = 平票或全弃票）。"""
+        """结算投票，返回被放逐的座位（None = 平票 / 全弃票 / 已转入加时）。"""
         self._require_phase(Phase.VOTE)
         tally: Dict[int, int] = {}
         for t in self.votes.values():
@@ -1187,14 +1284,21 @@ class Game:
             tally[t] = tally.get(t, 0) + 1
 
         exiled: Optional[int] = None
+        leaders: List[int] = []
         if tally:
             top = max(tally.values())
-            leaders = [s for s, v in tally.items() if v == top]
+            leaders = sorted(s for s, v in tally.items() if v == top)
             if len(leaders) == 1:
                 exiled = leaders[0]
             elif self.rules.tie_vote_rule == "random":
                 # 可配规则（G9）：平票随机出一个（默认是"无人出局"，见 Rules）
-                exiled = self.rng.choice(sorted(leaders))
+                exiled = self.rng.choice(leaders)
+
+        # ★ 平票加时（2026-10-28）：**第一轮**平票不判平安日，改走"平票者再发言 + 重投"。
+        #   `tally` 为空（全员弃票）不是平票 —— 那是"没人得到票"，照旧直接平安日；
+        #   加时投票（stage=2）再平票才落到下面的 tie 分支（= 平安日，进黑夜）。
+        if exiled is None and len(leaders) > 1 and self.runoff_stage == 0:
+            return self._open_runoff(leaders)
 
         # 存档这一轮的票型。用途有两个，都在"结算之后"：
         #   · AI 能从自己的视图里看到「我投给了谁」（get_view_for 的 my_votes）
@@ -1213,7 +1317,11 @@ class Game:
             # 平票 / 全员弃票都算"这一轮没出人"。节奏维度要看它 ——
             # 平票率高说明好人不敢投（或狼在故意打散），是个真实的平衡信号。
             self.tie_count += 1
-            self.log("投票平票，本轮无人出局。")
+            if self.runoff_stage == 2:
+                # 加时也平票 ⇒ 平安日（用户定的终点，不再进入第三轮）
+                self.log("加时投票仍然平票，本轮无人出局，进入黑夜。")
+            else:
+                self.log("投票平票，本轮无人出局。")
         elif self.player(exiled).role is Role.IDIOT:
             # ★ 白痴判例（标准）：
             #   · 第一次被投出 → **翻牌不死**，但从此**失去投票权**
@@ -1266,6 +1374,12 @@ class Game:
             return False
         if p.role is Role.IDIOT and self.private[seat].flipped:
             return False
+        # ★ 平票加时投票（2026-10-28 用户定）：平票的人**不参加**这一轮投票。
+        #   必须落在这里而不是只在 cast_vote 里拦：`_all_voted` / `_actions_available` /
+        #   `_pending_seats_of` / 前端面板全都读这一个判据 —— 少改一处就会出现
+        #   "手机递给了一个不该投票的人"或者"归票永远等不到他"。
+        if self.runoff_stage == 2 and seat in self.runoff_candidates:
+            return False
         return True
 
     def next_night(self) -> None:
@@ -1278,6 +1392,10 @@ class Game:
             #    这里明确拒绝：开枪必须先落定（开或弃），谁跳谁炸 —— 不许静默。
             raise RuntimeError("猎人还没开枪（SHOOT 相位），不能进下一夜")
         self.round += 1
+        # 加时状态是天级的：进入黑夜 ⇒ 清空（下一轮平票要重新开始计）。
+        self.runoff_stage = 0
+        self.runoff_candidates = []
+        self.runoff_first_votes = {}
         self._open_night()
 
     # ------------------------------------------------------------ 胜负
@@ -1353,8 +1471,15 @@ class Game:
         非讨论阶段返回 {}（夜晚/投票没有这个概念）。"""
         if self.phase is not Phase.DISCUSS:
             return {}
-        spoken = sorted({int(s["seat"]) for s in self.speeches
-                         if int(s.get("round", 0)) == self.round})
+        if self.runoff_stage == 1:
+            # 加时发言：进度只算**加时开始之后**说的那几句（见 _runoff_speech_mark）。
+            # 不分开的话，白天那一轮已经把所有人都记成"说过"，候选人一开口
+            # 进度里就变成"全场都发过言了" —— 模型据此会说出与现场矛盾的话。
+            spoken = sorted({int(s["seat"])
+                             for s in self.speeches[self._runoff_speech_mark:]})
+        else:
+            spoken = sorted({int(s["seat"]) for s in self.speeches
+                             if int(s.get("round", 0)) == self.round})
         return {"order": list(self.speaking_order), "spoken": spoken,
                 "current": self.current_speaker()}
 
@@ -1478,6 +1603,25 @@ class Game:
         # 所以放在引擎视图 —— 发言/投票/刀人/技能全部走 get_view_for，一处覆盖。
         # 「正在投的今天」不在 vote_history（结算时才 append）⇒ 天然不暴露。
         view["vote_patterns"] = self.vote_patterns()
+        # ★ 平票加时（2026-10-28 用户定）：把"现在谁能说、谁能投、能投给谁"明确下发。
+        #   放在引擎视图里，是因为发言 / 投票 / 语音播报全部走 get_view_for ——
+        #   一处覆盖三处，不会出现"AI 知道限制、前端还在给全体候选"这种不一致。
+        #   `first_votes` 是第一轮票型：它已经播报过（public_log 里有），
+        #   结构化给 AI 比让它从中文播报里再解析一遍更可靠。
+        if self.runoff_stage:
+            view["runoff"] = {
+                "stage": self.runoff_stage,           # 1 = 加时发言，2 = 加时投票
+                "candidates": list(self.runoff_candidates),
+                # 只给**还活着**的候选：候选在这两步之间理论上不会死，
+                # 但一旦有人因别的原因出局，前端不该再画一个点不动的号码。
+                "votable": [s for s in self.runoff_candidates
+                            if self.player(s).alive],
+                "can_vote": self.can_vote(seat),
+                "first_votes": {int(k): int(v)
+                                for k, v in self.runoff_first_votes.items()},
+            }
+        else:
+            view["runoff"] = None
         # 今天的发言进度（公开）：谁说过/谁没说/现在轮到谁 —— 防「评论还没发生的发言」
         view["speech_progress"] = self.speech_progress()
 

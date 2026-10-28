@@ -343,11 +343,13 @@ class Session:
         # AI 决策后台预跑池（2026-10-07 第二期，见 night_pre.PrePool）：
         #   _pre            当前相位的池（每夜 / 每轮投票各换一个新池）
         #   _pre_round      夜池属于哪一夜（换夜即换池）
-        #   _pre_vote_round 投票池属于哪一轮
+        #   _pre_vote_key   投票池属于哪一次投票 —— `(轮次, 加时阶段)`。
+        #                   2026-10-28 从 `_pre_vote_round` 改过来：平票加时是
+        #                   **同一天里的第二次投票**，只按轮次做键会收割到第一轮的票。
         #   _vote_grace_at  「所有该投的人类都投完了」的时刻（5s 弃票兜底计时）
         self._pre = None
         self._pre_round = None
-        self._pre_vote_round = None
+        self._pre_vote_key = None
         self._vote_grace_at = None
 
     def _harvest(self):        return night_driver._harvest(self)
@@ -636,9 +638,11 @@ class Session:
         v["timeline"] = list(self.timeline)
         v["pending"] = self.pending
         v["is_my_turn_to_speak"] = (self.game.current_speaker() == seat)
+        # ⚠️ 用 can_vote 而不是 alive（2026-10-28 修）：平票加时里**平票的人不投票**，
+        #    翻牌的白痴也不投票 —— 只看 alive 会给这两类人亮出"轮到你投票"。
         v["is_my_turn_to_vote"] = (
             self.game.phase is Phase.VOTE and seat not in self.game.votes
-            and self.game.player(seat).alive
+            and self.game.can_vote(seat)
         )
         return v
     def auto_advance(self, max_steps=300, deadline=None):        return night_driver.auto_advance(self, max_steps, deadline)

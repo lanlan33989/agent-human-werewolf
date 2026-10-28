@@ -606,6 +606,9 @@ async function api(path, opts){
       if (v.wolf_confirmed) out.wolf_confirmed = v.wolf_confirmed;
       if (v.night_victim != null) out.night_victim = v.night_victim;
       if (v.investigations) out.investigations = v.investigations;
+      /* 平票加时（2026-10-28）：候选集与"能不能投"都由服务端算，demo 场景也要带上，
+         否则画廊里看不到"只有平票候选可点"这一屏。 */
+      if (v.runoff) out.runoff = v.runoff;
       return out;
     }
     /* lost 场景：模拟"服务端这一局没了" ⇒ tick 的 catch 走 💀 失控屏 */
