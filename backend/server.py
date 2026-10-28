@@ -492,6 +492,19 @@ def dev_panels() -> Response:
     return _page("dev_panels.html")
 
 
+@app.get("/demo_scenes.js")
+def demo_scenes_js() -> Response:
+    """演示场景表（2026-10-27 新增，本条路由 2026-10-28 补）。
+
+    ⚠️ 这就是「一个文件一条路由」那条规矩的现场：`dev_panels.html` 用
+    `<script src="/demo_scenes.js">`、`play.html?demo=xxx` 用 `loadScript('/demo_scenes.js')`
+    加载它，而 server.py 里**一直没有这条路由** ⇒ 两个入口都拿到 404：
+    画廊一片空白、`play.html?demo=vote_result` 直接跳出「演示场景脚本加载失败」。
+    表现是"前端同学打不开面板画廊"，而原因只是一个缺掉的路由。
+    """
+    return _asset("demo_scenes.js", "application/javascript")
+
+
 @app.get("/tableui.js")
 def tableui_js() -> Response:
     """大屏 UI 状态机（2026-10-02 从 play.html 抽出）：

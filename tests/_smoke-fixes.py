@@ -628,9 +628,15 @@ def _race_round(seed, seconds=3.5):
 
 
 def _round_problems(tl):
-    """每一轮里，**所有存活者都必须恰好发过一次言**（跳过最后一个发言人会被抓到）。"""
+    """每一轮里，**所有存活者都必须恰好发过一次言**（跳过最后一个发言人会被抓到）。
+
+    ★ 2026-10-28（遗言规则）：出局者的遗言也是一条 `say`，而它发生在
+    "发言结束，开始投票。" / "N 号 被投出并出局。" 之后 ——
+    判"这一轮谁没说话"时**必须把它排掉**，否则同一个人会被算成说了两次。
+    """
     alive, speakers, out = None, [], []
     runoff = False
+    vote_open = False
     for x in tl:
         s = x["s"]
         if x["t"] == "sys":
@@ -649,17 +655,23 @@ def _round_problems(tl):
             #   拿"全员都发过言"去卡它必然误报 ⇒ 加时那一轮整体跳过。
             if "进入加时" in s:
                 runoff = True
+            if "天亮了" in s or ("第" in s and "夜" in s):
+                vote_open = False          # 新一轮开始：讨论重新算
             if "开始投票" in s and alive is not None:
                 if runoff:                  # 加时后的重投：不参与"全员发言"判据
                     runoff = False
                     speakers = []
+                    vote_open = True
                     continue
                 _miss = sorted(a + 1 for a in (alive - set(speakers)))
                 _dup = len(speakers) != len(set(speakers))
                 if _miss or _dup:
                     out.append(f"缺发言={_miss} 有重复={_dup}（本轮共 {len(speakers)} 条）")
                 speakers = []
+                vote_open = True
         else:
+            if vote_open:
+                continue                   # 投票之后还开口的 = 遗言（规则允许，不算讨论发言）
             m = re.match(r"^(\d+)\s*号", s)
             if m:
                 speakers.append(int(m.group(1)) - 1)
@@ -684,6 +696,10 @@ for _seed in range(3):
             # ★ 2026-10-28 平票加时：加时那一轮"平票者再各说一轮"发生在「开始投票」之后，
             #   它是**规则允许的**发言 —— 关掉窗口，别把最后的陈述判成"被挤到投票之后"。
             if "进入加时" in _x["s"]:
+                _vopen = False
+            # ★ 2026-10-28 遗言：出局者的遗言同样发生在「开始投票」之后（被投出之后），
+            #   它也是规则允许的。判据用"有死讯"而不是"有遗言" —— 死讯一定先播。
+            if "出局" in _x["s"]:
                 _vopen = False
             if "天亮了" in _x["s"] or ("第" in _x["s"] and "夜" in _x["s"]):
                 _vopen = False
@@ -889,6 +905,127 @@ for _sd in range(60):
     break
 if not found13:
     check("狼队协商端到端（人类狼 + AI 狼）", False, "60 个种子里没造出该场景")
+
+print("=" * 74)
+print("⑭ 发言/遗言 120 秒上限 + 剩 30 秒提醒（2026-10-28 用户定）")
+# 用户原话：「限制每人发言时间最长为120秒，在还剩30秒时法官喊"还剩30秒"，
+#           倒计时120秒结束后直接进入下一个人发言。（仍保留可以提前结束发言）」
+# **两条硬约束**：
+#   ① 120/30 只有一份来源（`speech_io`），且必须走 `night_script._scaled()`——
+#      否则测试缩了夜窗、发言却还是 120 秒真时间 ⇒ 出现"半缩"状态，整局卡死。
+#   ② 到点由**服务端**收尾：前端倒计时归零不许自己提交（前端提交 = 两台手机各判各的）。
+import speech_io  # noqa: E402
+from agents import JUDGE_VOICE as _ag_voice  # noqa: E402
+
+check("★ 发言上限是 120 秒、剩 30 秒提醒（数字写死在这一处）",
+      (speech_io.SPEECH_MAX, speech_io.SPEECH_LAST_CALL) == (120, 30),
+      f"{speech_io.SPEECH_MAX}/{speech_io.SPEECH_LAST_CALL}")
+
+_saved_sp = night_script.win_scale()
+try:
+    night_script.set_win_scale(1.0)           # 本文件全局缩到 0.02，这里先还原成真机口径
+    check("★ 不缩窗时两个时限就是原值（_scaled(1.0) 不许改数）",
+          (speech_io.speech_window(), speech_io.speech_last_call()) == (120.0, 30.0),
+          f"{speech_io.speech_window()}/{speech_io.speech_last_call()}")
+    night_script.set_win_scale(0.01)          # 120s → 1.2s；提醒点在 0.9s
+    check("★ 两个时限都走同一把缩窗尺子（缩夜窗必然同缩发言，不许只缩一半）",
+          abs(speech_io.speech_window() - 1.2) < 1e-6
+          and abs(speech_io.speech_last_call() - 0.3) < 1e-6,
+          f"{speech_io.speech_window()}/{speech_io.speech_last_call()}")
+    check("★ 「还剩30秒」用**原始秒数**判定（缩到 1.2 秒的窗口里照样该喊）",
+          speech_io.speech_has_last_call() is True)
+
+    # ---- 端到端：人类发言到点 ⇒ 服务端自动收尾、直接进下一位 ----
+    _sp_hit = None
+    for _sd in range(30):
+        _ss = game_api.Session(humans=1, ais=3, seed=_sd)
+        _hs = next(p.seat for p in _ss.game.players if p.kind == "human")
+        _tq = _time.time()
+        while _time.time() - _tq < 20.0:              # 一夜四段（缩窗后约 4 秒）
+            _pd = _ss.drive(0.05)
+            _ns = _ss.now_state()
+            if _ns.get("kind") == "speak" and _ns.get("seat") == _hs:
+                _sp_hit = (_ss, _hs, _ns)
+                break
+            if _pd == "ended" or _ss.game.winner:
+                break
+            _time.sleep(0.01)
+        if _sp_hit:
+            break
+    if _sp_hit is None:
+        check("人类发言 120 秒到点自动进下一位", False, "30 个种子里没轮到人类发言")
+    else:
+        _ss, _hs, _ns0 = _sp_hit
+        check("★ 轮到人类发言时 `now_state` 把剩余秒数直接下发（前端只做减法、不自己掐表）",
+              0 < float(_ns0.get("until_left") or 0) <= 1.2,
+              f"until_left={_ns0.get('until_left')}")
+        _t0 = _time.time()
+        _auto = False
+        # ⚠️ 用**墙上时间**做上界，不用"循环多少次"：`drive()` 在等人类时
+        #    立刻返回（不 sleep），几百次循环可能在 0.3 秒内跑完 —— 那样测的是
+        #    "循环跑得快不快"，不是"到点收不收尾"（第一版就这么假绿/假红过）。
+        while _time.time() - _t0 < 8.0:
+            _ss.drive(0.05)
+            _n1 = _ss.now_state()
+            if not (_n1.get("kind") == "speak" and _n1.get("seat") == _hs):
+                _auto = True
+                break
+            _time.sleep(0.02)
+        _el = _time.time() - _t0
+        check("★ 人类**一句话没说**也不提前结束 ⇒ 到点服务端自动收尾、直接进下一位",
+              _auto, f"{_el:.2f}s 后仍停在这个人身上")
+        check("★ 收尾发生在窗口到点的时刻（≈1.2s），不是前端提交、也不是拖到下一拍很久",
+              _auto and 1.0 <= _el <= 3.0, f"{_el:.2f}s")
+        _c30 = [x for x in _ss.timeline if str(x.get("s", "")) == "还剩30秒"]
+        check("★ 剩 30 秒法官喊「还剩30秒」—— 而且只喊一次（不刷屏）",
+              len(_c30) == 1, f"{len(_c30)} 次")
+        check("★ 提醒是法官音色（不是玩家音色）",
+              bool(_c30) and _c30[0].get("voice") == _ag_voice,
+              str(_c30[:1])[:90])
+
+    # ---- 遗言走同一套计时（同窗长、同提醒、同自动收尾）----
+    _sl = game_api.Session(humans=1, ais=8, seed=5)   # 9 人局：死一个不会立刻判胜负
+    _gl = _sl.game
+    _hl = next(p.seat for p in _gl.players if p.kind == "human")
+    _gl.player(_hl).alive = False                     # 造一个"刚出局、该留遗言"的人
+    _gl.deaths.append({"seat": _hl, "round": 1, "cause": "kill", "lastword": True})
+    _gl.phase = Phase.DAWN                           # 遗言只能从「刚死」进来（DAWN/EXILE）
+    _gl.open_lastwords([_hl], "discuss")
+    _sl.drive(0.05)
+    _nl = _sl.now_state()
+    check("★ 遗言是**发言同类型**：同样是 `kind=speak`，同样带剩余秒数",
+          _nl.get("kind") == "speak" and _nl.get("seat") == _hl
+          and 0 < float(_nl.get("until_left") or 0) <= 1.2,
+          str(_nl)[:110])
+    check("★ 遗言轮到谁，`public_state().lastword_seat` 就指谁（前端画面板的判据）",
+          _sl.public_state().get("lastword_seat") == _hl,
+          str(_sl.public_state().get("lastword_seat")))
+    _t1 = _time.time()
+    _lw_auto = False
+    while _time.time() - _t1 < 8.0:                   # 同上：按墙上时间等，不按次数
+        _sl.drive(0.05)
+        if _sl.public_state().get("lastword_seat") != _hl:
+            _lw_auto = True
+            break
+        _time.sleep(0.02)
+    _el1 = _time.time() - _t1
+    check("★ 遗言不说也到点自动收尾（同一条看门狗，不是另写一套）",
+          _lw_auto and 1.0 <= _el1 <= 3.0, f"{_el1:.2f}s")
+    # 判据看**时间线**，不看"此刻的 phase"：全 RuleAgent 的一局在一次 drive()
+    # 里就能把整个白天跑完 —— 等这里返回时早就进了下一夜，"phase 是不是 discuss"
+    # 测的是运气。真正要锁的是"遗言之后确实接回了白天发言"。
+    _tl = [str(x.get("s", "")) for x in _sl.timeline]
+    # 认**这一位人类自己**那句开场白：一局里后面还会有人出局、还有别的遗言，
+    # 取"最后一条请留遗言"会取到别人身上（第一版就这么误判过）。
+    _i_lw = max([i for i, s in enumerate(_tl)
+                 if s == f"{_hl + 1}号请留遗言"] or [-1])
+    check("★ 遗言说完接回白天发言（不跳过发言直接进黑夜）",
+          _i_lw >= 0
+          and any(s.startswith("天亮了") for s in _tl[_i_lw:])
+          and any(s.endswith("请发言") for s in _tl[_i_lw:]),
+          str(_tl[_i_lw:][:4]))
+finally:
+    night_script.set_win_scale(_saved_sp)
 
 print("=" * 74)
 total = len(PASS) + len(FAIL)

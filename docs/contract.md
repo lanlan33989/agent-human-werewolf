@@ -50,13 +50,14 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `gid` | str | 局号 |
-| `phase` | str | 引擎相位：`SETUP / NIGHT / DAWN / DAY / VOTE / SHOOT / ENDED` 等 |
+| `phase` | str | 引擎相位：`SETUP / NIGHT / DAWN / DISCUSS / VOTE / SHOOT / LASTWORD / EXILE / ENDED` 等 |
 | `pending` | str | "现在该谁做什么"：`working`（AI 在算）/ `human_say` / `human_vote` / `human_night:{node}` / `ended` / `stuck` … |
 | `round` | int | 第几天 |
 | `players` | array | 座位数组（seat/display/kind/alive） |
 | `timeline` | array | **合并流**：引擎播报与玩家发言按真实先后排（见下） |
 | `public_log` | array | 引擎播报原文（不含玩家发言） |
 | `speech` / `current_speaker` / `speaking_order` | — | 发言模式与进度（轮到谁 / 谁说过） |
+| `lastword_seat` | int\|null | 当前留遗言的人（0 基）；遗言相位下 `current_speaker` 是 `null`，认这一个 |
 | `votes` / `voted_seats` | — | 当前投票的票与已投票座位（**投票进行中不含票型**，结算后才进 public_log） |
 | `suspicion` | — | 疑点面板数据 |
 | `night_node` / `night_plan` | — | 夜间剧本：当前节点与计划节点表（node/at/duration） |
@@ -118,6 +119,31 @@
 ⚠️ 后端在 `cast_vote` 里硬拦这两条（平票者投票 / 投非候选）⇒ 400。前端把候选
 收窄是为了不让玩家点到必被拒的号码，**不是**唯一防线。
 
+### 出局遗言：`phase = "lastword"` + `lastword_seat`（2026-10-28 后端新增）
+
+规则：**第一夜**死的人、**所有白天**出局的人有遗言；**第二夜及以后**夜里死的人没有。
+猎人同命：猎人在第一夜 / 任意白天出局 ⇒ 他带走的人有遗言；猎人在第二夜及以后
+夜里出局 ⇒ 他带走的人没有遗言。
+
+协议上**没有新动作、没有新形状** —— 遗言就是"一个死人在发言"：
+
+| 变化 | 说明 |
+|---|---|
+| `phase` | 多一个取值 `lastword`（遗言相位；说完自动回白天发言或进黑夜） |
+| `lastword_seat` | 当前留遗言的人（0 基）。**遗言相位下 `current_speaker` 是 `null`**，要认这一个 |
+| `now.kind` | 仍是 `"speak"`，`now.seat` = 留遗言的人，同样带 `until` / `until_left` |
+| `now.why` | `"出局遗言（点大圆开始/结束）"` |
+| `timeline` | 遗言是一条普通 `say`（`seat` = 死者），前面由法官播一句「N号请留遗言」 |
+| `act` | 结束时照旧 `{"action": "speak", "text": "…"}`，内部走 `end_lastword` |
+
+### 发言/遗言时限：120 秒 + 剩 30 秒提醒（2026-10-28 后端新增）
+
+- 每人发言**最长 120 秒**，遗言同长；仍可提前结束（`act: speak` 提交即结束）。
+- 剩 30 秒时法官播一句「还剩30秒」（`timeline` 里 `t="sys"`、`tick="speech_30"`，
+  **不带 `node`** —— 它是播报，不是门控）。
+- **到点由服务端收尾**，直接进下一位：前端倒计时归零**只许显示 `0`，不许自己提交**
+  （两端各判各的会打架）。`now.until_left` 每拍下发，前端只做减法。
+
 ## 2. `POST /api/game/{gid}/act` —— 人类操作（全枚举）
 
 请求体：`{"action": "<枚举>", "target": <座位号|null>, "text": "<发言>"}`
@@ -149,7 +175,7 @@
 | `GET /api/tts?…`、`WS /ws/tts` | 云端 TTS 音频；`VOICE_ON=0` 时走浏览器本地合成（Web Speech） | |
 | `POST /api/asr`、`WS /ws/asr` | 语音识别（16k WAV body / 流式） | |
 
-全量 44 个端点见 `docs/openapi.json`。
+全量 46 个端点见 `docs/openapi.json`。
 
 ## 4. 前端这周怎么干活（不碰后端）
 

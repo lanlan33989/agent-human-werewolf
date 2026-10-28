@@ -444,7 +444,8 @@ async function tick(){
       closeSpeakerMode();
       if (typeof closeHandoff === 'function') closeHandoff();
     } else if (!HANDOFF){
-      if (top && PUBLIC.phase === 'discuss' && isSpeakOnly(top)){
+      if (top && (PUBLIC.phase === 'discuss' || PUBLIC.phase === 'lastword')
+          && isSpeakOnly(top)){
         /* 2026-10-02 用户定：发言回合**不走交接卡片**（取消半透明黑屏）——
            大圆显示「N号玩家（人类）」，点一下开始、再点一下结束。 */
         if (SPK_MODE !== top.seat + 1){ closeSpeakerMode(); enterSpeakerMode(top); }
@@ -626,7 +627,7 @@ function renderWolfPack(seatNo, v){
   $("bigTitle").textContent = "狼人";
   $("bigIcon").textContent = "🎯";
   $("bigWho").textContent = "狼队共屏：选一个人刀";
-  $("hoTip").textContent = "点一个号码（选中后不可改）→ 点圆心提交";
+  $("hoTip").textContent = "点一个号码就是刀；窗口结束前可以随时改";
   var pool = (v.players || []).filter(function(p){ return p.alive; });
   var alive = {};
   pool.forEach(function(p){ alive[p.seat] = true; });
@@ -651,14 +652,10 @@ function renderWolfPack(seatNo, v){
     bs[i].onclick = function(ev){
       ev.stopPropagation();
       var no2 = Number(this.getAttribute("data-no"));
-      if (WHEEL.picks.length){
-        if (WHEEL.picks[0] !== no2){ $("hoTip").textContent = "已经选定了，不能改"; }
-        return;
-      }
+      /* ★ 2026-10-28（用户定）：**整窗可改刀** —— 原来这里是"选定了不能改"，
+         而新规则以窗口结束时的点子为准，改刀是合法操作。再点一个号码就是改刀
+         （共屏的口径是"所有人类狼一起改"，见 wheelConfirmWolfPack）。 */
       WHEEL.picks = [no2];
-      this.classList.add("sel");
-      /* 🔴 2026-10-07 用户定（"选中刀口后不该还能点中央确认，冗余"）：
-         点号码**即刻提交**（与女巫毒药 / 预言家验人同一口径），圆心不再参与。 */
       $("hoTip").textContent = "已刀 " + no2 + " 号（提交中…）";
       wheelConfirmWolfPack();
     };
@@ -701,7 +698,13 @@ async function wheelConfirmWolfPack(){
       await step({ seat: wolves[j] - 1, action: "confirm" });
     }
     paintSeats(); renderLog(); speakQueue();
-    closeHandoff();
+    /* ★ 2026-10-28（用户定）：狼刀整窗可改 ⇒ 提交后**不收屏**，把共屏留在桌上，
+       想改再点一个号码（引擎按窗口结束时的点子定案）。 */
+    try {
+      MYVIEW = await api('/api/game/' + GID + '/seat/' + (WHEEL.seatNo - 1));
+      renderWolfPack(WHEEL.seatNo, MYVIEW);
+      foot('刀口已记下：窗口结束前可以随时改（再点一个号码就是改刀）');
+    } catch (e) { closeHandoff(); }
     setTimeout(tick, 300);
   } catch (e) {
     handoffMsg("提交失败：" + e.message, true);
@@ -723,11 +726,17 @@ function paintCountdown(){
     }
   };
   setTimeout(_mirror, 0);
-  var on = NIGHT_CD && WHEEL.mode === "act" && WHEEL.act !== "done";
+  /* ★ 2026-10-28（用户定）：发言 / 遗言也有倒计时（每人 120 秒，剩 30 秒法官提醒）。
+     数字就画在大圆里（发言屏的大圆本来就空着一条 `#cdNum` 的位置）。
+     ⚠️ 归零的"自动提交"只给夜间面板用 —— 发言到点由**服务端**结束并换人
+     （`night_driver._speech_guard`），前端再补一刀会变成"替玩家说了句话"。 */
+  var _spkMode = (typeof SPK_MODE !== 'undefined') && !!SPK_MODE;
+  var on = NIGHT_CD && ((WHEEL.mode === "act" && WHEEL.act !== "done") || _spkMode);
   if (!on){ el.textContent = ""; el.classList.remove("urgent"); return; }
   var left = NIGHT_CD.left - (Date.now() - NIGHT_CD.at) / 1000;
   if (left <= 0){
     el.textContent = "0"; el.classList.add("urgent");
+    if (_spkMode) return;               /* 发言：交给服务端收尾（见上） */
     /* 2026-10-07 用户定：以面板消失时的状态为准 —— 归零自动提交当前状态 */
     if (!WHEEL._autoSent){
       WHEEL._autoSent = true;
@@ -1506,10 +1515,13 @@ function wheelSelect(act, target){
   WHEEL.pick = target;
   paintWheelSel(act, target);
   if (act === 'kill'){
-    /* 定稿："人狼在轮盘按某人号码即视为刀" —— 点了就是我的刀。
-       多狼局里"确认"是引擎定案的必要条件，所以这里替玩家补上（单狼局引擎会早返回）。 */
-    var _p = submit(seatNo, 'kill', target, null);
-    if (_p && _p.then) _p.then(function(){ submit(seatNo, 'confirm', null, null); });
+    /* ★ 2026-10-28（用户定）：狼刀**整窗可改**，以窗口结束时的选择为准。
+       所以这里**只提交刀口**：
+         · 不再跟着补一个 `confirm` —— 那会把自己标成"已表态"，
+           而"表态"在新规则下没有任何裁决权（定案在窗口末按多数决）。
+         · 提交后面板**不许关**（见 submit() 里的 keepOpen 分支）——
+           关了就没法改刀了，用户报的就是这个："点完击杀目标窗口直接退出了"。 */
+    submit(seatNo, 'kill', target, null);
     return;
   }
   submit(seatNo, act, target, null);
@@ -1893,6 +1905,28 @@ async function submit(seatNo, action, target, text){
         }
       }
       showPrivateResult(seatNo, v2, '你验的结果');
+      return;
+    }
+    /* ★ 2026-10-28（用户定）：狼刀**整窗可改** —— 点完刀**不许把面板收掉**。
+       用户报的 bug 就是"点完击杀目标，窗口直接退出了，没法改刀"。
+       这里刷一次本人视图（队友的刀/锁定实时可见）再把盘重新画出来，
+       倒计时照旧接着走（NIGHT_CD 没被清），窗口结束时服务端才定案。
+       · 只对 kill（以及 kill 屏上的"取消"）这么做，其余动作照旧收屏。
+       · 面板没开（WHEEL.mode 不是 act）就别硬画 —— 交给下一拍 tick。 */
+    if ((action === 'kill' || (action === 'clear' && WHEEL.act === 'kill'))
+        && WHEEL.mode === 'act' && WHEEL.seatNo === seatNo){
+      try {
+        MYVIEW = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
+        if (PUBLIC.phase === 'night'){
+          renderNightDial(seatNo, MYVIEW, MYVIEW.can_act || []);
+        } else {
+          renderWheelAct(seatNo, MYVIEW);
+        }
+      } catch (e2) { /* 视图取不到：保持当前屏，下一拍 tick 自愈 */ }
+      foot(action === 'clear'
+           ? '已取消这一刀 —— 可以重新点一个号码'
+           : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）');
+      setTimeout(tick, 300);
       return;
     }
     closeHandoff();

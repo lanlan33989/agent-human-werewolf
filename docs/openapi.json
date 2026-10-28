@@ -1228,6 +1228,23 @@
         }
       }
     },
+    "/demo_scenes.js": {
+      "get": {
+        "summary": "Demo Scenes Js",
+        "description": "演示场景表（2026-10-27 新增，本条路由 2026-10-28 补）。\n\n⚠️ 这就是「一个文件一条路由」那条规矩的现场：`dev_panels.html` 用\n`<script src=\"/demo_scenes.js\">`、`play.html?demo=xxx` 用 `loadScript('/demo_scenes.js')`\n加载它，而 server.py 里**一直没有这条路由** ⇒ 两个入口都拿到 404：\n画廊一片空白、`play.html?demo=vote_result` 直接跳出「演示场景脚本加载失败」。\n表现是\"前端同学打不开面板画廊\"，而原因只是一个缺掉的路由。",
+        "operationId": "demo_scenes_js_demo_scenes_js_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/tableui.js": {
       "get": {
         "summary": "Tableui Js",

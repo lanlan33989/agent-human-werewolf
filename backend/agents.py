@@ -399,6 +399,10 @@ def hard_facts(view: Dict[str, Any]) -> str:
         "night": "夜晚",
         "dawn": "天亮结算",
         "discuss": "白天发言",
+        # ★ 2026-10-28（遗言）：死人在 DISCUSS 之前有自己的一个相位。
+        # 不写进这张表的话，`phase_label` 会把 "lastword" 原样吐给模型 ——
+        # 它就不知道"我已经出局了，这是在留遗言"（会说成像还活着一样）。
+        "lastword": "出局遗言",
         "vote": "白天投票",
         "exile": "投票结算",
         "ended": "已结束",

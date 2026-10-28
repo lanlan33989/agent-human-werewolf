@@ -87,6 +87,14 @@ class Phase(str, Enum):
     # 它要插在**两处**（夜间死讯公布之后 / 投票结算之后），所以必须是一个独立相位，
     # 而不是夹在别处的一个 if —— 否则判胜会抢在开枪之前（见 resolve_vote 的说明）。
     SHOOT = "shoot"
+    # ★ 2026-10-28（用户定）：遗言。
+    # 规则：**第一夜**死的、**白天被投出**的都有遗言；第二夜及以后夜里死的不留遗言；
+    # 猎人带走的人跟猎人自己同命（猎人第一夜/白天出局 ⇒ 被带走的人也有遗言）。
+    # 它是独立相位而不是塞进 DISCUSS 的"额外发言人"，因为遗言发生在
+    # **死讯播报之后、白天发言之前**（被投出的则发生在"下一夜之前"），
+    # 而 DISCUSS 的发言轮转只认活人（`_rotation_from(self.alive)`）——
+    # 把死人塞进去要同时改轮转、投票顺序、发言进度三处，且会破坏"发言顺序=投票顺序"。
+    LASTWORD = "lastword"
     ENDED = "ended"
 
 
@@ -286,6 +294,14 @@ class Game:
         self.round = 0
         self.winner: Optional[str] = None          # "wolf" | "good"
         self.public_log: List[str] = []
+        # ★ 2026-10-28（用户定）：与 public_log **等长**的"这句点到了谁出局"标记。
+        # 为什么要有它：用户要求"法官播报死亡信息后，死亡玩家图标**立即**暗掉"。
+        # 前端只拿到 `players[].alive` 的话，只能在"状态变了"那一刻变暗 —— 而状态
+        # 是在结算时就变的，播报却还在音频队列里排队（死讯往往晚好几秒才念到）。
+        # 于是图标会**先暗、后听到死讯**。这里把"哪一句话宣布了谁的死亡"结构化地
+        # 带出去（timeline 条目上的 `dead` 字段），前端就能在**那句被念到的那一刻**变暗。
+        # ⚠️ 必须与 public_log 保持等长（log() 是唯一写入口）。
+        self.log_dead: List[List[int]] = []
         # 内部备注（**永不外发**）：给排查和将来的结构化日志用。
         # 为什么必须有它：狼队协商的分歧、"按谁的意见定案"这类话**绝不能进公共日志** ——
         # 那等于当众宣布"狼队刚才商量过、3 号的意见赢了"，3 号立刻就是狼。
@@ -337,6 +353,16 @@ class Game:
         # 夜间死讯之后 → 开完继续白天；投票出局之后 → 开完进下一夜。
         self.shooter: Optional[int] = None
         self.shoot_from: Optional[Phase] = None
+        # ★ 遗言（2026-10-28 用户定）：这是**排队中**的遗言发言人与"说完遗言回哪去"。
+        #   · `lastword_order` 的顺序 = 出局顺序（先被刀/毒的，再是被带走的）
+        #   · `lastword_back`：'discuss'（第一夜的遗言 → 接着白天发言）
+        #                      'night'  （白天被投出 / 被带走 → 接着进黑夜）
+        #   为什么用显式队列而不是"每次看 deaths 算一遍"：遗言是**一次性**的，
+        #   算一遍就必须有个"已经说过了"的记号，否则同一个人会在白天发言前
+        #   被反复请来留遗言（第二夜之后被刀的人也一样会被算进来）。
+        self.lastword_order: List[int] = []
+        self.lastword_cursor: int = 0
+        self.lastword_back: str = "discuss"
         # 死因分层（G11）：[{"seat": 3, "cause": "kill"|"poison"|"vote"|"shoot"}]
         # 猎人判例（被毒能不能开枪）、六维指标、复盘战报都要用它 ——
         # 不能再靠"看他死没死"去猜死因。
@@ -399,9 +425,15 @@ class Game:
         """
         self.debug_log.append(text)
 
-    def log(self, text: str) -> None:
-        """只写公共信息。任何私有内容都不许进这里。"""
+    def log(self, text: str, dead: Optional[List[int]] = None) -> None:
+        """只写公共信息。任何私有内容都不许进这里。
+
+        `dead`（2026-10-28 用户定）：**这一句宣布了谁出局**（0 基座位）。
+        界面要在"念到这一句"的瞬间把那些人的图标暗掉，所以这个信息必须
+        跟着句子一起走，不能只在 `players[].alive` 里（那会比播报早好几秒）。
+        """
         self.public_log.append(text)
+        self.log_dead.append(sorted({int(s) for s in (dead or [])}))
 
     def log_speech(self, seat: int, text: str,
                    card: Optional[Dict[str, Any]] = None) -> None:
@@ -796,10 +828,19 @@ class Game:
         if target != -1:
             self._require_alive(target)
             self._damage(target, 1)
-            self.deaths.append({"seat": target, "round": self.round, "cause": "shoot"})
             tgt = self.player(target)
-            self.log(f"{tgt.display} 被猎人带走，出局。" if not tgt.alive
-                     else f"{tgt.display} 被猎人带走，还剩 1 条命。")
+            # ★ 遗言（2026-10-28 用户定）：**被猎人带走的人，跟猎人自己同命** ——
+            #   猎人是第一夜死的、或者是白天被投出的 ⇒ 被带走的人也有遗言；
+            #   猎人是第二夜及以后夜里死的 ⇒ 被带走的人没有遗言。
+            #   判据不能看"被带走的这个人自己是哪一夜死的"：白天被投出的猎人
+            #   开枪时 round 已经是当天，按 round==1 判会把他带走的人错判成"没遗言"。
+            self.deaths.append({"seat": target, "round": self.round, "cause": "shoot",
+                                "lastword": self._hunter_has_lastword(actor)
+                                           and not tgt.alive})
+            if not tgt.alive:
+                self.log(f"{tgt.display} 被猎人带走，出局。", dead=[target])
+            else:
+                self.log(f"{tgt.display} 被猎人带走，还剩 1 条命。")
         else:
             self.log(f"{self.player(actor).display}（猎人）选择不开枪。")
         back_to = self.shoot_from or Phase.DAWN
@@ -848,7 +889,9 @@ class Game:
             pass                       # 刀没落定（空刀 / 被救 / 被守）—— 一个字都不说
         else:
             self._damage(target, 1)
-            self.deaths.append({"seat": target, "round": self.round, "cause": "kill"})
+            self.deaths.append({"seat": target, "round": self.round, "cause": "kill",
+                                "lastword": self._night_has_lastword()
+                                           and not self.player(target).alive})
             (_died if self.player(target).alive is False else _hurt).append(
                 self.player(target).display)
 
@@ -857,7 +900,10 @@ class Game:
         poison_target = self.night.get("poison")
         if poison_target is not None and poison_target != -1:
             self._damage(poison_target, 1)
-            self.deaths.append({"seat": poison_target, "round": self.round, "cause": "poison"})
+            self.deaths.append({"seat": poison_target, "round": self.round,
+                                "cause": "poison",
+                                "lastword": self._night_has_lastword()
+                                           and not self.player(poison_target).alive})
             (_died if self.player(poison_target).alive is False else _hurt).append(
                 self.player(poison_target).display)
 
@@ -867,8 +913,16 @@ class Game:
             events.extend(f"昨夜 {n} 倒牌，还剩 1 条命。" for n in _hurt)
         else:
             events.append("平安夜。")
+        # ★ 2026-10-28（用户定）：死讯那句要带上"宣布了谁出局"——
+        #   界面在法官**念到这句**时才把图标暗掉（而不是结算那一刻）。
+        #   逐句匹配（一人一句），不能把整批死人都挂在第一句上 —— 那样第二个人
+        #   会在他的死讯还没念出来时就先暗掉。
+        _night_dead = [int(d["seat"]) for d in self.deaths
+                       if int(d.get("round", -1)) == self.round
+                       and d.get("cause") in ("kill", "poison")
+                       and not self.player(int(d["seat"])).alive]
         for e in events:
-            self.log(e)
+            self.log(e, dead=[s for s in _night_dead if self.player(s).display in e])
 
         # 逐夜记录（六维指标 / 战报 / 复盘都要它）：
         # 只记"这一夜到底发生了什么"，不带任何身份 → 它不参与隔离，也不进公共播报。
@@ -929,6 +983,21 @@ class Game:
                 if self.shooter is None:
                     self.shooter = seat
                     self.shoot_from = back_to or Phase.DAWN
+
+    def _hunter_has_lastword(self, hunter: int) -> bool:
+        """这位猎人**自己**有没有遗言 —— 也就是他带走的人有没有遗言的判据。
+
+        用户定（2026-10-28）：第一夜死的、白天被投出的人都有遗言；
+        第二夜及以后夜里死的人没有遗言。被带走的人**跟猎人同命**。
+        """
+        for d in reversed(self.deaths):
+            if int(d.get("seat", -1)) == hunter:
+                return bool(d.get("lastword"))
+        return False
+
+    def _night_has_lastword(self) -> bool:
+        """今夜出局的人有没有遗言（用户定：**只有第一夜**有）。"""
+        return self.round == 1
 
     def _damage(self, seat: int, amount: int) -> None:
         p = self.player(seat)
@@ -1041,6 +1110,73 @@ class Game:
             rec = self.speeches[-1] if self.speeches else None
             self._queue_challenge(spk, rec, _slot)
         return self.current_speaker()
+
+    # ------------------------------------------------------------ 遗言（2026-10-28）
+
+    def pending_lastwords(self) -> List[int]:
+        """还没安排遗言的、**按规则该留遗言**的出局者（按出局顺序，去重）。
+
+        判据全在死因记录上（`lastword` 在死亡发生时就按规则算好了，见
+        resolve_night / resolve_vote / night_shoot），这里只负责"取还没排过的"。
+        `lw_done` 是"已经排进过队列"的记号 —— 少了它，同一个人会在下一次
+        进入 DAWN/EXILE 时被再请一次。
+        """
+        out: List[int] = []
+        for d in self.deaths:
+            if d.get("lw_done") or not d.get("lastword"):
+                continue
+            s = int(d["seat"])
+            if s not in out:
+                out.append(s)
+        return out
+
+    def open_lastwords(self, seats: List[int], back: str = "discuss") -> List[int]:
+        """开始遗言：`seats` 依次留遗言，说完回 `back`（'discuss' / 'night'）。
+
+        只在两处进来：死讯结算之后（DAWN 之前 → 白天发言之前）、投票结算之后
+        （EXILE → 下一夜之前）。别的地方进来一律拒绝 —— 遗言是"刚死"的产物，
+        不能凭空调出来。
+        """
+        if self.phase not in (Phase.DAWN, Phase.EXILE):
+            raise RuntimeError(f"当前阶段是 {self.phase.value}，不能开始遗言")
+        order = [int(s) for s in seats if s is not None]
+        if not order:
+            return []
+        self.lastword_order = order
+        self.lastword_cursor = 0
+        self.lastword_back = back if back in ("discuss", "night") else "discuss"
+        self.phase = Phase.LASTWORD
+        for d in self.deaths:                 # 排过就记账，别再排第二次
+            if int(d["seat"]) in order:
+                d["lw_done"] = True
+        return order
+
+    def current_lastword(self) -> Optional[int]:
+        if self.phase is not Phase.LASTWORD:
+            return None
+        if self.lastword_cursor >= len(self.lastword_order):
+            return None
+        return self.lastword_order[self.lastword_cursor]
+
+    def end_lastword(self) -> Optional[int]:
+        """当前这位留完遗言 ⇒ 返回下一位（None = 遗言说完了）。"""
+        if self.current_lastword() is None:
+            return None
+        self.lastword_cursor += 1
+        return self.current_lastword()
+
+    def end_lastwords(self) -> str:
+        """遗言全部结束：把相位拨回"该去的地方"，返回 'discuss' / 'night'。
+
+        ⚠️ 这里**只拨相位**，不替调用方 open_discuss / next_night ——
+        那两件事各自有前置条件（DAWN 才能开讨论、SHOOT 时不许进夜），
+        由驱动器按顺序调，才不会把前置条件绕过去。
+        """
+        back = self.lastword_back
+        self.lastword_order = []
+        self.lastword_cursor = 0
+        self.phase = Phase.DAWN if back == "discuss" else Phase.EXILE
+        return back
 
     def _queue_challenge(self, speaker: int, rec: Optional[Dict[str, Any]],
                          slot_index: int) -> bool:
@@ -1386,12 +1522,14 @@ class Game:
                 self.log(f"{self.player(exiled).display} 已翻过牌，本轮不再出局。")
         else:
             self._damage(exiled, 1)
-            self.deaths.append({"seat": exiled, "round": self.round, "cause": "vote"})
             p = self.player(exiled)
+            # ★ 遗言（2026-10-28 用户定）：**白天被投出的一律有遗言**。
+            self.deaths.append({"seat": exiled, "round": self.round, "cause": "vote",
+                                "lastword": not p.alive})
             if p.alive:
                 self.log(f"{p.display} 被投出，还剩 1 条命。")
             else:
-                self.log(f"{p.display} 被投出并出局。")
+                self.log(f"{p.display} 被投出并出局。", dead=[exiled])
 
         # ★ D6：猎人被投出也要能开枪，而**判胜必须等这一枪之后**。
         #   以前这里立刻 check_winner() 并置 ENDED ⇒ 会出现"已经宣布狼人胜利，
@@ -1722,6 +1860,11 @@ class Game:
         if self.phase is Phase.SHOOT:
             # 给 "pass" 这个出口：猎人可以选择**不开枪**（前端会把它显示成「不开枪」按钮）
             return ["shoot", "pass"] if self.shooter == seat else []
+        # ★ 遗言（2026-10-28）：**要说话的人刚刚死了**，所以这一支必须放在
+        #   "死人不给动作"之前（与 SHOOT 同理）。遗言复用 `speak` 动作 ——
+        #   前端的发言屏（大圆 + 开麦）本来就是按 speak 渲染的，白捡一套 UI。
+        if self.phase is Phase.LASTWORD:
+            return ["speak"] if self.current_lastword() == seat else []
         p = self.player(seat)
         if not p.alive:
             return []

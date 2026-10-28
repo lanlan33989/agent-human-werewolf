@@ -258,14 +258,21 @@
    · 宽度约竖屏的 15%（锚在 #phone 上，所以 15% 就是手机宽度的 15%）
    · 内容多时**可上下滚动**（overflow-y:auto + 触摸惯性）
    · 每行一条："2，3→5"（2 号、3 号投给 5 号）；弃票单列一行 */
-#voteBox{ position:absolute; left:10px; bottom:16px; width:15%; min-width:54px; max-width:110px;
+#voteBox{ position:absolute; left:8px; bottom:16px; width:15%; min-width:52px; max-width:104px;
   max-height:38%; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
-  background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.16); border-radius:10px;
-  padding:6px 3px; z-index:6; display:none; touch-action:pan-y; }
-#voteBox .vb-t{ font-size:10px; line-height:1.3; color:rgba(255,255,255,.55);
-  text-align:center; margin-bottom:3px; letter-spacing:1px; }
-#voteBox .vb-l{ font-size:12px; font-weight:700; color:#FFE08A; text-align:center;
-  line-height:1.55; word-break:break-all; text-shadow:0 1px 6px rgba(0,0,0,.6); }
+  background:rgba(8,4,20,.72); border:1px solid rgba(255,224,138,.45); border-radius:10px;
+  padding:5px 3px; z-index:9; display:none; touch-action:pan-y;
+  box-shadow:0 2px 12px rgba(0,0,0,.45); }
+/* 新票型落定的一次性高亮（3 秒）——手机上这块地方很小，不闪一下很容易被忽略 */
+#voteBox.vb-pop{ animation:vbPop 1.1s ease-out 2; }
+@keyframes vbPop{
+  0%{ box-shadow:0 0 0 0 rgba(255,224,138,.85); }
+  100%{ box-shadow:0 0 0 10px rgba(255,224,138,0); }
+}
+#voteBox .vb-t{ font-size:10px; line-height:1.3; color:rgba(255,224,138,.8);
+  text-align:center; margin-bottom:2px; letter-spacing:1px; }
+#voteBox .vb-l{ font-size:13px; font-weight:800; color:#FFE08A; text-align:center;
+  line-height:1.5; word-break:break-all; text-shadow:0 1px 6px rgba(0,0,0,.75); }
 /* 终局弹框（2026-10-28 用户定）：法官念完「游戏结束，狼人/好人胜利」之后再弹。
    它只盖住手机框内部（#phone 是定位容器），不影响右上角的 ⏭ / ↻。 */
 #endPop{ position:absolute; left:0; right:0; top:0; bottom:0; z-index:40; display:none;
@@ -1109,10 +1116,41 @@ function enterTable(){
   tick();
 }
 
+/* 死亡图标什么时候暗（2026-10-28 用户定："在法官播报死亡信息后……立即暗掉"）。
+   ⚠️ 不能只看 `players[].alive`：那个字段在**结算那一刻**就变假了，而死讯
+   还要在播报队列里排队（前面可能压着好几句），于是图标会**先暗、后听到死讯**。
+   后端把"哪一句宣布了谁出局"结构化地挂在 timeline 条目的 `dead` 上
+   （engine.log(..., dead=[...]) → speech_io._flush_log），这里等那句被念到
+   （SPOKEN 越过它）再暗。
+   三个兜底，缺一不可：
+     · 语音关掉（VOICE_ON=false）⇒ 没人会来推进 SPOKEN ⇒ 直接暗
+     · 老服务端没有 `dead` 字段 ⇒ 按 alive 立即暗（保持旧观感）
+     · 播报卡住（TTS 悬挂）⇒ 这句挂上去 20 秒后照暗，不能因为念不出来就一直亮着 */
+function deadHeard(){
+  var tl = (PUBLIC && PUBLIC.timeline) || [];
+  var marked = {}, heard = {};
+  var now = Date.now() / 1000;
+  for (var i = 0; i < tl.length; i++){
+    var d = tl[i].dead;
+    if (!d || !d.length) continue;
+    for (var k = 0; k < d.length; k++) marked[d[k]] = true;
+    var playable = (typeof VOICE_ON !== 'undefined') && VOICE_ON;
+    var spoken = (typeof SPOKEN === 'number') && SPOKEN > i;
+    var stale = now - Number(tl[i].at || tl[i].ts || 0) > 20;
+    if (!playable || spoken || stale){
+      for (var k2 = 0; k2 < d.length; k2++) heard[d[k2]] = true;
+    }
+  }
+  return { marked: marked, heard: heard };
+}
+
 function paintSeats(){
   if (!PUBLIC) return;
+  var _dh = deadHeard();
   (PUBLIC.players || []).forEach(function(p){
-    if (!p.alive){ addCls(p.seat + 1, 'dead'); }
+    if (p.alive) return;
+    /* 有"死讯那一句"就等它念到；没有（老服务端 / 老的死者）就立即暗。 */
+    if (!_dh.marked[p.seat] || _dh.heard[p.seat]) addCls(p.seat + 1, 'dead');
   });
   (PUBLIC.players || []).forEach(function(p){
     if (PUBLIC.current_speaker === p.seat) addCls(p.seat + 1, 'speaking');
@@ -1146,7 +1184,13 @@ function renderVoteBox(){
           + String(lines[i]).replace(/&/g, '&amp;').replace(/</g, '&lt;')
           + '</div>';
   }
-  if (html !== _VB_HTML){ box.innerHTML = html; _VB_HTML = html; }
+  if (html !== _VB_HTML){
+    box.innerHTML = html; _VB_HTML = html;
+    /* 新票型刚出来：闪两下，免得这巴掌大的框在手机底部被当成背景（用户实机反馈） */
+    box.classList.remove('vb-pop');
+    void box.offsetWidth;               /* 强制重排，动画才会重头播 */
+    box.classList.add('vb-pop');
+  }
   box.style.display = 'block';
 }
 

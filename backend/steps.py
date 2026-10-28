@@ -101,6 +101,10 @@ PHASE_STEPS: Tuple[PhaseStep, ...] = (
     PhaseStep("night", "夜晚（狼刀/验人/用药/守人）", "_advance_night"),
     PhaseStep("shoot", "猎人开枪", "_advance_shoot"),
     PhaseStep("dawn", "天亮", "_advance_dawn"),
+    # ★ 遗言（2026-10-28 用户定）：**第一夜**死的人、**白天被投出**的人有遗言。
+    # 它是 DAWN 与 DISCUSS 之间（以及 EXILE 与下一夜之间）的一个独立相位：
+    # 发言轮转只认活人，把死人塞进 DISCUSS 会破坏"发言顺序 = 投票顺序"。
+    PhaseStep("lastword", "遗言", "_advance_lastword"),
     PhaseStep("discuss", "白天发言", "_advance_discuss"),
     PhaseStep("vote", "投票", "_advance_vote"),
     # 🔴 2026-10-05：EXILE 不再是"瞬时态" —— 被投出的猎人开完枪会回到这里

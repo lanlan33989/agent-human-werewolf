@@ -15,6 +15,7 @@ from agents import JUDGE_VOICE, Decision, extract_control, voice_for_personality
 from engine import Phase, Role
 
 from speech_io import NIGHT_GAP
+import speech_io
 import night_script
 from night_pre import PrePool, WAIT as _PRE_WAIT, GIVEUP as _PRE_GIVEUP
 
@@ -756,17 +757,134 @@ def _advance_exile(self) -> str:
 
     🔴 2026-10-05 之前这里不存在：EXILE 是"瞬时态"（resolve_vote 之后
     _advance_vote 直接 next_night）。猎人开枪相位引入后，开完枪回到 EXILE
-    必须有人接住 —— 否则 auto_advance 报"没有配剧本的相位"然后 stuck。"""
+    必须有人接住 —— 否则 auto_advance 报"没有配剧本的相位"然后 stuck。
+
+    ★ 2026-10-28（用户定）：白天被投出的、以及被这个猎人带走的人都要留遗言 ——
+    所以进夜之前先过一遍遗言相位。
+    """
     g = self.game
+    _lw = g.pending_lastwords()
+    if _lw:
+        g.open_lastwords(_lw, "night")
+        self._flush_log()
+        return "continue"
     g.next_night()
     self._flush_log()
     return "continue"
 
 
 def _advance_dawn(self) -> str:
-    self.game.open_discuss()
+    g = self.game
+    # ★ 遗言（2026-10-28 用户定）：第一夜死的人，死讯播报之后**先留遗言**，
+    #   再开始白天的轮流发言。判据全在 `engine.pending_lastwords()` 里
+    #   （死因记录上已经按规则算好了"该不该留"）。
+    _lw = g.pending_lastwords()
+    if _lw:
+        g.open_lastwords(_lw, "discuss")
+        self._flush_log()
+        return "continue"
+    g.open_discuss()
     self._flush_log()
     return "continue"
+
+
+# ================================================================ 发言时限（2026-10-28 用户定）
+#
+# 用户逐字：「限制每人发言时间最长为120秒，在还剩30秒时法官喊"还剩30秒"，
+#   倒计时120秒结束后直接进入下一个人发言。（仍保留可以提前结束发言）」
+# 遗言同构（同一上限、同一句提醒）。
+#
+# 为什么放在驱动器而不是引擎：引擎是规则（谁能说、说完轮到谁），
+# 而"说了多久"是时间，不是规则 —— 引擎里没有任何墙钟，也不该有
+# （它要能在一秒内把整局重算一遍给回放/评测用）。
+#
+# 状态放在 Session 上（`_sp_state`），键 = (种类, 轮次, 加时阶段, 座位)：
+#   · 同一轮里同一个人可能说两次（平票加时那一轮），所以键里必须有加时阶段；
+#   · 换人/换轮 ⇒ 键一变 ⇒ 时钟自动重起，不需要额外的"重置"调用点。
+
+def _sp_key(self, kind: str, seat: int) -> tuple:
+    g = self.game
+    return (kind, int(g.round), int(getattr(g, "runoff_stage", 0) or 0), int(seat))
+
+
+def _sp_state(self, kind: str, seat: int) -> Dict:
+    """这一位这一次发言的计时状态（换人/换轮自动重起）。"""
+    key = _sp_key(self, kind, seat)
+    st = getattr(self, "_sp_state", None)
+    if not st or st.get("key") != key:
+        st = {"key": key, "at": time.monotonic(), "warned": False}
+        self._sp_state = st
+    return st
+
+
+def _speech_left(self, kind: str, seat: int) -> float:
+    """还剩多少秒（**只读**，不会顺手把时钟建起来）。
+
+    只读很重要：`now_state()` 每拍都会被调用，如果它顺手建时钟，
+    "发言人刚开始说话"的时刻就被轮询拖歪了（而且 /public 一密集就永远不到点）。
+    """
+    st = getattr(self, "_sp_state", None)
+    if not st or st.get("key") != _sp_key(self, kind, seat):
+        return speech_io.speech_window()
+    return speech_io.speech_window() - (time.monotonic() - st["at"])
+
+
+def _speech_guard(self, kind: str, seat: int, end_fn) -> str:
+    """人话发言的看门狗：到 30 秒提醒一句，到 120 秒**替他结束**。
+
+    返回 "continue" = 这一拍有产出（刚提醒过 / 刚替他结束），调用方回到循环；
+    返回 "human_speak" = 继续等他（前端照常显示发言屏，仍可提前结束）。
+    """
+    st = _sp_state(self, kind, seat)
+    left = speech_io.speech_window() - (time.monotonic() - st["at"])
+    if left <= 0:
+        # 到点：**直接进下一个人**（用户定）。提前结束的通道照旧有效
+        # （玩家自己点一下关麦 / 点「过」就走 act 的 speak 分支）。
+        end_fn()
+        self._sp_state = None
+        self._flush_log()
+        return "continue"
+    if (not st["warned"] and speech_io.speech_has_last_call()
+            and left <= speech_io.speech_last_call()):
+        st["warned"] = True
+        # ⚠️ 与夜间「还剩15秒」同一条纪律：这句**故意不带 node** ——
+        #    它只是播报，不是门控；带上 node 会让前端的播报门把它当成本段的
+        #    "开眼句"重新计时（夜间那次的教训，见 _night_clock 的注释）。
+        self.timeline.append({"t": "sys", "s": speech_io.SPEECH_LAST_CALL_SAY,
+                              "voice": JUDGE_VOICE, "delay": 0,
+                              "tick": "speech_30", "at": time.time()})
+        return "continue"
+    return "human_speak"
+
+
+def _advance_lastword(self) -> str:
+    """遗言相位（2026-10-28 用户定）。
+
+    · 第一夜死的人 / 白天被投出的人 / 被同命猎人带走的人 —— 依次留遗言
+    · 遗言与发言**同构**：同一套 120 秒上限、同一句「还剩30秒」
+    · 说完回 `lastword_back` 说的那个地方（接着白天发言 / 接着进黑夜）
+    """
+    g = self.game
+    spk = g.current_lastword()
+    if spk is None:
+        back = g.end_lastwords()
+        if back == "discuss":
+            g.open_discuss()               # 遗言说完 ⇒ 从锚点开始轮流发言
+        else:
+            g.next_night()                 # 遗言说完 ⇒ 进黑夜
+        self._flush_log()
+        return "continue"
+    if g.player(spk).kind == "ai":
+        # ★ AI 的遗言也要有「N号请留遗言」开场：
+        #   人类分支靠 `_announce_lastword` 播，AI 分支若漏了，时间线上就会出现
+        #   一条"没有开场白"的 say（`speech_io._announce_speaker` 只在 DISCUSS
+        #   相位播「请发言」，遗言相位直接 return）。幂等由 `_announced` 保证。
+        self._announce_lastword(spk)
+        self._ai_speak(spk, lastword=True)
+        g.end_lastword()
+        return "continue"
+    self._announce_lastword(spk)
+    return _speech_guard(self, "lastword", spk, g.end_lastword)
 
 
 def _advance_discuss(self) -> str:
@@ -781,7 +899,9 @@ def _advance_discuss(self) -> str:
         g.end_speech()
         return "continue"
     self._announce_speaker(spk)           # 🔴 轮到人类发言：先报「N号请发言」
-    return "human_speak"
+    # ★ 2026-10-28（用户定）：每人发言最长 120 秒，剩 30 秒法官提醒，
+    #   到点**直接进下一个人**（提前结束照旧 —— 点一下关麦 / 「过」）。
+    return _speech_guard(self, "speak", spk, g.end_speech)
 
 
 def _advance_vote(self) -> str:
@@ -800,6 +920,15 @@ def _advance_vote(self) -> str:
         #   不能像原来那样一律 next_night —— 那等于把加时整段跳过。
         if g.phase is Phase.DISCUSS:
             return "continue"
+        # ★ 遗言（2026-10-28 用户定）：白天被投出的人（以及被这个猎人带走的人）
+        #   要先留遗言，再进黑夜。交给 `_advance_lastword` 走完，
+        #   它结束时会调 next_night。
+        if g.phase is Phase.EXILE:
+            _lw = g.pending_lastwords()
+            if _lw:
+                g.open_lastwords(_lw, "night")
+                self._flush_log()
+                return "continue"
         if g.phase is not Phase.ENDED:
             g.next_night()
             self._flush_log()

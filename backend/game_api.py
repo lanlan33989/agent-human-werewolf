@@ -363,6 +363,7 @@ class Session:
             pass
         return r
     def _announce_speaker(self, seat):        return speech_io._announce_speaker(self, seat)
+    def _announce_lastword(self, seat):       return speech_io._announce_lastword(self, seat)
     def _flush_log(self):        return speech_io._flush_log(self)
     def _round_speech(self, g):        return speech_io._round_speech(self, g)
     def _say(self, text, seat=None, spoken=None, card=None):        return speech_io._say(self, text, seat, spoken, card)
@@ -460,15 +461,26 @@ class Session:
                     "started": _started, "need": pick, "why": "",
                     "panel_line": panel_line, "lines_due": lines_due}
 
-        if g.phase is Phase.DISCUSS:
-            sp = g.current_speaker()
+        if g.phase in (Phase.DISCUSS, Phase.LASTWORD):
+            # ★ 遗言（2026-10-28）：与发言**同一套界面**（kind 一样是 speak）——
+            #   前端的大圆发言屏本来就按 actions 里的 `speak` 渲染，
+            #   唯一的差别是"谁在说"（死人）以及提醒文案由后端播报承担。
+            _lw = g.phase is Phase.LASTWORD
+            sp = g.current_lastword() if _lw else g.current_speaker()
             pick = next((x for x in seats if x["seat"] == sp
                          and "speak" in (x.get("actions") or [])), None)
             if pick is None:
                 return {"kind": "none", "seat": None, "node": None, "until": None,
-                        "need": None, "why": "AI 发言中 / 等切换"}
-            return {"kind": "speak", "seat": sp, "node": None, "until": None,
-                    "need": pick, "why": ""}
+                        "need": None, "why": "AI 遗言中 / 等切换" if _lw
+                                            else "AI 发言中 / 等切换"}
+            # ★ 2026-10-28（用户定）：发言 120 秒上限 —— 剩余秒数照夜间那套口径下发
+            #   （`until_left` 免疫设备时钟差），前端只做减法显示。
+            #   到点由服务端替他把话结束（`_speech_guard`），前端不做裁决。
+            _left = max(0.0, night_driver._speech_left(self, "lastword" if _lw else "speak", sp))
+            return {"kind": "speak", "seat": sp, "node": None,
+                    "until": time.time() + _left,
+                    "until_left": round(_left, 2), "started": True,
+                    "need": pick, "why": "出局遗言（点大圆开始/结束）" if _lw else ""}
 
         if g.phase is Phase.VOTE:
             pick = next((x for x in seats if "vote" in (x.get("actions") or [])), None)
@@ -555,6 +567,11 @@ class Session:
             ],
             "speaking_order": list(g.speaking_order),
             "current_speaker": g.current_speaker(),
+            # ★ 遗言（2026-10-28）：正在留遗言的人（不在遗言相位时是 None）。
+            # `pending` 在遗言里也是 "human_speak"（前端发言屏不用改），
+            # 但那一刻 `current_speaker` 是 None —— 消费方（harness / 排查）
+            # 必须能从这儿拿到人，否则会对着 None 去提交。
+            "lastword_seat": g.current_lastword(),
             # 投票时序（单机形态的关键）：手机是「交接」给投票人的，
             # 所以投票**进行中**绝不能给出票型 —— 递过去的一瞬间就破坏了投票独立性
             # （看得到别人的票就能跟随或反制）。
@@ -657,6 +674,7 @@ class Session:
     def _advance_exile(self):        return night_driver._advance_exile(self)
     def _advance_dawn(self):        return night_driver._advance_dawn(self)
     def _advance_discuss(self):        return night_driver._advance_discuss(self)
+    def _advance_lastword(self):        return night_driver._advance_lastword(self)
     def _advance_vote(self):        return night_driver._advance_vote(self)
     def _night_done(self):        return night_driver._night_done(self)
     def _run_one_ai_night(self):        return night_driver._run_one_ai_night(self)
@@ -668,7 +686,7 @@ class Session:
     def _ai_wolf_maybe_follow(self, seat):        return ai_behaviors._ai_wolf_maybe_follow(self, seat)
     def _ai_guard_act(self, seat):        return ai_behaviors._ai_guard_act(self, seat)
     def _ai_witch_act(self, seat):        return ai_behaviors._ai_witch_act(self, seat)
-    def _ai_speak(self, seat):        return ai_behaviors._ai_speak(self, seat)
+    def _ai_speak(self, seat, lastword=False):        return ai_behaviors._ai_speak(self, seat, lastword)
     def _all_voted(self):        return night_driver._all_voted(self)
     def _run_one_ai_shoot(self):        return ai_behaviors._run_one_ai_shoot(self)
     def _pick_ai_target(self, seat, kind):        return ai_behaviors._pick_ai_target(self, seat, kind)
@@ -715,11 +733,20 @@ class Session:
             raise ValueError(f"{p.display} 是 AI，不能手动操作")
 
         if action == "speak":
-            if g.current_speaker() != seat:
-                raise ValueError("还没轮到你发言")
-            body = (text or "").strip() or "（过）"
-            self._say(f"{p.display}：{body}", seat, body)
-            g.end_speech()
+            # ★ 遗言（2026-10-28）：与发言**同一个动作名**（前端发言屏不用改），
+            #   只是发言人和"说完轮到谁"换成了遗言队列。
+            if g.phase is Phase.LASTWORD:
+                if g.current_lastword() != seat:
+                    raise ValueError("还没轮到你留遗言")
+                body = (text or "").strip() or "（过）"
+                self._say(f"{p.display}：{body}", seat, body)
+                g.end_lastword()
+            else:
+                if g.current_speaker() != seat:
+                    raise ValueError("还没轮到你发言")
+                body = (text or "").strip() or "（过）"
+                self._say(f"{p.display}：{body}", seat, body)
+                g.end_speech()
 
         elif action == "vote":
             if target is None:
@@ -1089,7 +1116,9 @@ def _pending_seats_of(s) -> Dict[str, Any]:
             continue
         # ⚠️ 不能一律跳过死人：**要开枪的猎人刚刚死了**（SHOOT 相位里他还有一个动作要做）。
         #    一律跳过 ⇒ 前端永远收不到"该把手机交给 X 号" ⇒ 卡死在 human_shoot。
-        if not p.alive and g.phase is not Phase.SHOOT:
+        #    ★ 2026-10-28 同理再补一处：**遗言是死人在说话**（LASTWORD 相位）——
+        #    跳过死人会让"人类出局者的遗言"永远轮不到他，整局卡在遗言相位。
+        if not p.alive and g.phase not in (Phase.SHOOT, Phase.LASTWORD):
             continue
         acts = g.actions_for(p.seat)
         # 2026-10-07 剧本节拍：女巫的窗口不因"药已用"消失（防泄露）——

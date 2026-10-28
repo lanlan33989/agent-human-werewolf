@@ -145,7 +145,9 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
         pending = pub["pending"]
 
         if pending == "human_speak":
-            spk = pub["current_speaker"]
+            # ★ 2026-10-28 遗言：遗言那一拍的 pending 也是 human_speak，
+            #   但发言人是 lastword_seat（current_speaker 是 None）。
+            spk = pub.get("lastword_seat") if pub["phase"] == "lastword" else pub["current_speaker"]
             r = client.post(f"/api/game/{gid}/act",
                             json={"seat": spk, "action": "speak", "text": "我先过。"})
             if r.status_code != 200:
@@ -492,7 +494,13 @@ try:
         if _pend in ("ended", "human_vote"):
             break                       # 到投票就等于 AI 已经投过了
         if _pend == "human_speak":
-            _spy.act(_gsp.current_speaker(), "speak", None, "我先过")
+            # ★ 2026-10-28 遗言：`human_speak` 现在也覆盖"出局者留遗言"
+            #   （那一拍 `current_speaker()` 是 None，发言人在 `current_lastword()`）。
+            _spk = (_gsp.current_lastword() if _gsp.phase.value == "lastword"
+                    else _gsp.current_speaker())
+            if _spk is None:
+                break
+            _spy.act(_spk, "speak", None, "我先过")
         elif _pend == "human_night":
             _actor = next((q for q in _gsp.players if q.kind == "human" and q.alive
                            and _gsp.actions_for(q.seat)), None)
@@ -763,10 +771,12 @@ check("★ 「请发言」**不进 public_log**（那是喂 AI 的，进去就�
 _ok_order = True
 _last_ann = None
 for x in _sann.timeline:
-    if x["t"] == "sys" and x["s"].endswith("请发言"):
+    # ★ 2026-10-28 遗言：出局者的遗言由「N号请留遗言」开场（同一条纪律、同一套播报）。
+    if x["t"] == "sys" and (x["s"].endswith("请发言") or x["s"].endswith("请留遗言")):
         _last_ann = x["s"]
     if x["t"] == "say":
-        if _last_ann != str(x["seat"] + 1) + "号请发言":
+        if _last_ann not in (str(x["seat"] + 1) + "号请发言",
+                             str(x["seat"] + 1) + "号请留遗言"):
             _ok_order = False
             break
 check("★ 每条发言紧挨着的前一条就是该座位的「N号请发言」（顺序不能倒）",

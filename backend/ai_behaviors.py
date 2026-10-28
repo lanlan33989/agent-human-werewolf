@@ -350,9 +350,10 @@ def _ai_witch_act(self, seat: int):
 
 # ---- 白天 ----
 
-def _ai_speak(self, seat: int) -> None:
+def _ai_speak(self, seat: int, lastword: bool = False) -> None:
     g = self.game
-    if g.current_speaker() != seat:
+    _cur = g.current_lastword() if lastword else g.current_speaker()
+    if _cur != seat:
         # 不变量：只有"当前发言人"能说话。走到这里说明驱动被重入了
         # （历史上就是 /public 与 /act 并发推进），跳过而不是让他说第二遍。
         print(f"[race] 跳过重复发言：座位 {seat + 1} 不是当前发言人", flush=True)
