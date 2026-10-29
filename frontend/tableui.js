@@ -28,20 +28,75 @@ function paintBig(){
   var who = $('bigWho'), icon = $('bigIcon'), bc = $('bigCircle');
   if (!who || !icon || !bc) return;
   if (SPK_MODE){
-    who.textContent = SPK_MODE + '（人）';   /* 2026-10-07 用户定：发言屏只留号码 */
+    bc.classList.remove('talking');
+    /* ★ 2026-10-29：**这里不再写「N（人）」**。那句话原来每播一句就被
+       paintBig 写回来一次，而 syncSpkTip 每拍又写回「点击结束发言」——
+       两处互相顶，屏幕上就是那两个词在跳（用户实机原话）。
+       现在文案只由 syncSpkTip / enterSpeakerMode 负责（点击开始发言 /
+       发言中 / 点击结束发言），这里只管图标和高亮。 */
     icon.textContent = '🎤';
+    paintNumberGlow();
     return;
   }
   var l = CUR_LINE;
-  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined){
-    who.textContent = (l.seat + 1) + '号玩家（' + (kindOf(l.seat) === 'human' ? '人类' : 'AI') + '）';
+  /* 说话的人从两处取：正在播的那条 say（最准，含遗言），以及服务端的
+     `current_speaker` / `lastword_seat`。后者是兜底 —— AI 那句话播完之后
+     CUR_LINE 会清空，可这一回合还没结束，大圆不该退回"法官"。 */
+  var sp = speakingSeat();
+  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined) sp = l.seat;
+  if (sp !== null && sp !== undefined){
+    /* ★ 2026-10-29（用户）：AI 发言时大圆原来在「1（人）」和「点击结束发言」
+       之间跳 —— 那两条都是**发言屏**（人类自己的麦）的文案，AI 回合本不该出现。
+       现在统一成一句人话：谁在说就写谁。`.talking` 负责把"法官"标题藏掉、
+       把字号收到圆盘里（详见 play.html 那段 CSS）。 */
+    bc.classList.add('talking');
+    who.textContent = (sp + 1) + '号正在发言中';
     icon.textContent = '💬';
     moveDotCursor();
+    paintNumberGlow();
     return;
   }
+  bc.classList.remove('talking');
   who.textContent = '';                       /* 法官说话时大圆就是法官本尊 */
   icon.textContent = '⚖️';
   moveDotCursor();
+  paintNumberGlow();
+}
+
+/* 没有面板、也不在我的麦上时，才允许按"谁在说话"刷大圆 ——
+   有面板时大圆是那块面板的提示语（"点一个号码就是决定"等），
+   每拍无条件刷会把提示语盖掉。 */
+function paintBigIfIdle(){
+  if (SPK_MODE || HANDOFF || (WHEEL && WHEEL.mode)) return;
+  paintBig();
+}
+
+/* 当前在说话的座位（0 基）；没人说话 = null。
+   ⚠️ 遗言相位下 `current_speaker` 是 null（引擎只在 DISCUSS 里认它），
+   那时认 `lastword_seat` —— 否则"出局的人正在留遗言"这一段整个不高亮。 */
+function speakingSeat(){
+  if (SPK_MODE) return SPK_MODE - 1;
+  if (!PUBLIC) return null;
+  if (PUBLIC.current_speaker !== null && PUBLIC.current_speaker !== undefined)
+    return PUBLIC.current_speaker;
+  if (PUBLIC.lastword_seat !== null && PUBLIC.lastword_seat !== undefined)
+    return PUBLIC.lastword_seat;
+  return null;
+}
+
+/* 号码小圆高亮（2026-10-29 用户定）：给**轮盘上那圈号码**（.wnum）加 .speaking。
+   为什么不去动 .seat：`#p4 .seat{display:none}` —— 那些座位圈在手机上根本
+   不显示（2026-10-02 改成"单个大圆"时收掉了），之前往它们身上加类当然没人看得见。 */
+function paintNumberGlow(){
+  var box = $('hoActs');
+  if (!box) return;
+  var who = speakingSeat();
+  var bs = box.querySelectorAll('.wnum');
+  for (var i = 0; i < bs.length; i++){
+    var no = Number(bs[i].getAttribute('data-no'));
+    if (who === null) bs[i].classList.remove('speaking');
+    else bs[i].classList.toggle('speaking', no === who + 1);
+  }
 }
 
 /* ---------------------------------------------------------- 座位小圆（2026-10-02 用户追加） */
@@ -233,7 +288,23 @@ async function tick(){
   }
   paintSeats();
   renderDots();          /* 座位小圆：阵容/存活变化才重建，光标每拍都校一次 */
+  /* ★ 2026-10-29（用户：AI 发言时大圆在「1（人）」和「点击结束发言」之间跳）：
+     发言屏只属于**我这一回合**。服务端说"现在说话的不是我"（AI 在说 / 进了投票 /
+     这一拍根本没人说话）⇒ 当场收掉。
+     为什么必须收在**这里**：下面那段面板逻辑会被 `_gateOk`（播报门）挡住 ——
+     而 AI 那句「N号请发言」刚进队列时门正好是关的，于是 closeSpeakerMode 一直
+     轮不到执行，SPK_MODE 就粘在那儿，大圆每播一句都"闪"回「N（人）」。
+     ⚠️ 判据只看 `kind === 'speak'` 与座位号，不看 `pending`：pending 是
+     "该谁拿手机"，和"谁在说话"不是一回事（AI 发言时 pending 是 working）。 */
+  if (SPK_MODE){
+    var _now0 = PUBLIC.now || null;
+    if (!_now0 || _now0.kind !== 'speak'
+        || (_now0.seat !== null && _now0.seat !== undefined && _now0.seat !== SPK_MODE - 1)){
+      closeSpeakerMode();
+    }
+  }
   if (SPK_MODE) syncSpkTip();   /* 收尾中/失败文案有更新时，提示行跟着走（tick 兜底） */
+  paintBigIfIdle();      /* AI 回合里"谁在说话"要跟着换人走（播报队列不会每句都来刷） */
   paintCountdown();      /* 夜间操作倒计时（服务端裁决，这里只显示） */
   /* 🔴 2026-10-12（用户：AI 说话时麦不该是可点状态）：圆盘的可点态只在**轮到人类
      发言**（SPK_MODE 有值）时出现，其余时刻一律摘掉 —— 视觉与拦截一致。 */
@@ -895,6 +966,8 @@ function renderWheelBase(){
   box.innerHTML = h;
   var tip = $('hoTip');
   if (tip && WHEEL.mode === null) tip.textContent = '';
+  /* 重画之后高亮要重新贴上去（号码按钮是新建的，类不会自己回来） */
+  paintNumberGlow();
 }
 
 /* 摘掉所有号码按钮的可点状态（切屏时防幽灵点击，见 renderWheelAct 内调用处） */
@@ -1774,6 +1847,10 @@ function wheelModeIdle(){
   $('bigIcon').textContent = '⚖️';
   $('bigWho').textContent = '';
   renderWheelBase();
+  /* ★ 2026-10-29：收完面板要**交还给"谁在说话"** —— 否则每个 tick 的
+     closeHandoff() 都会把大圆清成空的（AI 发言那一段大圆就一直空着，
+     用户看到的更糟：上一版这里还会被发言屏的旧文案顶回来，于是来回跳）。 */
+  paintBigIfIdle();
 }
 
 /* 交接层里的提示。**必须写在浮层内部** ——

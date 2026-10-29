@@ -279,6 +279,13 @@ async function speakQueue(){
     }
   } finally {
     SPEAKING = false; CUR_LINE = null; paintBig();
+    /* ★ 2026-10-29（用户："法官语音播报游戏结束后才显示弹框"）：
+       队列刚放完最后一句就是**最准的那一刻** —— 比等下一次 tick 更贴近"念完才弹"。
+       局末之外这个调用是空转（renderEndPop 自己会看 phase）。 */
+    try {
+      if (typeof renderEndPop === 'function' && PUBLIC && PUBLIC.phase === 'ended')
+        renderEndPop();
+    } catch (e) { /* 老页面没有这个函数：不影响播报 */ }
     /* 诊断面板开着的话刷一下：刚发生的播报结果（含失败）立即可见 */
     try {
       if ($('diagPanel') && $('diagPanel').classList.contains('on')) diagRefresh();

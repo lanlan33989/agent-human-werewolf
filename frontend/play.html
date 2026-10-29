@@ -70,6 +70,24 @@
   .wnum.human{border-color:#4da3ff;}
   .wnum.ai{border-color:#ff5252;}
   .wnum.dead{opacity:.3;}
+  /* ★ 2026-10-29（用户：当前发言玩家高亮 = **玩家序号所在的小圆圈**）：
+     手机上真正看得见的就是轮盘这一圈号码（.seat 在 #p4 是 display:none，
+     大圆里的文字又每句都在变）。所以高亮落在这里：金环 + 呼吸光晕 + 号码提亮，
+     一眼能看出"现在是谁在说"。 */
+  .wnum.speaking{
+    border-color:var(--yellow);
+    background:rgba(255,213,61,.30);
+    color:#FFF7D0;text-shadow:0 0 10px rgba(255,213,61,.9);
+    box-shadow:0 0 0 4px rgba(255,213,61,.40), 0 0 20px rgba(255,213,61,.80);
+    animation:numGlow 1.4s ease-in-out infinite;
+    z-index:3;
+  }
+  /* 出局者留遗言时他的号码已经 .dead（opacity .3）—— 正在说话就抬回来 */
+  .wnum.dead.speaking{opacity:.9;}
+  @keyframes numGlow{
+    0%,100%{box-shadow:0 0 0 3px rgba(255,213,61,.30), 0 0 12px rgba(255,213,61,.55)}
+    50%{box-shadow:0 0 0 8px rgba(255,213,61,.50), 0 0 26px rgba(255,213,61,.95)}
+  }
   .wnum.pick{cursor:pointer;animation:pickBreathe 1.5s ease-in-out infinite;}
   .wnum.sel{background:var(--yellow);color:var(--purple-d);border-color:var(--yellow);}
   .wnum.victim{border-color:#ff5a5a;background:rgba(255,90,90,.3);color:#ffd9d9;}
@@ -249,6 +267,15 @@
 #p4 .tcenter .who{ font-size:calc(min(58vw,300px) * .14); font-weight:800;
   color:#fff; margin-top:8px; text-align:center; line-height:1.35; padding:0 10px;
   white-space:nowrap; }
+/* ★ 2026-10-29（用户：AI 发言时大圆要写「×号正在发言中」）：
+   原来那句 .who 是 14% ≈ 35px 且 nowrap，七个字直接顶穿圆盘、压在号码上；
+   同时上面还挂着「法官」两个字 —— 说话的明明是 2 号。发言态一律：
+   藏掉"法官"标题，字号降到 10.5%，长号码也放得下。 */
+#p4 .tcenter.talking .t{ display:none; }
+#p4 .tcenter.talking .g{ font-size:calc(min(58vw,300px) * .16); margin-bottom:2px; }
+#p4 .tcenter.talking .who{ font-size:calc(min(58vw,300px) * .105); margin-top:2px;
+  padding:0 6px; letter-spacing:1px; color:#FFF7D0;
+  text-shadow:0 0 14px rgba(255,213,61,.55); }
 #p4 .tcenter.pickable{ cursor:pointer;
   border-color:var(--yellow);
   animation:pickBreathe 1.5s ease-in-out infinite; }
@@ -1163,6 +1190,10 @@ function paintSeats(){
     if (_spk === p.seat) addCls(p.seat + 1, 'speaking');
     else delCls(p.seat + 1, 'speaking');
   });
+  /* ★ 2026-10-29（用户）：真正给玩家看的是**轮盘上那圈号码**（.wnum）——
+     上面那套往 .seat 上加的类在 #p4 是 display:none，等于没加。
+     每拍都刷一次，换人/散场都能自己收干净。 */
+  try { paintNumberGlow(); } catch (e) { /* 老页面没有这个函数 */ }
 }
 
 /* ---------------------------------------------------------- 票型框 / 终局弹框 */
@@ -1202,10 +1233,19 @@ function renderVoteBox(){
 }
 
 /* 终局弹框：法官念完「游戏结束，狼人/好人胜利」之后才弹。
-   判定用播报游标（SPOKEN 越过那一句）。三个兜底，缺一不可：
-     · 语音关掉时 SPOKEN 不推进（speakQueue 开头就 return）⇒ 直接弹
-     · 老服务端没有这句 ⇒ idx < 0 ⇒ 直接弹
-     · 播报卡住（TTS 悬挂）⇒ 进终局 8 秒后照弹，不能因为念不出来就不给结果 */
+   ★ 2026-10-29（用户："法官语音播报游戏结束后才显示弹框……上一把弹框没了"）：
+   上一版只有「SPOKEN 越过那一句」和「进终局 8 秒」两条路，实测有洞：
+     · **语音队列卡在更早的句子上**时 SPOKEN 永远追不上（这设备上法官播报本来就是
+       老大难），只能等 8 秒；
+     · **中途刷新/重开页面**时 SPOKEN 从 0 开始，那一局历史有 40 多条播报要一句句
+       过一遍，用户对着"本局结束"干等几十秒，体感就是"弹框没了"。
+   现在判据是"**播报已经不该再等**"，四条路任意一条成立就弹：
+     ① 语音关掉 / 老服务端没有这一句        → 没人会念，直接弹
+     ② SPOKEN 真的越过了那句                → 正解
+     ③ 队列已经空闲（!SPEAKING）超过 1.5 秒 → 卡住的兜底（比死等 8 秒快得多）
+     ④ 那句「游戏结束」本身是 20 秒前的     → 刷新/接回旧局时照弹
+     ⑤ 最后硬兜底：进终局 8 秒
+   弹框只负责"什么时候弹"；"是不是真的结束了"仍然只看服务端的 phase/winner。 */
 var _END_AT = 0, _END_SHOWN = false;
 function renderEndPop(){
   var p = $('endPop');
@@ -1224,8 +1264,16 @@ function renderEndPop(){
   ((PUBLIC.timeline) || []).forEach(function(x, i){
     if (x.t === 'sys' && String(x.s || '').indexOf('游戏结束') === 0) idx = i;
   });
+  var _tl = PUBLIC.timeline || [];
+  var _lineAt = (idx >= 0 && _tl[idx]) ? Number(_tl[idx].at || _tl[idx].ts || 0) : 0;
   var spoken = (idx < 0) || !VOICE_ON
             || (typeof SPOKEN === 'number' && SPOKEN > idx)
+            /* ③ 队列空闲了 1.5 秒还没轮到那句 ⇒ 别死等（TTS 悬挂是最常见的形态） */
+            || (typeof SPEAKING !== 'undefined' && !SPEAKING
+                && Date.now() - _END_AT > 1500)
+            /* ④ 那句本身就是 20 秒前的：刷新页面 / 接回旧局，播报早该放完了 */
+            || (_lineAt > 0 && Date.now() / 1000 - _lineAt > 20)
+            /* ⑤ 硬兜底 */
             || (Date.now() - _END_AT > 8000);
   if (!spoken || _END_SHOWN) return;
   _END_SHOWN = true;
@@ -1394,6 +1442,22 @@ function loadScript(src){
   }
   boot();
   await tryResume();
+  /* ★ 2026-10-29：`?gid=<局号>` 直接接进指定那一局（不进封面）。
+     用途只有两个：无头浏览器截图验收（否则要先在页面上点开局、再等半天），
+     以及前端负责人/队友复现某一局。**不改变正常入口**：不带这个参数时
+     仍然"永远从封面开始"。 */
+  var _qg = /[?&]gid=([\w-]+)/.exec(location.search);
+  if (_qg){
+    /* ⚠️ 先落到一个**普通变量**再用：_check-split-consistency 把
+       `'/api/game/' + X + '/public'` 归一化成 {param} 靠的是"标识符"，
+       写成 `_qg[1]` 这种带下标的它认不出来，会误报"前端调了不存在的接口"。 */
+    var _qgid = _qg[1];
+    try {
+      var _qpub = await api('/api/game/' + _qgid + '/public');
+      resumeInto(_qgid, _qpub);
+      return;
+    } catch (e) { /* 那一局没了 ⇒ 老老实实留在封面 */ }
+  }
   show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */
 })();
 

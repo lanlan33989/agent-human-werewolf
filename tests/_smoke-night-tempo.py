@@ -95,8 +95,9 @@ print("=" * 74)
 print("① 窗口秒数只有一个来源（夜间剧本表）")
 print("=" * 74)
 
+# 2026-10-26 仓库拆成 backend/ + frontend/：驱动在 backend/ 下（判据不变）
 _src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "night_driver.py"), encoding="utf-8").read()
+                         "backend", "night_driver.py"), encoding="utf-8").read()
 check("★ 驱动器里**没有**第二份窗口表（NIGHT_ACT_WINDOW 已删；两份必然漂移）",
       "NIGHT_ACT_WINDOW =" not in _src)
 check("★ 窗口表就是定稿的数字（守卫 15 / 狼刀 20 / 神职 15）",

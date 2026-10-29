@@ -198,6 +198,17 @@ GOD_ORDER: List[Role] = [Role.WITCH, Role.SEER, Role.HUNTER, Role.GUARD, Role.ID
 _GOD_SHORT = {Role.WITCH: "巫", Role.SEER: "预", Role.HUNTER: "猎",
               Role.GUARD: "守", Role.IDIOT: "白"}
 
+# ★ 2026-10-29（用户定）：**屠边**规则的生效门槛。
+#   9 人局、12 人局在「狼数 ≥ 好人数」之外，再加两条：
+#     · 神职**全灭** ⇒ 狼人胜
+#     · 平民**全灭** ⇒ 狼人胜
+#   为什么是 `total >= 9` 而不是写死 9/12：板子是**按人数现算**的（见 make_board），
+#   9 人 3 狼 3 神 3 民、10 人 3 狼 3 神 4 民、12 人 4 狼 4 神 4 民、15 人 5 狼 5 神 5 民
+#   是同一副骨架，按"局"写死会出现"10 人局突然没有屠边"这种没法解释的断崖。
+#   ⚠️ 6 人局（2 狼 2 神 2 民）**明确不启用** —— 用户点名只要 9/12；6 人局人少，
+#      屠边会让它变成"两晚就结束"，节奏完全变样。
+SIDE_WIPE_MIN_TOTAL = 9
+
 
 def wolf_count(total: int) -> int:
     """狼数 = floor(总人数 × 34%)，至少 1 只（0 只狼没法玩）。"""
@@ -412,6 +423,26 @@ class Game:
 
     def good_alive(self) -> List[Player]:
         return [p for p in self.alive if not p.role.is_wolf]
+
+    def gods_alive(self) -> List[Player]:
+        """还活着的神职（含**翻过牌的白痴** —— 他翻牌不死，人还在场上）。"""
+        return [p for p in self.alive if p.role.is_god]
+
+    def villagers_alive(self) -> List[Player]:
+        """还活着的平民。白痴/神职不算民，狼也不算。"""
+        return [p for p in self.alive if p.role is Role.VILLAGER]
+
+    def side_wipe_on(self) -> bool:
+        """本局动不动用屠边（见 SIDE_WIPE_MIN_TOTAL）。
+
+        除了人数门槛，还要求**两类都有**：板子里没有民（或没有神）时，
+        "平民全灭"会在开局第一秒就成立 —— 那不是规则，那是 bug。
+        """
+        if len(self.players) < SIDE_WIPE_MIN_TOTAL:
+            return False
+        has_god = any(p.role.is_god for p in self.players)
+        has_vil = any(p.role is Role.VILLAGER for p in self.players)
+        return bool(has_god and has_vil)
 
     def player(self, seat: int) -> Player:
         return self.players[seat]
@@ -971,7 +1002,7 @@ class Game:
             错误地再来一轮白天）。由调用方声明。"""
         # 🔴 2026-10-02：必须**只看本轮**的 deaths —— 以前遍历全部历史，
         #    死掉的猎人被票出/被刀开过一次枪之后，每一晚的结算都会把他
-    #    重新任命成 shooter ⇒ 死人反复开枪（实测单测复现）。
+        #    重新任命成 shooter ⇒ 死人反复开枪（实测单测复现）。
         for d in self.deaths:
             if int(d.get("round", -1)) != self.round:
                 continue
@@ -979,6 +1010,18 @@ class Game:
             if not self.player(seat).alive and self.player(seat).role is Role.HUNTER:
                 if d["cause"] == "poison" and not self.rules.hunter_can_shoot_on_witch_poison:
                     self.log(f"{self.player(seat).display}（猎人）被毒杀，无法开枪。")
+                    continue
+                # ★ 2026-10-29（用户定）：**猎人就是最后一个神**时，他一出局
+                #   屠神就成立、胜负当场就定了 —— 这一枪不允许打（用户原话：
+                #   「若猎人作为最后一神出局，则无法开枪，直接判定狼人胜利」）。
+                #   ⚠️ 判据必须是「屠边生效 + 神职全灭」，**不能**写成
+                #   `check_winner() == "wolf"`：那样会把「狼数 ≥ 好人数」也算进去，
+                #   于是最小板（1 狼 / 猎人 / 1 民）里猎人的最后一枪被吃掉 ——
+                #   而那一枪恰恰是能翻盘的（`_smoke-rules` 的 H4 就是钉这条）。
+                #   两种"狼已胜"的形状不同：屠边是**结局已定**，绑票是**票数已定**，
+                #   后者仍允许猎人开完枪再结算。
+                if self.side_wipe_on() and not self.gods_alive():
+                    self.log(f"{self.player(seat).display}（猎人）出局，无法开枪。")
                     continue
                 if self.shooter is None:
                     self.shooter = seat
@@ -1591,12 +1634,31 @@ class Game:
     # ------------------------------------------------------------ 胜负
 
     def check_winner(self) -> Optional[str]:
+        """胜负判定 —— 2026-10-29 用户定稿（三个判据，按优先级）。
+
+        ① `w == 0`            → 好人胜（屠狼，唯一的"好人胜"入口）
+        ② `w >= g`            → 狼人胜（绑票口径：狼数不比好人少，白天票也拦不住）
+        ③ 屠边（仅 9 人及以上局，见 `SIDE_WIPE_MIN_TOTAL`）：
+           神职全灭 **或** 平民全灭 → 狼人胜
+
+        为什么要加 ③（用户原话）：9/12 人局里"狼数 ≥ 好人数"永远等不到 ——
+        12 人局开局 4 狼 8 好人，狼要杀到 4 才触发②，而这时候好人往往已经被屠掉一边，
+        等于"明明神都死光了，游戏还不停，还要再打一整天"。屠边是标准判例。
+
+        ⚠️ 白痴翻牌**不算死**：他还在 `alive` 里 ⇒ 既算进 `g`，也算进"神职未全灭"。
+           这一点和"白痴翻牌后失去投票权"是两件事，别合并（见 can_vote）。
+        """
         w = len(self.wolves_alive())
         g = len(self.good_alive())
         if w == 0:
             return "good"
         if w >= g:
             return "wolf"
+        if self.side_wipe_on():
+            if not self.gods_alive():
+                return "wolf"
+            if not self.villagers_alive():
+                return "wolf"
         return None
 
     # ------------------------------------------------------------ 视图

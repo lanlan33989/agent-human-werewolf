@@ -345,6 +345,31 @@ var DEMO_SCENES = {
     })
   },
 
+  /* ★ 2026-10-29（用户：AI 发言时大圆在两种文案间跳）——
+     这一屏就是那个态：**AI 在说**，人类没事可做（now.kind=none、pending=working）。
+     正确表现：大圆写「2号正在发言中」，且**只写这一句**（不许出现「2（人）」
+     或「点击结束发言」）；轮盘上 2 号小圆带金环呼吸光晕。 */
+  ai_say: {
+    title: "白天 · AI 正在发言",
+    note: "大圆 =「2 号正在发言中」；2 号号码小圆金色高亮；人类这一拍没有任何操作。",
+    public: _pub(function (p) {
+      p.phase = "discuss"; p.round = 1; p.night_node = null; p.night_plan = [];
+      p.pending = "working";
+      p.current_speaker = 1;
+      p.speaking_order = [0, 1, 2];
+      p.speech = [{ seat: 0, spoken: true }, { seat: 1, spoken: false }];
+      p.timeline.push({ t: "sys", s: "天亮了。昨夜 5 号出局。", voice: "Neil", ts: 1793034420 });
+      p.timeline.push({ t: "sys", s: "从 1 号开始发言。", voice: "Neil", ts: 1793034422 });
+      p.timeline.push({ t: "sys", s: "1号请发言", voice: "Neil", ts: 1793034424 });
+      p.timeline.push({ t: "say", s: "我先说。1 号就一句“我是好人”，太薄了。", seat: 0, voice: "Neil", spoken: true });
+      p.timeline.push({ t: "sys", s: "2号请发言", voice: "Neil", ts: 1793034430 });
+      p.timeline.push({ t: "say", s: "我站 1 号的对立面：他昨天的位置太靠后，发言却最像定调。", seat: 1, voice: "Ethan", spoken: false });
+      p.now = { kind: "none", seat: null, node: null, need: null,
+                started: false, why: "AI 发言中 / 等切换" };
+      p._ps = { seats: [] };
+    })
+  },
+
   /* 终局 —— ⚠️ phase 必须是小写 "ended"、winner 必须是 "wolf"/"good"：
      tableui.js:244 判的是 `PUBLIC.phase === 'ended'`（后端 engine.py:90
      ENDED="ended"，下发值也是小写）；winner 用 '狼人胜利' 这种整句也不会报错，

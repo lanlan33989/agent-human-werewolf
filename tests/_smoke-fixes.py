@@ -1027,6 +1027,39 @@ try:
 finally:
     night_script.set_win_scale(_saved_sp)
 
+# ================================================================ ⑮ 2026-10-29
+# 「当前发言玩家高亮要落在**号码小圆**上」+「大圆写 ×号正在发言中」+
+# 「法官念数字不许数字与汉字之间留空白」+「终局弹框要在播报之后且一定会弹」。
+# 这几条都是**前端行为**，Python 这边没有 DOM —— 所以钉的是"实现有没有在那儿"，
+# 语义靠无头浏览器截图验收（见 _handoff/probe_*）。判据写成"必须出现的字符串"，
+# 有人把这些删了/改回去了，这里就会红。
+print("=" * 74)
+print("⑮ 前端三处修复（高亮 / 大圆文案 / 播报去空格 / 终局弹框）")
+print("=" * 74)
+
+_FE = BASE / "frontend"
+_play = (_FE / "play.html").read_text(encoding="utf-8")
+_tui = (_FE / "tableui.js").read_text(encoding="utf-8")
+_jv = (_FE / "judge_voice.js").read_text(encoding="utf-8")
+_sui = (_FE / "speech_ui.js").read_text(encoding="utf-8")
+
+check("★ 号码小圆的高亮样式真的存在（.wnum.speaking）",
+      ".wnum.speaking{" in _play.replace(" ", ""))
+check("★ 高亮是加在 .wnum 上（不是被 #p4 藏掉的 .seat）",
+      "paintNumberGlow" in _tui and "querySelectorAll('.wnum')" in _tui)
+check("★ 大圆发言文案 =「N号正在发言中」",
+      "'号正在发言中'" in _tui)
+check("★ 发言态要藏掉「法官」标题（否则一句话两个『谁在说』）",
+      "#p4 .tcenter.talking .t{ display:none; }" in _play)
+check("★ 法官播报去掉「数字 + 空白 + 汉字」的间隔（3 号 → 3号）",
+      r"([\u4e00-\u9fa5\d])\s+(?=[\u4e00-\u9fa5\d])" in _jv)
+check("★ 终局弹框有『队列空闲』兜底（TTS 卡住也要弹）",
+      "!SPEAKING" in _play and "1500" in _play)
+check("★ 终局弹框有『这句是 20 秒前的』兜底（刷新/接回旧局照弹）",
+      "_lineAt" in _play and "> 20" in _play)
+check("★ 播报队列一放完就判一次终局（念完才弹，不等下一拍）",
+      "renderEndPop" in _sui)
+
 print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")

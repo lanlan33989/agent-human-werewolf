@@ -48,6 +48,13 @@ SPEC = [
      "engine._open_shoot_if_hunter"),
     ("H4", "猎人", "④ 开枪结算完成后才判胜负",
      "engine.night_shoot（damage → 记死因 → 再 check_winner）"),
+    # ★ 2026-10-29 用户定：屠边 + 猎人最后一神不能开枪。
+    #   这两条不在 05b 里（05b 是"标准局判例"，屠边是**本项目的局规则**），
+    #   补进来的理由和 T2/T4 一样：只写在注释里的规则等于没有规则。
+    ("W1", "全局", "屠边：9 人及以上局，神职全灭 或 平民全灭 ⇒ 狼人胜（2026-10-29 用户定）",
+     "engine.check_winner + side_wipe_on（SIDE_WIPE_MIN_TOTAL=9）"),
+    ("W2", "猎人", "⑤ 猎人作为**最后一神**出局 ⇒ 无法开枪，直接判狼人胜（2026-10-29 用户定）",
+     "engine._open_shoot_if_hunter"),
     ("G1", "守卫", "① 每夜守一人，可守自己（开关 guard_can_self_guard）",
      "engine.night_guard"),
     ("G2", "守卫", "② 不可连续两晚守同一人（开关 guard_can_repeat）",
@@ -108,6 +115,18 @@ _B_IDIOT = Board(key="t-rules-idiot", label="规则表：狼/白痴/2 民",
 # 判胜顺序专用：1 狼 + 猎人 + 1 民 —— 这样猎人那一枪**能翻转胜负**（见 H4）
 _B_HUNT = Board(key="t-rules-hunt", label="规则表：1 狼/猎人/1 民",
                 roles=[Role.WOLF, Role.HUNTER, Role.VILLAGER], lives=1)
+# 屠边专用（2026-10-29）：9 人 3 狼 / 3 神 / 3 民 —— 和 make_board(9) 同构。
+# 对照组用 8 人（2 狼 / 2 神 / 4 民）：骨架一样，但**不启用屠边** ⇒
+# 神全灭时 w(2) < g(4)，必须还是"继续打"。这一对才能证明门槛真的在 9。
+_B_WIPE9 = Board(key="t-rules-wipe9", label="规则表：9 人 3 狼 3 神 3 民",
+                 roles=[Role.WOLF] * 3
+                       + [Role.WITCH, Role.SEER, Role.HUNTER]
+                       + [Role.VILLAGER] * 3, lives=1)
+_B_WIPE8 = Board(key="t-rules-wipe8", label="规则表：8 人 2 狼 2 神 4 民",
+                 roles=[Role.WOLF] * 2 + [Role.WITCH, Role.SEER]
+                       + [Role.VILLAGER] * 4, lives=1)
+_K9 = ["human"] * 9
+_K8 = ["human"] * 8
 _K5 = ["human"] * 5
 _K4 = ["human"] * 4
 
@@ -215,6 +234,54 @@ record("H4", _deferred_winner is None and _deferred_phase is not Phase.ENDED
        f"夜里结算后 winner={_deferred_winner} phase={_deferred_phase.value}"
        f"（必须是 None/未结束，否则就是「先宣布狼胜、枪还在手上」）；"
        f"开枪后 winner={_g.winner} shot={_shot_ok} {_err}")
+
+# ---------------------------------------------------------------- 屠边（W1）
+# 判的是**尽头**：神职全灭、平民全灭都算狼胜；而同一副骨架缩到 8 人就不算。
+_g = Game(_B_WIPE9, kinds=_K9, seed=70)
+_g.start()
+_gods = [p.seat for p in _g.players if p.role.is_god]
+_vils = [p.seat for p in _g.players if p.role is Role.VILLAGER]
+for _s in _gods[:-1]:
+    _g.player(_s).alive = False
+_almost = _g.check_winner()                       # 还剩一神 ⇒ 不许结束
+_g.player(_gods[-1]).alive = False
+_god_wipe = _g.check_winner()                     # 神全灭 ⇒ 狼胜
+
+_g2 = Game(_B_WIPE9, kinds=_K9, seed=71)
+_g2.start()
+_vils2 = [p.seat for p in _g2.players if p.role is Role.VILLAGER]
+for _s in _vils2[:-1]:
+    _g2.player(_s).alive = False
+_almost2 = _g2.check_winner()
+_g2.player(_vils2[-1]).alive = False
+_vil_wipe = _g2.check_winner()                    # 民全灭 ⇒ 狼胜
+
+_g3 = Game(_B_WIPE8, kinds=_K8, seed=72)          # 对照组：8 人，同骨架
+_g3.start()
+for _p in [p for p in _g3.players if p.role.is_god]:
+    _p.alive = False
+_small = _g3.check_winner()                       # 2 狼 vs 4 民 ⇒ 继续打
+record("W1", _almost is None and _god_wipe == "wolf"
+       and _almost2 is None and _vil_wipe == "wolf" and _small is None,
+       f"9 人局：神灭前={_almost}、神全灭={_god_wipe}；"
+       f"民灭前={_almost2}、民全灭={_vil_wipe}；8 人局神全灭={_small}（必须 None）")
+
+# ---------------------------------------------------------------- 猎人最后一神（W2）
+# 用户原话：「若猎人作为最后一神出局，则无法开枪，直接判定狼人胜利」。
+# 反例（**必须仍然能开枪**）是 H4 的最小板：那里"狼数已够"≠"结局已定"，
+# 猎人那一枪能把最后一只狼打死、好人翻盘 —— 两条一起才钉住这个边界。
+_g = Game(_B_WIPE9, kinds=_K9, seed=73)
+_g.start()
+_h = seat_of(_g, Role.HUNTER)
+for _p in [p for p in _g.players if p.role.is_god and p.role is not Role.HUNTER]:
+    _p.alive = False                              # 猎人成了最后一神
+_g.wolf_agree_kill(_h)
+_g.resolve_night()
+_noshoot = (_g.shooter is None and _g.phase is Phase.ENDED and _g.winner == "wolf")
+_said = any("无法开枪" in s for s in _g.public_log)
+record("W2", _noshoot and _said,
+       f"shooter={_g.shooter} phase={_g.phase.value} winner={_g.winner} "
+       f"播报里有「无法开枪」={_said}")
 
 # ---------------------------------------------------------------- 守卫
 # G1 可守自己；开关关掉就必须拒
