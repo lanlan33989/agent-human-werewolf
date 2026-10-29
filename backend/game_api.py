@@ -560,6 +560,14 @@ class Session:
             "public_log": list(g.public_log),
             "speech": list(self.speech),
             "timeline": list(self.timeline),
+            # ★ 2026-10-29（用户报「法官全部音效没了」的根因之一）：timeline 条目的
+            #   `at` 是**服务端**时间戳（time.time()），前端却拿本机 Date.now() 去减。
+            #   手机与电脑的时钟差一分钟以上时，前端会把每句法官台词判成"迟到 >60s"
+            #   而逐句丢弃 ⇒ 整局一句不念且无任何报错。下发服务端当前时刻，让前端
+            #   算出偏置（_SRV_SKEW）再比较。不是业务字段，纯时钟基准。
+            #   ⚠️ 字段名**不能**叫 `now` —— 上面那个 `now` 是"当前面板状态机"
+            #   （now_state()），同名会把整个界面打崩（dict 后者覆盖前者）。
+            "server_now": time.time(),
             "players": [
                 {"seat": p.seat, "display": p.display, "lives": p.lives,
                  "alive": p.alive, "kind": p.kind}

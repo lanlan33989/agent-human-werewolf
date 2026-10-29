@@ -1645,6 +1645,7 @@ function diagRefresh(){
          + (LAST_TTS.ms ? ('｜' + Math.round(LAST_TTS.ms) + 'ms') : '')
          + (LAST_TTS.http ? ('｜HTTP ' + LAST_TTS.http) : '')
          + (LAST_TTS.err ? ('｜<span class="bad">' + LAST_TTS.err + '</span>') : '')
+         + (LAST_TTS.fb ? ('｜<span class="bad">本地没出声 → 云端兜的</span>') : '')
          + '｜' + (LAST_TTS.text || ''))
       : '（还没有播过任何一句）'],
     ['手机访问', DIAG_NET.length ? DIAG_NET.join(' ｜ ') : '（查不到局域网地址）'],

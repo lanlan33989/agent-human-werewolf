@@ -27,7 +27,17 @@ window.JudgeVoice = (function () {
   var SPEECH_PITCH = 1.0;     // 音高：保持 1.0 别动 —— 神经音色自带完整语调，
                               // 降调会把好音色压得发闷发假（队友1 实测踩坑 4）
   var SPEECH_VOLUME = 0.95;
-  var PHRASE_PAUSE_MS = 260;  // 分句间停顿
+  var PHRASE_PAUSE_MS = 220;  // 分句间停顿
+  /* 🔴 2026-10-29（用户报「法官全部音效又没了」）：
+     `speak()` 被浏览器静默拒绝时（没手势 / 非安全上下文 / 合成器被系统接管），
+     原来只能等**总时长看门狗**（最短 5 秒）才发现 —— 一句白等 5 秒，一整夜十
+     几句就把播报队列拖后 60 秒以上，而 speech_ui 的"过期跳过"会把拖后的 sys
+     句子全当迟到扔掉 ⇒ **法官整局一句不念**，且没有任何报错。
+     现在拆成两道闸：起音闸（这么久还没 onstart 就判"不出声"）+ 总时长闸。 */
+  var UTTER_START_MS = 900;
+  /* 判定"本地通道不可用"后的降级时长。原来 5 分钟 ≈ 一整局 —— 一次误判就
+     整局哑巴。改成 60 秒，且用户下次点屏幕（手势）立即解除（见 armUnlock）。 */
+  var BROKEN_TTL_MS = 60 * 1000;
 
   /* 首选云扬（Edge 中文在线自然神经音色，男声，有权威感）；备选云希/晓晓。
      用关键词匹配，绝不写死整串名字 —— 同一个音色在不同 Edge 版本里后缀不一样
@@ -91,7 +101,16 @@ window.JudgeVoice = (function () {
   // ⚠️ 不用 (?<=...) 后行断言：iOS Safari <16.4 在**解析期**就抛 SyntaxError，
   //    整个文件报废。用捕获组把标点并回前一句，效果与断言版一字不差。
   function splitForSpeech(text) {
-    var parts = String(text).split(/([，。；：！？,.;:!?])/);
+    /* 🔴 2026-10-29（用户报「法官念数字声音有奇怪的延长」）：
+       号码列举里的逗号被当成了断句点 —— "2，3，5号出局" 被切成
+       ["2，", "3，", "5号出局，"] 三段，段间有 220ms 停顿、每段还要各自起音
+       一次（Chrome 每句起音有 100~300ms 开销）⇒ 听感是"二……三……五号出局"，
+       数字之间凭空多出近一秒。
+       修法：**切分之前**把"号码之间的逗号/顿号"统一成顿号 ——
+       顿号本来就在"绝不断句"的集合里（见下面注释），TTS 念 "2、3、5号"
+       会自然连读。前瞻 `(?=)` 是 ES3 就有的语法，不碰 iOS 那个 `(?<=)` 的坑。 */
+    text = String(text).replace(/(\d\s*号?)\s*[，,]\s*(?=\d)/g, '$1、');
+    var parts = text.split(/([，。；：！？,.;:!?])/);
     var out = [], cur = '';
     for (var i = 0; i < parts.length; i++) {
       if (i % 2 === 1) {           // 捕获组命中的标点：并回前句尾
@@ -118,54 +137,71 @@ window.JudgeVoice = (function () {
     return new Promise(function (res) { pauseTimer = setTimeout(res, ms); });
   }
 
+  /* 念一段。resolve(true) = 真的出过声；resolve(false) = 没出声（被拦/合成器不
+     回调/出错），调用方据此**立刻**回落云端，不再白等。
+     ⚠️ 两个闸缺一不可：
+       · 起音闸 UTTER_START_MS：speak() 被静默拒绝时 onstart 永远不来 —— 这是
+         "法官全部没声"的真正入口（队列被一句句 5 秒拖死 ⇒ 后续全被判过期跳过）。
+       · 总时长闸：有些环境 onstart 来了、onend 永远不来 ⇒ 仍要能收尾。 */
   function utterOnce(text, v) {
     return new Promise(function (resolve) {
-      var done = false;
-      function fin() {
+      var done = false, started = false;
+      var guard = null, startGuard = null;
+      function fin(ok) {
         if (done) return;
         done = true;
         try { clearTimeout(guard); } catch (e) { /* ignore */ }
-        resolve();
+        try { clearTimeout(startGuard); } catch (e) { /* ignore */ }
+        if (!ok) _brokenSince = Date.now();
+        resolve(ok);
       }
-      /* 🔴 看门狗（2026-10-22，走查实测踩坑）：headless Chrome / 某些环境里
-         speak() 可能**永远不回调 onend/onerror**（无声卡、合成器不工作）——
-         不兜底的话 speakAwait 永不 resolve ⇒ 门控时钟 SPOKE_DONE.at 永不更新
-         ⇒ 夜间面板被播报**永久憋死**（HANDOFF §10.7 明令禁止的形态）。
-         超时按"这句念完"处理并 cancel；若超时真的发生，还把本会话标记为
-         **本地不可用**（见 _brokenSince），后续句子直接走云端 —— 与 rec.js
-         的"失败留痕、TTL 内不再优先"同一套纪律。 */
-      var guard = setTimeout(function () {
-        _brokenSince = Date.now();
+      startGuard = setTimeout(function () {
+        if (started) return;
         try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
-        fin();
+        fin(false);
+      }, UTTER_START_MS);
+      /* 总时长看门狗：来了 onstart 但 onend 不回调（无声卡 / 被系统接管）——
+         按"这句念完"处理并 cancel，避免门控时钟 SPOKE_DONE.at 永不更新
+         （HANDOFF §10.7 明令禁止"播报把面板永久憋死"）。已经出过声，算成功。 */
+      guard = setTimeout(function () {
+        try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+        fin(started);
       }, utterGuardMs(text));
       try {
         var u = new SpeechSynthesisUtterance(text);
         u.lang = 'zh-CN';
         if (v) u.voice = v;
         u.rate = SPEECH_RATE; u.pitch = SPEECH_PITCH; u.volume = SPEECH_VOLUME;
-        u.onend = function () { fin(); };
-        u.onerror = function () { fin(); };   // 出错也 resolve，绝不卡死播报链
+        u.onstart = function () {
+          started = true;
+          try { clearTimeout(startGuard); } catch (e) { /* ignore */ }
+        };
+        u.onend = function () { fin(true); };
+        u.onerror = function () { fin(started); };  // 出错也 resolve，绝不卡死播报链
         window.speechSynthesis.speak(u);
-      } catch (e) { fin(); }
+      } catch (e) { fin(false); }
     });
   }
 
-  // 单句看门狗时长：按字数放余量（0.98 倍速念中文 ~4 字/秒），5s 下限、20s 上限
+  // 单段看门狗时长：按字数放余量（0.98 倍速念中文 ~4 字/秒），4s 下限、20s 上限
   function utterGuardMs(text) {
-    return Math.min(20000, Math.max(5000, 2500 + String(text).length * 350));
+    return Math.min(20000, Math.max(4000, 1500 + String(text).length * 400));
   }
 
   function muted() {
     try { return localStorage.getItem('werewolf.muted') === '1'; } catch (e) { return false; }
   }
 
-  // 播完（或被打断）才 resolve 的版本 —— 播报队列用它喂门控时钟（SPOKE_DONE.at）
+  /* 播完（或被打断）才 resolve 的版本 —— 播报队列用它喂门控时钟（SPOKE_DONE.at）。
+     返回值语义（2026-10-29）：
+       true  = 这句是**本地念完**的（调用方不要再走云端，否则会念两遍）
+       false = 本地没念出声 / 中途被拦（调用方应立即回落云端，**一个字都不能少**）
+     老版本返回 undefined，调用方按 `!== false` 兼容，所以这个改动不会打破旧调用。 */
   function speakAwait(text, interrupt) {
     return new Promise(function (resolve) {
-      if (muted() || !text) { resolve(); return; }
+      if (muted() || !text) { resolve(true); return; }   // 静音 = 有意不念，别回落云端
       var synth = window.speechSynthesis;
-      if (!synth) { resolve(); return; }
+      if (!synth) { resolve(false); return; }
       speakToken += 1;
       var my = speakToken;
       if (interrupt) { try { synth.cancel(); } catch (e) { /* ignore */ } }
@@ -173,10 +209,11 @@ window.JudgeVoice = (function () {
       var v = pickVoice();
       var parts = splitForSpeech(text);
       (function run(i) {
-        if (my !== speakToken) { resolve(); return; }   // 每步都查令牌：被新播报顶掉即退
-        if (i >= parts.length) { resolve(); return; }
-        utterOnce(parts[i], v).then(function () {
-          if (my !== speakToken) { resolve(); return; }
+        if (my !== speakToken) { resolve(true); return; }   // 被新播报顶掉：不算失败
+        if (i >= parts.length) { resolve(true); return; }
+        utterOnce(parts[i], v).then(function (ok) {
+          if (!ok) { resolve(false); return; }             // 一段没出声 ⇒ 整句交回云端
+          if (my !== speakToken) { resolve(true); return; }
           if (i < parts.length - 1) {
             pause(PHRASE_PAUSE_MS).then(function () { run(i + 1); });
           } else { run(i + 1); }
@@ -207,7 +244,7 @@ window.JudgeVoice = (function () {
       /* 失败留痕（与 rec.js 同一纪律）：5 分钟内出现过"看门狗超时"⇒ 这个环境
          的合成器不出声，直接走云端，不再逐句白等；TTL 过后允许再试一次
          （万一只是浏览器临时抽风）。 */
-      if (_brokenSince && Date.now() - _brokenSince < 5 * 60 * 1000) return false;
+      if (_brokenSince && Date.now() - _brokenSince < BROKEN_TTL_MS) return false;
       var s = window.speechSynthesis;
       if (!s || typeof s.getVoices !== 'function') return false;
       var vs = s.getVoices() || [];
@@ -249,11 +286,18 @@ window.JudgeVoice = (function () {
     var evs = ['pointerdown', 'touchstart', 'keydown'];
     function hit() {
       primeVoices();
+      _brokenSince = 0;              /* 手势到了 ⇒ 给本地通道一次重新证明自己的机会 */
       for (var i = 0; i < evs.length; i++)
         document.removeEventListener(evs[i], hit, true);
     }
     for (var i = 0; i < evs.length; i++)
       document.addEventListener(evs[i], hit, true);
+    /* 之后每次点击都把"降级"清掉：手机放桌上时，第一次播报常常发生在用户还没
+       碰屏幕之前（AI 局自动开局）—— 那次被拦不该让整局都哑。限流由 _brokenSince
+       自身保证：清掉后若仍然不出声，下一句会在 900ms 内重新置位。 */
+    document.addEventListener('pointerdown', function () {
+      if (_brokenSince) _brokenSince = 0;
+    }, true);
   })();
 
   // ② 离房收声：页面隐藏（切走/刷新/关闭）时立刻闭嘴
@@ -291,8 +335,14 @@ window.JudgeVoice = (function () {
         '音色 ' + (v ? (v.name + (v.localService ? '（本地）' : '（在线）')) : '（无中文音色）'),
         '音色表 ' + vs.length + ' 个 / 中文 ' + zh + ' 个'];
       if (muted()) bits.push('<span class="bad">被静音标记挡住（werewolf.muted=1）</span>');
+      /* 2026-10-29：手机用 http://<IP>:8000 打开时，部分浏览器/ROM 会**静默拒绝**
+         speechSynthesis（不报错、不回调）—— 表现就是"法官一句不念"，而云端兜底
+         在 MOCK 模式下只有 0.8 秒提示音。这一行让排查不用再猜。 */
+      if (typeof window.isSecureContext === 'boolean' && !window.isSecureContext) {
+        bits.push('<span class="bad">非安全上下文（http + IP）：换成 https 端口访问</span>');
+      }
       if (_brokenSince) {
-        var left = 5 * 60 * 1000 - (Date.now() - _brokenSince);
+        var left = BROKEN_TTL_MS - (Date.now() - _brokenSince);
         bits.push(left > 0
           ? ('<span class="bad">合成器不回调，' + Math.ceil(left / 1000) + 's 内全走云端</span>')
           : '看门狗已过 TTL');

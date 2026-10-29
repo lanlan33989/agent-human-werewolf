@@ -62,6 +62,7 @@
 | `suspicion` | — | 疑点面板数据 |
 | `night_node` / `night_plan` | — | 夜间剧本：当前节点与计划节点表（node/at/duration） |
 | `now` | object | **当前面板状态机**（重点，见下） |
+| `server_now` | float | 服务端当前时刻（`time.time()`，Unix 秒）。**只用于算时钟偏置**：`timeline[].at` 是服务端时间戳，前端必须用 `server_now − Date.now()/1000` 校正后再比较，否则手机与电脑差一分钟就会把法官台词全判成"过期"扔掉。⚠️ 别和上一行的 `now` 混了 |
 | `winner` | str|null | 终局胜负；非 null 即对局结束 |
 | `board` / `board_key` / `level` / `speech_mode` | — | 板子/档位/发言方式 |
 

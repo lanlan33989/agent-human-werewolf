@@ -1152,8 +1152,15 @@ function paintSeats(){
     /* 有"死讯那一句"就等它念到；没有（老服务端 / 老的死者）就立即暗。 */
     if (!_dh.marked[p.seat] || _dh.heard[p.seat]) addCls(p.seat + 1, 'dead');
   });
+  /* 2026-10-29（用户：做「当前发言玩家高亮」）：
+     · 遗言相位下 current_speaker 是 null —— 那时认 lastword_seat，
+       否则"出局的人正在留遗言"这一整段没有任何高亮。
+     · 只看 current_speaker 还不够：它在 VOTE / NIGHT 是 null，
+       不会误亮（这是对的 —— 夜里高亮该由 .acting 负责）。 */
+  var _spk = (PUBLIC.current_speaker != null) ? PUBLIC.current_speaker
+           : ((PUBLIC.lastword_seat != null) ? PUBLIC.lastword_seat : null);
   (PUBLIC.players || []).forEach(function(p){
-    if (PUBLIC.current_speaker === p.seat) addCls(p.seat + 1, 'speaking');
+    if (_spk === p.seat) addCls(p.seat + 1, 'speaking');
     else delCls(p.seat + 1, 'speaking');
   });
 }
