@@ -33,8 +33,12 @@ def check(name, ok, detail=""):
 
 # ================================================================ H1 阶段剧本
 
-check("★ 剧本表的顺序 = 语义（狼→预→女巫→守卫），顺序即语义",
-      steps.night_step_names() == ("wolf", "seer", "witch", "guard"),
+# ★ 2026-10-29 用户定：「执行顺序与播报顺序改为一致」
+#   老顺序 = 狼→预→女巫→守卫（纯"引擎好不好写"的顺序），跟法官嘴里的
+#   守卫→狼→女巫→预言家对不上 —— 玩家听到的顺序和实际生效的顺序不一致。
+#   现在两边逐字一致，断言的也就是播报顺序。
+check("★ 剧本表的顺序 = 语义（守卫→狼→女巫→预言家，且与播报顺序逐字一致）",
+      steps.night_step_names() == ("guard", "wolf", "witch", "seer"),
       str(steps.night_step_names()))
 
 _s = game_api.Session(humans=3, ais=3, seed=5, level="认真")

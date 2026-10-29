@@ -152,10 +152,18 @@ def run_night(seed=7, humans=4, ais=5, scale=0.12, verbose=False, skip_heal=Fals
         # ---- I4 续：until 在窗口内单调递减（只在"窗口已起算"时比：
         #      arm 那一下会把窗口整体推到 arm+W，那不是漂移，是定稿口径）
         u = now.get("until")
+        # ★ 2026-10-29：比较键加了 **node**。女巫两问是同一个人的两个节点
+        #   （witch_heal → witch_poison），跨节点时直到从"解药窗口剩余"跳回
+        #   "毒药窗口满窗" —— 那不是漂移。以前毒药窗口根本没有面板
+        #   （witch_asked 把第二问掐死了），所以这条撞不上；现在第二问真的出现，
+        #   必须按节点分段比，否则修好的东西反被判成回归。
         if u and last_until and now.get("seat") is not None and now.get("started"):
-            if last_until[0] == now.get("seat") and u > last_until[1] + 0.001:
-                stat["until_missing"] += 1          # 同一人窗口内倒着涨 = 漂移
-        last_until = (now.get("seat"), u) if (u and now.get("started")) else None
+            if (last_until[0] == now.get("seat")
+                    and last_until[1] == now.get("node")
+                    and u > last_until[2] + 0.001):
+                stat["until_missing"] += 1          # 同一人**同一节点**内倒着涨 = 漂移
+        last_until = ((now.get("seat"), now.get("node"), u)
+                      if (u and now.get("started")) else None)
         # ---- 假页面照 now 行动：**先 arm 再操作**
         #      真页面的 arm 发生在"法官念完那句 + 2 秒"；这个 harness 没有音频
         #      ⇒ 等价于页面"语音关掉"那一档 ⇒ 立即 arm（走的是同一个 `arm_window`）。
@@ -251,9 +259,16 @@ def report(title, st):
         #    （正常档是 1.0×：窗口一开就 arm）。
         #    ⚠️ 不用"采到 started 的那几拍"来判：假页面一 arm/一操作，待办当场消失，
         #    那几拍根本采不到（服务端本身是对的，已用 debug 单独证过）。
-        _short = [(n, g, w) for n, g, w in rows if g + 0.25 < w * 1.5]
+        #    ★ 2026-10-29：门槛从 1.5× 降到 1.0×。1.5× 是"半窗兜底"时代的判据
+        #      （`base + win*0.5`）；v4 起算权收回服务端之后，起点是**估算的
+        #      '念完 + 2s'**（`_nn_ready_mono`），跨度天然就是"念完偏移 + 整窗"。
+        #      缩窗跑（×0.12）时播报时长一起缩，那个偏移只剩 0.58 秒 —— 于是
+        #      "跨度 ≥ 1.5×窗口"在缩窗下根本不可能成立，而"人类拿得到一整窗"
+        #      这个**真正要保的性质**仍然成立（面板在 est 弹、窗口到 est+W）。
+        #      I9 要钉的是后者，不是那个过时的倍数。
+        _short = [(n, g, w) for n, g, w in rows if g + 0.25 < w]
         check(f"{title} I9 ★ **从不 arm**时每个节点都自己起了窗口"
-              f"（节点跨度 ≥ 1.5×窗口；正常档是 1.0×）", not _short, str(_short[:4]))
+              f"（节点跨度 ≥ 1×窗口；起点 = 估算念完时刻）", not _short, str(_short[:4]))
     if st.get("human_witch"):
         check(f"{title} I8 人类女巫在毒药窗口**一定有面板**"
               f"（第四起·续：解药答过/到点都不许掐死毒药那一问）",

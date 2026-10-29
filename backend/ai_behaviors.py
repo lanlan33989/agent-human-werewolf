@@ -146,6 +146,12 @@ def _step_ai_witch(self):
     # 空刀（无人被刀）也要走那一问，否则这一步永远做不完、夜晚结束不了。
     if g.knife_target() is None and not g.night.get("kill_settled"):
         return False
+    # ★ 2026-10-29（用户定：执行顺序与播报顺序一致）：**只在女巫自己的窗口里答**。
+    #   以前不判 stage，AI 女巫可能在守卫/狼人那一段就已经把药决定了 ——
+    #   玩家听到的是"女巫还没睁眼，AI 已经用了解药"。现在卡死在她的两问里。
+    #   `None` = 没过节点时钟（引擎单测 / 回放 / 脚本）⇒ 放行，保持老语义。
+    if g.night.get("stage") not in (None, "witch_heal", "witch_poison"):
+        return False
     witch = next((p for p in g.alive
                   if p.role is Role.WITCH and p.kind == "ai"), None)
     if witch is None:
@@ -309,6 +315,18 @@ def _ai_witch_act(self, seat: int):
     agent = self.agents[seat]
     view = g.get_view_for(seat)
 
+    st = g.night.get("stage")
+    # ★ 2026-10-29（用户定：两问是窗口、执行顺序跟播报走）：
+    #   解药窗口只答解药、毒药窗口只答毒药。以前是"一次调用里先解药再毒药"，
+    #   而 `night_heal` 一置 witch_asked，steps 那一步就算做完 ⇒ 后面毒药问
+    #   永远轮不到（她有解药就一辈子不毒人）。
+    if st == "witch_poison":
+        if g.night.get("poison_picked") or not potions["poison"]:
+            return False
+        return self._ai_witch_poison(seat)
+    if st == "witch_heal" and g.night.get("heal_picked"):
+        return False
+
     if victim not in (None, -1) and potions["heal"]:
         try:
             d, flag = _pre_decide(self, seat, "heal",
@@ -327,7 +345,7 @@ def _ai_witch_act(self, seat: int):
             g.night_decline(seat)
         return True
 
-    if potions["poison"]:
+    if st not in ("witch_heal", "witch_poison") and potions["poison"]:
         try:
             d, flag = _pre_decide(self, seat, "poison",
                                   lambda: agent.decide_target(view, self.speech, "poison"))
@@ -345,6 +363,32 @@ def _ai_witch_act(self, seat: int):
         return True
 
     g.night_decline(seat)
+    return True
+
+
+def _ai_witch_poison(self, seat: int):
+    """AI 女巫**毒药那一问**（2026-10-29 从 `_ai_witch_act` 拆出来的第二窗口）。
+
+    为什么必须单独一个入口：用户把两问定成了**两个窗口**（解药 15 秒、毒药 15 秒），
+    而原来是一次调用里"先解药、再毒药" —— 解药一问完 `night_heal` 就置了
+    witch_asked，steps 的 witch 那一步当场算做完 ⇒ 毒药这一支在同一次调用里
+    就被 `return True` 断掉，她的毒药一辈子用不出去。
+    模型挂了 / 没给出目标 ⇒ **不毒**（盲毒是误伤好人的主要来源，宁可空）。
+    """
+    g = self.game
+    agent = self.agents[seat]
+    view = g.get_view_for(seat)
+    try:
+        d, flag = _pre_decide(self, seat, "poison",
+                              lambda: agent.decide_target(view, self.speech, "poison"))
+    except Exception:                      # noqa: BLE001
+        d, flag = Decision(rejected=["模型调用失败"]), None
+    if flag == "wait":
+        return "wait"
+    if flag == "giveup" or d.target is None:
+        g.night_decline(seat)
+        return True
+    g.night_poison(seat, d.target)
     return True
 
 

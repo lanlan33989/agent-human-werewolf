@@ -190,6 +190,24 @@ import night_script  # noqa: E402
 night_script.set_win_scale(0.02)
 # （旧预设 BOARDS 已删：这里原本 import 它是为了取板子属性，迁移后不再需要）
 
+def _pump_until(sess, pred, limit=30.0):
+    """推进到 pred() 成立（★ 2026-10-29：夜间是**真窗口**，必须让墙上时间走）。
+
+    以前这些用例直接 `sess.auto_advance()` 一次就能推到女巫 —— 那是"执行顺序
+    wolf→seer→witch"且"一问即定"的老语义。现在顺序改成跟播报一致
+    （守卫→狼→女巫→预言家），而且每个窗口要真走满，所以必须循环推进。
+    """
+    t0 = _time.time()
+    while _time.time() - t0 < limit:
+        sess.drive(0.05)
+        try:
+            if pred():
+                return True
+        except Exception:            # noqa: BLE001
+            pass
+    return False
+
+
 # 造一局「女巫是人类」的场景：直接构造，再手动把 AI 的狼刀/验人做掉
 found = False
 for seed in range(200):
@@ -210,7 +228,10 @@ for seed in range(200):
     if seer:
         tgt2 = next(p.seat for p in gs.alive if p.seat != seer.seat)
         gs.night_investigate(seer.seat, tgt2)
-    pend = s.auto_advance()
+    # ★ 2026-10-29：顺序改成跟播报一致（守卫→狼→女巫→预言家）+ 窗口要真走完 ⇒
+    #   推进到**女巫自己的窗口**才该看到她，一次 auto_advance 推不到。
+    _pump_until(s, lambda: "heal" in gs.actions_for(wi.seat), 25)
+    pend = s.pending
     check("人类女巫在「狼刀+验人都已定」后仍被问到",
           pend == "human_night" and "heal" in gs.actions_for(wi.seat),
           f"pend={pend} acts={gs.actions_for(wi.seat)}")
@@ -392,9 +413,12 @@ for seed in range(300):
           g7.night.get("kill") is None and not g7.night.get("witch_asked"),
           f"seed={seed} kill={g7.night.get('kill')} witch_asked={g7.night.get('witch_asked')}")
     victim7 = g7.good_alive()[0].seat
-    g7.night["kill"] = victim7        # 等价于「人类狼已经刀完了」
+    # ★ 2026-10-29：等价于「人类狼已经刀完了」—— 用 wolf_agree_kill 而不是直接写
+    #   night["kill"]，因为现在刀口在**窗口关闭时**按点子结算，手写的值会被覆盖成空刀。
+    g7.wolf_agree_kill(victim7)
     s7.rng.random = lambda: 0.0      # 逼 AI 女巫一定救人
-    s7.auto_advance()
+    _pump_until(s7, lambda: g7.night.get("heal") is not None
+                or g7.phase is not Phase.NIGHT, 25)
     check("AI 女巫在狼刀之后真的能救人（被刀的人没出局）",
           g7.player(victim7).alive
           and g7.player(victim7).lives == make_board(2, 2).lives
@@ -450,16 +474,19 @@ for seed in range(400):
     if g_w1.night.get("kill") is not None or g_w1.night.get("witch_asked"):
         continue
     victim_w1 = next(p.seat for p in g_w1.alive if p.seat != w1.seat and not p.role.is_wolf)
-    g_w1.night["kill"] = victim_w1
+    g_w1.wolf_agree_kill(victim_w1)
     # 掷骰子这一路会说"救"—— 断言没走它，就等于证明决策真的来自模型
     s_w1.rng.random = lambda: 0.0
     s_w1.agents[w1.seat] = ScriptedAgent(w1.seat, ["不救"])
-    s_w1.auto_advance()
+    _pump_until(s_w1, lambda: g_w1.night.get("heal_picked")
+                or g_w1.phase is not Phase.NIGHT, 25)
     check("★ AI 女巫说「不救」就真的不救（走模型，不再掷骰子）",
           g_w1.night.get("heal") is None
-          and g_w1.night.get("witch_asked") is True
+          # ★ 2026-10-29：判据从 witch_asked 改成 heal_picked —— 两问两个窗口，
+          #   解药那一问的"不救"只算**这一问**表态，witch_asked 要到毒药窗口关闭。
+          and g_w1.night.get("heal_picked") is True
           and g_w1.private[w1.seat].potions["heal"] is True,
-          f"heal={g_w1.night.get('heal')} asked={g_w1.night.get('witch_asked')} "
+          f"heal={g_w1.night.get('heal')} picked={g_w1.night.get('heal_picked')} "
           f"药还在={g_w1.private[w1.seat].potions['heal']}")
     _found_w1 = True
     break
@@ -479,10 +506,12 @@ for seed in range(400):
     victim_w2 = next(p.seat for p in g_w2.alive if p.seat != w2.seat and not p.role.is_wolf)
     poison_w2 = next(p.seat for p in g_w2.alive
                      if p.seat != w2.seat and p.seat != victim_w2)
-    g_w2.night["kill"] = victim_w2
+    g_w2.wolf_agree_kill(victim_w2)
     g_w2.private[w2.seat].potions["heal"] = False      # 解药已用 ⇒ 只剩毒药可考虑
     s_w2.agents[w2.seat] = ScriptedAgent(w2.seat, [str(poison_w2 + 1)])
-    s_w2.auto_advance()
+    # ★ 2026-10-29：等**毒药窗口关闭**（扣药发生在这一刻），不是"一出结果就断言"。
+    _pump_until(s_w2, lambda: g_w2.night.get("poison_settled")
+                or g_w2.phase is not Phase.NIGHT, 25)
     check("★ AI 女巫给出座位号就真的用毒（改之前 AI 永远不毒人）",
           g_w2.night.get("poison") == poison_w2
           and g_w2.private[w2.seat].potions["poison"] is False,
@@ -1019,9 +1048,12 @@ try:
     # 取"最后一条请留遗言"会取到别人身上（第一版就这么误判过）。
     _i_lw = max([i for i, s in enumerate(_tl)
                  if s == f"{_hl + 1}号请留遗言"] or [-1])
+    # ⚠️ 2026-10-29：这里原来还要求遗言之后出现「天亮了…」—— 那条断言跟着
+    #   「天亮句挪进 resolve_night（先报天亮、再报死讯）」一起失效了：
+    #   本篇是**手工**从 DAWN 直接开遗言、没走 resolve_night，自然没有天亮句。
+    #   天亮与死讯的先后已由 ⑯③ 单独钉住，这里只锁"接回白天发言"。
     check("★ 遗言说完接回白天发言（不跳过发言直接进黑夜）",
           _i_lw >= 0
-          and any(s.startswith("天亮了") for s in _tl[_i_lw:])
           and any(s.endswith("请发言") for s in _tl[_i_lw:]),
           str(_tl[_i_lw:][:4]))
 finally:
@@ -1059,6 +1091,182 @@ check("★ 终局弹框有『这句是 20 秒前的』兜底（刷新/接回旧�
       "_lineAt" in _play and "> 20" in _play)
 check("★ 播报队列一放完就判一次终局（念完才弹，不等下一拍）",
       "renderEndPop" in _sui)
+
+# ================================================================ ⑯ 2026-10-29
+# 用户四条（原话）：
+#   1. 执行顺序与播报顺序改为一致
+#   2. 守卫/女巫窗口点击后不退出、时间结束前均可改、以结束时的选择为准；
+#      预言家增加确认键，点人后再确认才报结果，同样时间结束才退窗
+#   3. 夜间窗口与播报严格对齐；天亮时先播「天亮了」再播死讯
+#   4. 白天投票完成后等法官念完投票结果与出局信息，若未结束则喊「天黑请闭眼」，
+#      喊完才进夜间页面
+print("=" * 74)
+print("⑯ 夜间顺序统一 / 窗口内可改 / 预言家确认 / 面板等「天黑请闭眼」")
+print("=" * 74)
+
+import steps as _steps  # noqa: E402
+import night_driver as _ndrv  # noqa: E402
+import types as _types  # noqa: E402
+
+_ord = _steps.night_step_names()
+check("★ ① 夜间执行顺序 = 守卫→狼→女巫→预言家（与播报逐字一致）",
+      tuple(_ord) == ("guard", "wolf", "witch", "seer"), str(_ord))
+
+_nights = night_script.build({"guard", "wolf", "witch", "seer"}, 1)
+_first = {}
+for _nd0 in _nights:
+    _k = {"witch_heal": "witch", "witch_poison": "witch"}.get(_nd0["id"], _nd0["id"])
+    _first.setdefault(_k, _nd0["id"])
+_bcast = [k for k in ("guard", "wolf", "witch", "seer") if k in _first]
+check("★ ① 播报顺序也是 守卫→狼→女巫→预言家（同一张表推出来的）",
+      _bcast == list(_ord), str(_bcast))
+
+# ---- ②-1 守卫：点了不退出，以关窗时的选择为准 --------------------------
+from engine import Board as _B16, Game as _G16, Role as _R16  # noqa: E402
+
+_b16 = _B16(key="_t_win", label="测试板：守卫/女巫/预言家/狼/2 民",
+            roles=[_R16.GUARD, _R16.WITCH, _R16.SEER, _R16.WOLF,
+                   _R16.VILLAGER, _R16.VILLAGER], lives=1)
+_g16 = _G16(_b16, ["human"] * 6, seed=3)
+_g16.start()
+_guard = next(p for p in _g16.players if p.role is _R16.GUARD)
+_a, _b = [p.seat for p in _g16.players if p.seat != _guard.seat][:2]
+_g16.night_guard(_guard.seat, _a)
+_acts1 = _g16.actions_for(_guard.seat)
+check("★ ② 守卫点完人后**窗口不退出**（待办里仍有 guard）",
+      "guard" in _acts1 and not _g16.night.get("guard_settled"),
+      f"acts={_acts1} settled={_g16.night.get('guard_settled')}")
+_g16.night_guard(_guard.seat, _b)
+check("★ ② 窗口内可以改守护对象（以最后一次为准）",
+      _g16.night.get("guard") == _b, f"guard={_g16.night.get('guard')} 期望 {_b}")
+_g16.settle_guard_window()
+check("★ ② 关窗后才定案（guard_settled + 待办消失）",
+      _g16.night.get("guard_settled") and "guard" not in _g16.actions_for(_guard.seat),
+      f"acts={_g16.actions_for(_guard.seat)}")
+
+# ---- ②-2 女巫解药：关窗才扣药 -----------------------------------------
+_g16b = _G16(_b16, ["human"] * 6, seed=3)
+_g16b.start()
+_wit = next(p for p in _g16b.players if p.role is _R16.WITCH)
+_wolf0 = next(p for p in _g16b.players if p.role.is_wolf)
+_vic = next(p.seat for p in _g16b.good_alive() if p.seat != _wit.seat)
+_g16b.wolf_agree_kill(_vic)
+# ⚠️ 必须显式给 stage：`stage is None` 是"老调用方（引擎单测/回放/脚本）"的兼容路，
+#   那条路是**立刻扣药**的老语义。真机上 stage 由节点时钟写入（`_nn_open`）。
+_g16b.night["stage"] = "witch_heal"
+_g16b.night_heal(_wit.seat, _vic)
+check("★ ② 女巫救人后窗口不退出、**药还没扣**（改主意还来得及）",
+      "heal" in _g16b.actions_for(_wit.seat)
+      and _g16b.private[_wit.seat].potions["heal"] is True
+      and _g16b.night.get("heal_picked") is True,
+      f"acts={_g16b.actions_for(_wit.seat)} potion={_g16b.private[_wit.seat].potions['heal']}")
+_g16b.settle_witch_heal()
+check("★ ② 关窗那一刻才扣解药（且只扣一次）",
+      _g16b.private[_wit.seat].potions["heal"] is False
+      and _g16b.night.get("heal") == _vic,
+      f"potion={_g16b.private[_wit.seat].potions['heal']}")
+_g16b.night["heal"] = None
+_g16b.settle_witch_heal()          # 幂等：别再扣第二次（本来就没药了）
+check("★ ② settle_witch_heal 幂等（重复调用不改变已定案的选择）",
+      _g16b.night.get("heal") is None, str(_g16b.night.get("heal")))
+
+# ---- ②-3 预言家：点人 → 确认 → 才报结果 --------------------------------
+_g16c = _G16(_b16, ["human"] * 6, seed=3)
+_g16c.start()
+_seer = next(p for p in _g16c.players if p.role is _R16.SEER)
+_t = next(p.seat for p in _g16c.players if p.seat != _seer.seat)
+_g16c.night_investigate(_seer.seat, _t)
+_seer_acts = _g16c.actions_for(_seer.seat)
+check("★ ② 预言家点完人后**还没报结果**，且面板上多出「确认」",
+      "investigate" in _seer_acts and "confirm" in _seer_acts
+      and not _g16c.night.get("seer_confirmed"),
+      f"acts={_seer_acts}")
+try:
+    _g16c.night["investigate"] = None
+    _g16c.night_seer_confirm(_seer.seat)
+    _raised = False
+except RuntimeError:
+    _raised = True
+check("★ ② 没点人就不能确认（否则会「报出」一个不存在的验人结果）", _raised)
+_g16c.night_investigate(_seer.seat, _t)
+_res = _g16c.night_seer_confirm(_seer.seat)
+check("★ ② 确认这一刻才拿到结果（= 是否狼人）",
+      isinstance(_res, bool) and _g16c.night.get("seer_confirmed") is True
+      and _res == _g16c.player(_t).role.is_wolf, f"res={_res}")
+
+# ---- ③ 天亮 → 死讯（顺序）--------------------------------------------
+_g16d = _G16(_b16, ["human"] * 6, seed=3)
+_g16d.start()
+_v3 = next(p.seat for p in _g16d.good_alive())
+_g16d.wolf_agree_kill(_v3)
+_g16d.settle_wolf_window()
+_g16d.settle_guard_window()
+_g16d.settle_witch_heal()
+_g16d.settle_witch_poison()
+_g16d.settle_seer_window()
+_g16d.resolve_night()
+_i_light = next((i for i, s in enumerate(_g16d.public_log) if "天亮了" in s), -1)
+_i_next = _g16d.public_log[_i_light + 1] if _i_light >= 0 else ""
+check("★ ③ 天亮时法官**先**说「天亮了」，下一句才是死讯（昨夜…出局/平安夜）",
+      _i_light >= 0 and ("出局" in _i_next or "倒牌" in _i_next or "平安夜" in _i_next),
+      f"light@{_i_light} next={_i_next!r}")
+
+# ---- ④ 面板起算点必须排到「天黑请闭眼」之后 -----------------------------
+# 现场（用户实测的那一段）：投票结果 + 出局信息刚进队列，引擎紧接着就开了夜。
+# 这三句都是**法官播报**（t == "sys"、没有 node 字段），客户端要串行念完。
+# 老口径只累加带 node 的夜间剧本句 ⇒ 起算点从"天黑请闭眼"那一刻开始算，
+# 白天那几句根本没计入 ⇒ 面板在白天播报还没念完时就弹（这正是用户第 4 条）。
+_scale_saved4 = night_script.win_scale()
+night_script.set_win_scale(0.5)          # 放大到能明显区分两种口径
+try:
+    _t0 = 1_700_000_000.0
+    _GAP = night_script.GAP
+    _fake = _types.SimpleNamespace(timeline=[
+        {"t": "sys", "s": "投票结果：2号、3号、4号投给5号；5号投给2号；6号弃票。",
+         "voice": "Neil", "ts": _t0},
+        {"t": "sys", "s": "5号 被投出并出局。", "voice": "Neil", "ts": _t0 + 0.01},
+        # 玩家长发言（t == "say"）：几百字，绝不许进串行累加，否则起算点被推到一分钟外
+        {"t": "say", "s": "我" * 400, "seat": 1, "voice": "", "ts": _t0 + 0.02},
+        {"t": "sys", "s": "第 2 夜，天黑请闭眼。", "voice": "Neil",
+         "delay": _GAP, "ts": _t0 + 0.03},
+        {"t": "sys", "s": "守卫请睁眼，请选择今晚你要守护的人", "voice": "Neil",
+         "delay": _GAP, "node": "guard", "at": _t0 + 0.04},
+    ])
+    _est = _ndrv._nn_ready_mono(_fake, "guard")
+    # `_nn_ready_mono` 回的是 **monotonic**，而时间线里的 `ts/at` 是墙上时间 ——
+    # 换算回墙上再比，不然比出来是 -17 亿秒（第一次写就是这么错的）。
+    _est_wall = (_est - _time.monotonic() + _time.time()) if _est is not None else None
+    _sc4 = night_script.win_scale()
+    _dur = lambda s: _sc4 * (0.5 + len(s) / 3.4)   # 与实现同源的口径（含缩放）
+    _s_vote = "投票结果：2号、3号、4号投给5号；5号投给2号；6号弃票。"
+    _s_dead = "5号 被投出并出局。"
+    _span_day = _dur(_s_vote) + _dur(_s_dead)    # 白天两句加起来（scale 0.5 ⇒ ≈6.2s）
+    _d = (_est_wall or 0.0) - _t0
+    check("★ ④ 白天「投票结果 / 出局信息」也算进播报时长（面板不许插队）",
+          _est is not None and _d >= _span_day,
+          f"est 只比开夜晚 {_d:.2f}s，白天两句就要念 {_span_day:.2f}s")
+    check("★ ④ 起算点也排在「天黑请闭眼」念完之后",
+          _est is not None and _d > _span_day + 3.0,
+          f"est-t0={_d:.2f}s（+3s = GAP 留白）")
+    check("★ ④ 玩家长发言（t=say）**不参与**累加（否则一夜的面板会被推后一分钟）",
+          _est is not None and _d < 20,
+          f"est-t0={_d:.2f}s")
+finally:
+    night_script.set_win_scale(_scale_saved4)
+
+# ---- ④ 前端：确认键 / 关窗留面板 -------------------------------------
+check("★ ② 前端有「确认验人」这颗键（点人之后才出现）",
+      "确认验人" in _tui)
+check("★ ② 前端把 confirm 当独立动作提交（不是选中即报结果）",
+      "'seer_confirm'" in _tui or "seer_confirm" in _tui)
+check("★ ② 后端把 seer_confirm 映射成 night_seer_confirm + 播「他是这个」",
+      "night_seer_confirm" in (BASE / "backend" / "game_api.py").read_text(encoding="utf-8"))
+check("★ ③ 前端认得 `now.closing`（闭眼句还在念时窗口不许先收）",
+      "NOW.closing" in _tui)
+check("★ ③ 后端把 `closing` 下发给前端（now_state 的 none 分支）",
+      '"closing"' in (BASE / "backend" / "game_api.py").read_text(encoding="utf-8"))
+check("★ ③ 节点推进要等闭眼句念完（_nn_closing 闸）",
+      "_nn_closing" in (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
 
 print("=" * 74)
 total = len(PASS) + len(FAIL)

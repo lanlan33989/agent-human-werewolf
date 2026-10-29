@@ -396,6 +396,14 @@ async function tick(){
                    at: Date.now() };
     } else if (top && typeof top.seconds_left === 'number'){
       NIGHT_CD = { left: top.seconds_left, at: Date.now() };
+    } else if (NOW && NOW.closing && WHEEL && WHEEL.forNode === NOW.closing){
+      /* ★ 2026-10-29（用户定：「喊完『守卫请闭眼』后立即退出守卫窗口」）：
+         窗口关闭的**同一刻**产生闭眼句，服务端这时把 `closing` 下发下来。
+         以前这一拍 NIGHT_CD 变 null ⇒ 面板当场收掉，而闭眼句还在念
+         —— 听感就是"窗口比闭眼句退得早"。现在留一个 `left:0` 的空窗口，
+         面板保持显示（读秒停在 0），等服务端推进节点后自然收。
+         ⚠️ 只留**自己那一段**：`closing` 与当前面板的节点不同就不留。 */
+      NIGHT_CD = { left: 0, at: Date.now() };
     } else {
       NIGHT_CD = null;
     }
@@ -1163,12 +1171,23 @@ function renderNightDial(seatNo, v, acts){
   } else if (act === 'guard'){
     extra.textContent = '空守';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'guard', -1, null); };
+  /* ★ 2026-10-29（用户定）：预言家的**确认键**要排在"不验"前面 ——
+     点了号码之后这一格必须变成「确认验人」，否则他永远没法让结果出来
+     （服务端 `seer_confirm` 才报结果）。狼的 confirm 仍叫「确定」。 */
+  } else if (acts.indexOf('confirm') >= 0){
+    /* ⚠️ 动作名**不能两个角色共用一个**（2026-10-29 实机前自查出来的）：
+       狼的「确定」= 服务端 `confirm`（night_confirm），预言家的「确认验人」=
+       服务端 `seer_confirm`（night_seer_confirm）。统一发 'confirm' 的话，
+       人类预言家一点确认就撞 `PermissionError: 不是狼人，不能确认刀口`。 */
+    var _isWolfConfirm = (acts.indexOf('kill') >= 0);
+    extra.textContent = _isWolfConfirm ? '确定' : '确认验人';
+    extra.onclick = function(ev){
+      ev.stopPropagation();
+      submit(seatNo, _isWolfConfirm ? 'confirm' : 'seer_confirm', null, null);
+    };
   } else if (act === 'investigate'){
     extra.textContent = '不验';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'pass', null, null); };
-  } else if (acts.indexOf('confirm') >= 0){
-    extra.textContent = '确定';
-    extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'confirm', null, null); };
   } else if (acts.indexOf('shoot') >= 0){
     extra.textContent = '不开枪';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'pass', null, null); };
@@ -1960,7 +1979,11 @@ async function submit(seatNo, action, target, text){
     PUBLIC = d.public;
     paintSeats(); renderLog(); speakQueue();
 
-    if (action === 'investigate'){
+    if (action === 'confirm' || action === 'seer_confirm'){
+      /* ★ 2026-10-29（用户定）：预言家**先点人、再点确认**，确认的这一刻才报结果。
+         所以点号码走的是 investigate（只是"我看的是谁"，服务端不报结果），
+         结果展示挪到这里。confirm 请求本身不带 target ⇒ 用本地选中的号。 */
+      if (target == null) target = WHEEL.pick;
       var v2 = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
       /* 2026-10-07 第二期：记下这次验人的结果 —— 播报「他是这个」时，
          圆盘上要出大大的好/坏标识（3 秒后消失）。只有本人看得到。 */
@@ -1991,8 +2014,10 @@ async function submit(seatNo, action, target, text){
        倒计时照旧接着走（NIGHT_CD 没被清），窗口结束时服务端才定案。
        · 只对 kill（以及 kill 屏上的"取消"）这么做，其余动作照旧收屏。
        · 面板没开（WHEEL.mode 不是 act）就别硬画 —— 交给下一拍 tick。 */
-    if ((action === 'kill' || (action === 'clear' && WHEEL.act === 'kill'))
-        && WHEEL.mode === 'act' && WHEEL.seatNo === seatNo){
+    if (PUBLIC.phase === 'night' && WHEEL.mode === 'act'
+        && WHEEL.seatNo === seatNo
+        && ['kill', 'guard', 'heal', 'poison', 'investigate', 'clear',
+            'pass'].indexOf(action) >= 0){
       try {
         MYVIEW = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
         if (PUBLIC.phase === 'night'){

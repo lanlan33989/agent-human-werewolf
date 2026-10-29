@@ -137,6 +137,14 @@ check("不能手动操作 AI 座位（返回 400）", r.status_code == 400, str(
 
 def auto_play(gid: str, human_seats, max_rounds: int = 120):
     """一个"机器人真人"：每次看到自己能做什么就做什么。"""
+    import time as _t                          # 本地导入：本函数在文件顶部就被调用
+    # ★ 2026-10-29（用户定：夜间窗口点完**不退出**，时间结束才定案）：
+    #   以前"点一下就从这个窗口的待办里消失"，机器人一回合就够；
+    #   现在人在整个窗口里都还是 pending，机器人每回合都会重复点同一个节点，
+    #   几次就把 max_rounds 烧光（实测 classic6 seed=3 卡在白天）。
+    #   ⇒ 每个夜间窗口最多动 3 次（狼：点+确认；预言家：点+确认；其余 1 次），
+    #     之后就按墙上时间等这个窗口走完。
+    _nd = {"node": None, "n": 0}
     for _ in range(max_rounds):
         pub = client.get(f"/api/game/{gid}/public").json()
         if pub["phase"] == "ended":
@@ -167,6 +175,13 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
             continue
 
         if pending == "human_night":
+            _node = pub.get("night_node")
+            if _nd["node"] != _node:
+                _nd["node"] = _node
+                _nd["n"] = 0
+            if _nd["n"] >= 3:
+                _t.sleep(0.25)                 # 这一窗已经动过 —— 等墙钟走完，别再重复点
+                continue
             acted = False
             for seat in human_seats:
                 v = client.get(f"/api/game/{gid}/seat/{seat}").json()
@@ -186,6 +201,15 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
                     acted = True
                     break
                 if "confirm" in acts and _pointed:
+                    client.post(f"/api/game/{gid}/act",
+                                json={"seat": seat, "action": "confirm"})
+                    acted = True
+                    break
+                # ★ 2026-10-29（用户定）：预言家点完人还要**确认**才报结果
+                #   （can_act 里同时有 investigate + confirm 就说明"点过、等确认"）。
+                #   少了这一步，机器人会一直重复"点人"，窗口永远等不到结果。
+                if ("confirm" in acts and "investigate" in acts
+                        and "kill" not in acts):
                     client.post(f"/api/game/{gid}/act",
                                 json={"seat": seat, "action": "confirm"})
                     acted = True
@@ -211,6 +235,8 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
                                 json={"seat": seat, "action": "pass"})
                     acted = True
                     break
+            if acted:
+                _nd["n"] += 1
             if not acted:
                 # 人类没有夜间动作可做（例如村民），推一下让 AI 继续
                 for seat in human_seats:
@@ -244,15 +270,19 @@ for seed in range(1, 11):
 check("mini4 连跑 10 局全部正常结束", ok_runs == 10, f"{ok_runs}/10")
 
 ok_runs6 = 0
+_bad6 = []
 for seed in range(1, 11):
     r = client.post("/api/game/new", json={"humans": 3, "ais": 3, "seed": seed})
     if r.status_code != 200:
+        _bad6.append((seed, f"new={r.status_code}"))
         continue
     d = r.json()
     f = auto_play(d["gid"], d["human_seats"])
     if f.get("phase") == "ended":
         ok_runs6 += 1
-check("classic6 连跑 10 局全部正常结束", ok_runs6 == 10, f"{ok_runs6}/10")
+    else:
+        _bad6.append((seed, f"phase={f.get('phase')} pending={f.get('pending')}"))
+check("classic6 连跑 10 局全部正常结束", ok_runs6 == 10, f"{ok_runs6}/10 {_bad6}")
 
 # ================================================================ 404
 
@@ -1085,11 +1115,20 @@ for _sd in range(1, 16):
         break
 check("（前提）造出「人类是女巫」的局（否则下面几条测不到东西）", _sw is not None)
 if _sw is not None:
+    # ★ 2026-10-29（用户定：执行顺序与播报一致 + 每个窗口独立）：女巫**只在她的窗口**
+    #   拿到待办 —— 以前 `actions_for` 不分窗口，狼刀还没定案就先把 heal/poison 发给她。
+    #   所以这里先把她推到解药那一屏，再伪造"狼空刀"。
+    _t7a = _tm.monotonic()
+    while _tm.monotonic() - _t7a < 30:
+        if _ga.night_driver._nn_cur(_sw) == "witch_heal":
+            break
+        _sw.drive(0.1)
+        _tm.sleep(0.05)
     _sw.game.night["kill"] = -1                 # 伪造"狼空刀"：刀已定案、但没有刀口
     _sw.game.night["kill_settled"] = True
     _acts7 = _sw.game.actions_for(_h7.seat)
     check("★ 空刀：女巫**照常**拿到解药问（面板照旧，只是按钮该置灰）",
-          "heal" in _acts7 and "poison" in _acts7, str(_acts7))
+          "heal" in _acts7, f"node={_ga.night_driver._nn_cur(_sw)} acts={_acts7}")
     _rej7 = ""
     try:
         _sw.game.night_heal(_h7.seat, _h7.seat)
@@ -1137,17 +1176,26 @@ _ok8 = (bool(_ok8)
         and (_sc8.game.night.get("wolf_points") or {}).get(_w8.seat) is None
         and not _sc8.game.night.get("kill_settled"))
 # 女巫：撤回 = **药还回来**（撤回 ≠ 用掉）
+# ★ 2026-10-29（用户定：窗口内可改、关窗才结算）：这条现在分两半验 ——
+#   ① 窗口内点毒：只记"选了谁"，药还在；这一拍撤回必须清干净、药仍是满的；
+#   ② 关窗（settle_witch_poison）：这才是真的用掉。
 _wt8 = next((p for p in _sc8.game.players if p.role.value == "witch"), None)
 if _wt8 is not None:
     _sc8.game.night["kill"] = _t8
     _sc8.game.night["kill_settled"] = True
+    _sc8.game.night["stage"] = "witch_poison"     # 摆到毒药那一屏
     _sc8.game.night_poison(_wt8.seat, _t8)
-    _used8 = not _sc8.game.private[_wt8.seat].potions["poison"]
+    _picked8 = _sc8.game.night.get("poison") == _t8
     _sc8.game.night_clear(_wt8.seat)
-    _ok8 = (bool(_ok8) and bool(_used8)
+    _ok8 = (bool(_ok8) and bool(_picked8)
             and _sc8.game.private[_wt8.seat].potions["poison"]
             and _sc8.game.night.get("poison") is None
             and not _sc8.game.night.get("witch_asked"))
+    _sc8.game.night_poison(_wt8.seat, _t8)
+    _sc8.game.settle_witch_poison()               # 关窗 → 这一下才真的扣药
+    _ok8 = (bool(_ok8)
+            and _sc8.game.private[_wt8.seat].potions["poison"] is False
+            and _sc8.game.night.get("poison") == _t8)
 # 顺带把 **API 那一层** 也走一遍：`action=clear` 要认得（否则前端一取消就撞「未知动作」）。
 # 真人可能是村民（撤无可撤 ⇒ 引擎报的是权限错，不是"未知动作"）——两种情况都算通过。
 _s9 = _ga.Session(humans=1, ais=3, board=_BW4, seed=3)

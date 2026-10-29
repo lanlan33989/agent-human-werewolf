@@ -652,6 +652,82 @@ class Game:
         self.night["kill"] = final
         self.night["kill_settled"] = True
 
+    # ============================================================ 窗口结算
+    #
+    # ★ 2026-10-29（用户定）：「夜间窗口点击之后窗口先不退出，在时间结束前均可
+    #   更改选择，按最终时间结束时的选择为准」。
+    #   ⇒ 点选只写"当前选择"，**扣药/定案/置 asked 一律推迟到窗口关闭**。
+    #   四个 settle 由驱动器在节点关闭那一刻调用（`night_driver._nn_close`），
+    #   与 `settle_wolf_window` 同一个位置、同一个语义。
+
+    def settle_guard_window(self) -> None:
+        """守卫窗口关闭：以此刻的 `night["guard"]` 为准（None = 空守）。"""
+        if self.night.get("guard_settled"):
+            return
+        self.night["guard_asked"] = True
+        self.night["guard_settled"] = True
+
+    def settle_witch_heal(self) -> None:
+        """解药窗口关闭：**这一刻才扣药**（窗口内点错了还能改/取消）。"""
+        n = self.night
+        if n.get("heal_settled"):
+            return
+        tgt = n.get("heal")
+        if tgt is not None and tgt != -1:
+            for p in self.players:
+                if p.role is Role.WITCH:
+                    self.private[p.seat].potions["heal"] = False
+                    break
+        n["heal_settled"] = True
+
+    def settle_witch_poison(self) -> None:
+        """毒药窗口关闭：扣毒药，并把"女巫这一夜问完了"的旗子立在这里。
+
+        `witch_done` 是 steps 表里 witch 那一步的判据 —— 它必须等到**毒药窗口**
+        结束（而不是解药一问完），否则毒药那一支永远轮不到 AI 决策。
+        """
+        n = self.night
+        if n.get("poison_settled"):
+            return
+        tgt = n.get("poison")
+        if tgt is not None and tgt != -1:
+            for p in self.players:
+                if p.role is Role.WITCH:
+                    self.private[p.seat].potions["poison"] = False
+                    break
+        n["poison_settled"] = True
+        n["witch_asked"] = True
+        n["witch_done"] = True
+
+    def settle_seer_window(self) -> None:
+        """预言家窗口关闭：到点没验 = 今晚不验（investigate = -1 收尾）。"""
+        n = self.night
+        if n.get("seer_settled"):
+            return
+        if n.get("investigate") is None:
+            n["investigate"] = -1
+        n["seer_settled"] = True
+
+    def night_seer_confirm(self, actor: int) -> Optional[bool]:
+        """预言家点「确认」—— ★ 2026-10-29（用户定）：点人之后再点确认，
+        确认的这一刻报出结果；窗口照旧走到时间结束才退。
+
+        为什么"确认"必须是一个独立动作：`investigate` 现在只表示"我看的是谁"
+        （窗口内还能改），只有确认才把它定下来。没有这一步，前端分不清
+        "选中"和"验过了"，而且改点数会把已经报过的结果作废。
+        """
+        self._require_phase(Phase.NIGHT)
+        p = self.player(actor)
+        if p.role is not Role.SEER:
+            raise PermissionError(f"{p.display} 不是预言家")
+        tgt = self.night.get("investigate")
+        if tgt is None:
+            raise RuntimeError("还没选要验谁，不能确认")
+        if tgt == -1:
+            raise RuntimeError("今晚已经放弃验人")
+        self.night["seer_confirmed"] = True
+        return self.private[actor].investigations.get(tgt)
+
     def wolf_force_settle(self) -> None:
         """兜底：协商来回太多时让狼队**停止协商**（不是定案）。
 
@@ -720,7 +796,15 @@ class Game:
         #    （驱动器到点注入 pass）或毒药真被用掉时才置位。
         # ⚠️ 2026-10-07 更正：无条件置位（夜能不能收尾看它）—— 同 `night_decline`。
         self.night["witch_asked"] = True
-        self.private[actor].potions["heal"] = False
+        # ★ 2026-10-29（用户定）：窗口内**不扣药** —— 点了还能改（点别的 / 再点
+        #   同一个取消），真正扣药发生在窗口关闭时（`settle_witch_heal`）。
+        #   扣早了的话 potions["heal"] 一假，`_actions_available` 立刻不再列 heal
+        #   ⇒ 面板当场消失，跟"时间结束前都能改"直接冲突。
+        self.night["heal_picked"] = True
+        # 兼容：**不经节点时钟**的调用方（引擎单测 / 回放 / 脚本）没有 `stage`，
+        # 它们没有"窗口关闭"这个时刻，所以按老语义立刻扣药。
+        if self.night.get("stage") is None:
+            self.private[actor].potions["heal"] = False
 
     def night_poison(self, actor: int, target: int) -> None:
         """
@@ -743,7 +827,9 @@ class Game:
         self._require_alive(target)
         self.night["poison"] = target
         self.night["witch_asked"] = True
-        self.private[actor].potions["poison"] = False
+        self.night["poison_picked"] = True
+        if self.night.get("stage") is None:      # 兼容老调用方，见 night_heal
+            self.private[actor].potions["poison"] = False
 
     def night_decline(self, actor: int) -> None:
         """女巫决定本轮不用药。必须是显式动作，否则夜晚永远结束不了。"""
@@ -757,11 +843,21 @@ class Game:
         #   女巫既不能用药也不能放弃，witch_asked 永远置不上，夜晚结束不了。
         if not self.night.get("kill_settled") and self.knife_target() is None:
             raise RuntimeError("狼人还没刀人，女巫不能睁眼")
-        # ⚠️ 2026-10-07 更正：无条件置位（夜能不能收尾看它）。
-        #    "用了/不用解药，毒药那一问都要照常走"（用户定）的正确改法是**节点感知**
-        #    （毒药窗口的收口由驱动器以 `stage="poison"` 调用），前两版都把夜搞卡了
-        #    （实测），已回退 —— 见 §10.7 第九起。
-        self.night["witch_asked"] = True
+        # ★ 2026-10-29（用户定：两问 = 两个窗口）：这里必须**按窗口分开记**。
+        #   解药窗口说"不用"只是解药那一问表态，毒药那一问还得照常走
+        #   （所以不置 witch_asked）；witch_asked / witch_done 一律挪到毒药窗口
+        #   关闭时（`settle_witch_poison`）。一个旗子糊两问的老写法，
+        #   正是"她用了解药就再也不会毒人"的根因。
+        st = self.night.get("stage")
+        if st == "witch_poison":
+            self.night["witch_asked"] = True
+            self.night["poison_picked"] = True
+        elif st == "witch_heal":
+            self.night["heal_picked"] = True
+        else:
+            # 兼容老调用方（没有 stage）：一次 decline 就算这一夜问完了，与改之前一致。
+            self.night["witch_asked"] = True
+            self.night["heal_picked"] = True
 
     def night_clear(self, actor: int) -> None:
         """撤回**本窗口**刚做的那个动作（2026-10-07 定稿交互：轮盘"再点同一个号码 = 取消"）。
@@ -894,6 +990,14 @@ class Game:
         """
         self._require_phase(Phase.NIGHT)
         events: List[str] = []
+        # ★ 2026-10-29（用户定）：「天亮时，法官**先**播报『天亮了』，**再**播报
+        #   昨夜死亡信息」。这两句以前是反的（死讯在 resolve_night，
+        #   "天亮了…"在 open_discuss，而遗言相位还夹在中间）。
+        #   现在天亮句落到这里，死讯紧随其后 —— 顺序稳定成"天亮 → 死讯 → 遗言"。
+        # 文案与改之前**一字不差**（原来在 open_discuss 里说「天亮了，请睁眼。从 X 号
+        # 开始依次发言。」）—— 用户要的只是**顺序**，没让改措辞；而且那句的前半截
+        # 一旦改字，前端的整队播报与"念到天亮"的对齐都要跟着动。
+        self.log("天亮了，请睁眼。")
 
         target = self.knife_target()          # 空刀(-1) ⇒ None（不许流进 _damage）
         guarded = self.night.get("guard")
@@ -1122,7 +1226,9 @@ class Game:
         #    （被女巫救 / 被守卫守住 / 空刀）时，这一句就把"谁是目标、有人救了他"
         #    公开了（见 _neutral_anchor）。现在两种情况的文案完全一致，
         #    外部看不出区别。
-        self.log(f"天亮了，请睁眼。从 {seats[0] + 1} 号开始依次发言。")
+        # ★ 2026-10-29：天亮那一句已经挪到 `resolve_night`（先天亮、再死讯）。
+        #   这里只剩轮转起点，**不许**再带"天亮了"—— 否则全场听两遍。
+        self.log(f"从 {seats[0] + 1} 号开始依次发言。")
         return seats
 
     def current_speaker(self) -> Optional[int]:
@@ -1933,6 +2039,14 @@ class Game:
 
         if self.phase is Phase.NIGHT:
             acts = []
+            # ★ 2026-10-29：列表的判据从"表态过没有"改成"**窗口关没关**"
+            #   （`*_settled`）。表态过（guard_asked / witch_asked / investigate）
+            #   只管 steps 表的"这一步做完没有"，不再影响界面 —— 否则守卫一点号码、
+            #   guard_asked 一置位，面板当场消失，用户说的"时间结束前都能改"就做不到。
+            # ⚠️ `stage` 由驱动器在节点打开时写入（`_nn_open`）：引擎不看时钟，
+            #   只读这个"现在问的是哪一问"的标记。女巫两问必须靠它分开，
+            #   否则解药窗口一开就把毒药也列出来。
+            st = self.night.get("stage")
             if p.role.is_wolf and not self.night.get("kill_settled"):
                 acts.append("kill")
                 # 点过之后还要"确定"。多狼局里不确认 = 没表态；
@@ -1941,12 +2055,27 @@ class Game:
                 if (len([q for q in self.alive if q.role.is_wolf]) > 1
                         and seat not in (self.night.get("wolf_confirm") or [])):
                     acts.append("confirm")
-            if p.role is Role.SEER and self.night.get("investigate") is None:
-                acts.append("investigate")
+            # ★ 2026-10-29（用户定）：**列表的判据从"表态过没有"改成"窗口关没关"**
+            #   （`*_settled`）。表态过（guard_asked / witch_asked / investigate）
+            #   只管 steps 表的"这一步做完没有"，不再影响界面 —— 否则守卫一点号码、
+            #   guard_asked 一置位，面板当场消失，用户说的"时间结束前都能改"就做不到。
+            # ⚠️ `stage` 由驱动器在节点打开时写入（`_nn_open`）：引擎不看时钟，
+            #   只读这个"现在问的是哪一问"的标记。女巫两问必须靠它分开，
+            #   否则解药窗口一开就把毒药也列出来。
+            if p.role is Role.SEER and not self.night.get("seer_settled"):
+                # 先点人、再点确认（2026-10-29 用户定）：没点过只有 investigate；
+                # 点过没确认 ⇒ 两个都给（还能改点数 + 确认）；
+                # **确认之后什么都不列**（结果已经报了，改点数没有意义），
+                # 面板由前端的结果屏挂到「预言家请闭眼」念完。
+                if not self.night.get("seer_confirmed"):
+                    acts.append("investigate")
+                    # -1 = 已经"不验"了，没有可确认的目标
+                    if self.night.get("investigate") not in (None, -1):
+                        acts.append("confirm")
             # 守卫：每晚都要守一个人（标准规则里没有"今晚不守"这个选项）。
             # guard_asked 与 witch_asked 同理：不显式标记"问过了"，
             # 人类守卫会被整个跳过、夜晚也结束不了。
-            if p.role is Role.GUARD and not self.night.get("guard_asked"):
+            if p.role is Role.GUARD and not self.night.get("guard_settled"):
                 acts.append("guard")
             # 女巫必须**在狼人刀完之后**才睁眼。这是规则，也是她在结构上唯一
             # 「事后救人」的方式 —— 狼没刀之前，她根本拿不到死者是谁。
@@ -1959,7 +2088,8 @@ class Game:
             #    **第二窗**：解药那一问表过态之后（witch_asked 已置位），只要毒药还在、
             #    还没用，就在毒药它自己的窗口里列出来。收尾由 `night_decline(stage=
             #    "poison")` 负责（毒药窗口到点注入）—— 不会再卡夜。
-            if p.role is Role.WITCH and not self.night.get("witch_asked"):
+            if p.role is Role.WITCH:
+                # ⚠️ 外层**不能**限定 stage：`stage is None` 是老调用方那条兼容路。
                 # 🔴 2026-10-07：判据从"有刀口"改成"**刀已定案**" —— 空刀也是一种
                 #   定案（kill_settled=True、kill=-1）。定稿要求"女巫没药也要走满
                 #   「你要使用毒药吗？」那 15 秒"，空刀同理；只认刀口的话，空刀这一夜
@@ -1971,11 +2101,29 @@ class Game:
                     #    "狼空刀，人类女巫照常走解药播报和面板流程，只是解药按钮置灰"。
                     #    所以这一屏由**前端置灰**、引擎在 night_heal 里兜底拒绝；
                     #    不列出来的话那一屏整个消失（那是我第一版做窄了）。
-                    if self.private[seat].potions["heal"]:
-                        acts.append("heal")
-                    if self.private[seat].potions["poison"]:
-                        acts.append("poison")
-                    acts.append("pass")
+                    # ★ 2026-10-29（用户定）：解药 / 毒药是**两个窗口**，各自收口
+                    #   （`heal_settled` / `poison_settled`）。以前一个 witch_asked
+                    #   糊两问，点了或放弃了解药就把毒药那问一起掐死。
+                    if st == "witch_poison":
+                        if (not self.night.get("poison_settled")
+                                and self.private[seat].potions["poison"]):
+                            acts.append("poison")
+                            acts.append("pass")
+                    elif st == "witch_heal":
+                        if (not self.night.get("heal_settled")
+                                and self.private[seat].potions["heal"]):
+                            acts.append("heal")
+                            acts.append("pass")
+                    elif st is None:
+                        # 兼容：**不经节点时钟**的调用方（引擎单测 / 回放 / 脚本）
+                        # 没有 `stage` ⇒ 退化成改之前的口径（两问一起列、witch_asked
+                        # 一置就不再问）。正常对局永远走上面两个分支。
+                        if not self.night.get("witch_asked"):
+                            if self.private[seat].potions["heal"]:
+                                acts.append("heal")
+                            if self.private[seat].potions["poison"]:
+                                acts.append("poison")
+                            acts.append("pass")
             return acts
 
         if self.phase is Phase.DISCUSS and self.current_speaker() == seat:

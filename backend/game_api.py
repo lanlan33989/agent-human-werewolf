@@ -419,6 +419,10 @@ class Session:
                 # 在外部（harness / 排查）就观察不到。见 `_smoke-night-live.py` 的 I9。
                 return {"kind": "none", "seat": None, "node": cur, "until": None,
                         "need": None, "why": "这一节没有人类要点",
+                        # ★ 2026-10-29：`closing` = 这个节点的**闭眼句还在念**
+                        #   （窗口已关、节点还没推进）。前端据此把面板留到那句话
+                        #   念完再收 —— 用户要的是"喊完『守卫请闭眼』才退出窗口"。
+                        "closing": (getattr(self, "_nn_closing", None) or {}).get("node"),
                         "started": getattr(self, "human_wait_since", None) is not None}
             # 🔴 2026-10-07 第四起（用户实机："倒计时节点开始过早，没按我一开始约定的来"）：
             #    **定稿口径 = 倒计时从"法官念完该角色那句 + 2 秒"起算**
@@ -694,6 +698,7 @@ class Session:
     def _ai_wolf_maybe_follow(self, seat):        return ai_behaviors._ai_wolf_maybe_follow(self, seat)
     def _ai_guard_act(self, seat):        return ai_behaviors._ai_guard_act(self, seat)
     def _ai_witch_act(self, seat):        return ai_behaviors._ai_witch_act(self, seat)
+    def _ai_witch_poison(self, seat):        return ai_behaviors._ai_witch_poison(self, seat)
     def _ai_speak(self, seat, lastword=False):        return ai_behaviors._ai_speak(self, seat, lastword)
     def _all_voted(self):        return night_driver._all_voted(self)
     def _run_one_ai_shoot(self):        return ai_behaviors._run_one_ai_shoot(self)
@@ -768,15 +773,36 @@ class Session:
             # target = -1 表示空刀提议，target == seat 表示自刀 —— 两者都合法（面杀本来就有）。
             g.night_kill(seat, target)
 
-        elif action == "confirm":
-            # 狼队协商的第二步：确认自己当前的点。全员（含人类狼）都确认后由引擎定案。
-            # 它必须是一个**显式动作**：不确认就等于没表态，刀口定不下来、夜晚结束不了。
-            g.night_confirm(seat)
-
         elif action == "investigate":
             if target is None:
                 raise ValueError("验人需要 target")
+            # ★ 2026-10-29（用户定）：这一步只是"我看的是谁"，**先不报结果** ——
+            #   窗口内还能改点数。报结果发生在确认那一刻（`confirm`/`seer_confirm`）。
             g.night_investigate(seat, target)
+
+        elif action in ("confirm", "seer_confirm"):
+            # ⚠️ 动作名要**按角色分派**（2026-10-29）：`_actions_available` 对狼和
+            #   预言家发的都是同一个 "confirm"（界面上是同一个"确认键"的两种文案），
+            #   所以接口必须认这一个名字、再看是谁按的 —— 否则人类预言家一点确认
+            #   就撞 `PermissionError: 不是狼人，不能确认刀口`。
+            #   `seer_confirm` 这个显式写法也收（前端与脚本都可以用），意思一样。
+            _p_seat = self.game.player(seat)
+            if action == "seer_confirm" or _p_seat.role is Role.SEER:
+                g.night_seer_confirm(seat)
+                if not g.night.get("seer_result_spoken"):
+                    g.night["seer_result_spoken"] = True
+                    # ⚠️ 带 node="seer_result"：前端的结果屏就是靠这个 node 的门放行的，
+                    #   而真正的 `seer_result` 节点稍后开时看到这个旗子就不再念第二遍
+                    #   （否则全场会听见两次"他是这个"）。
+                    self.timeline.append({"t": "sys", "s": "他是这个",
+                                          "voice": JUDGE_VOICE,
+                                          "delay": speech_io.NIGHT_GAP,
+                                          "stage": "seer_result", "node": "seer_result",
+                                          "at": time.time()})
+            else:
+                # 狼队协商的第二步：确认自己当前的点。全员（含人类狼）都确认后由引擎定案。
+                # 它必须是一个**显式动作**：不确认就等于没表态，刀口定不下来、夜晚结束不了。
+                g.night_confirm(seat)
 
         elif action == "heal":
             if target is None:

@@ -204,18 +204,33 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     #    把起算时刻推到一分钟后 ⇒ 面板/倒计时全被拖死。
     #    白天句不进夜间播报队列；万一真有队列积压（上一节点的闭眼句还没念完），
     #    它带 node，串行累加照样会算进去，客户端 arm（真实念完）再兜一层。
+    # ★ 2026-10-29（用户定：「等法官念完投票结果和出局信息 → 喊完『天黑请闭眼』
+    #   才进夜间页面」）：上面那条"只统计带 node 的句"**跳过头了** ——
+    #   投票结果 / 出局信息 / 天黑请闭眼前面的死讯全都是 `engine.log()` 的产物
+    #   （`t == "sys"`、**没有 node 字段**），却被当成"不在夜间队列里"直接跳过。
+    #   后果：白天那几句还在播，守卫面板就已经弹出来了。
+    #   现在把**法官句（t == "sys"）**也算进串行累加：它们短（十几字），
+    #   而且 `max(t, start)` 会自动把"客户端积压"这一段如实并进估计值
+    #   ⇒ 面板、读秒、播报三者仍然同拍，只是那一拍真的挪到了「天黑请闭眼」念完之后。
+    #   ⚠️ **玩家发言（t == "say"）必须继续跳过**：那是几百字的正文，一句就虚增
+    #      几十秒；而且白天的发言时长由驱动器的定时器裁决，跟客户端队列不同步，
+    #      把积压串进来会把起算点推到一分钟后（2026-10-23 实机事故，见上）。
     t = None
     for j in range(idx + 1):
         x = tl[j]
-        if "node" not in x:
-            continue                  # 白天发言 / 公示日志：不在夜间播报队列里
+        if "node" not in x and x.get("t") != "sys":
+            continue                  # 玩家发言 / 私有记录：不在法官播报队列里
         start = (x.get("at") or x.get("ts") or 0.0) + _sc * (x.get("delay") or 0.0)
         if t is not None and t > start:
             start = t                 # 队列串行：上一句没念完不能开下一句
         t = start + _sc * (0.5 + len(x.get("s") or "") / 3.4)
     if t is None:
         return None
-    ready_wall = t + _sc * 2.0
+    # ★ 2026-10-29（用户定：「喊完XX请睁眼后**立即**弹出窗口」）：
+    #   尾巴的 +2 秒去掉了 —— 那一截是 2026-10-06 "播报最后一个字后 2 秒起算"
+    #   的旧口径，用户实机的观感就是"念完了面板还要愣两秒才出来"。
+    #   现在起算点 = 那句**念完**的那一刻，面板、读秒、播报三者同拍。
+    ready_wall = t
     return time.monotonic() + (ready_wall - time.time())   # 墙钟 → monotonic
 
 
@@ -264,6 +279,27 @@ def _nn_deadline(self, node_id: str) -> float:
     return base + win
 
 
+def _already_answered(self, seat: int, node_id: Optional[str]) -> bool:
+    """这个人是不是在**本节点**上已经表过态了（2026-10-29 窗口内可改）。
+
+    用途只有一个：`_inject_default` 到点注入默认动作时**别把他改过的选择盖掉**。
+    以前守卫/女巫/预言家"点了就从待办消失"，到点注入根本不会命中；
+    现在窗口内一直可改，"到点注入"就有了覆盖用户选择的风险 —— 必须拦。
+    """
+    n = self.game.night
+    if node_id == "wolf":
+        return seat in (n.get("wolf_points") or {})
+    if node_id == "guard":
+        return bool(n.get("guard_asked"))
+    if node_id == "witch_heal":
+        return bool(n.get("heal_picked"))
+    if node_id == "witch_poison":
+        return bool(n.get("poison_picked"))
+    if node_id == "seer":
+        return n.get("investigate") is not None
+    return False
+
+
 def _inject_default(self, seat: int, acts: List[str],
                     node_id: Optional[str] = None) -> None:
     """到点未操作 ⇒ 注入默认动作（用户定）。**必须在 self.lock 内调用**。
@@ -278,6 +314,10 @@ def _inject_default(self, seat: int, acts: List[str],
     """
     if not acts or acts == ["noop"]:
         return          # noop 占位 = 没有可决策的东西（前端照常走满窗口，这里什么都不注入）
+    # ★ 2026-10-29：他已经选过了 ⇒ 绝不注入（到点注入的意义是"什么都没做的兜底"，
+    #   不是"把最后一秒改过的选择盖回去"）。
+    if _already_answered(self, seat, node_id):
+        return
     dflt = night_script.default_of(node_id)
     if dflt is None:
         return
@@ -303,23 +343,47 @@ def _inject_default(self, seat: int, acts: List[str],
         print(f"[night] 到点注入默认动作失败 seat={seat} acts={acts}：{e}", flush=True)
 
 
+def _close_say_secs(nd: Dict) -> float:
+    """闭眼句念完要多久（秒，已按 `win_scale` 缩放）。没有闭眼句 = 0。
+
+    用它当"节点推进的延迟"：面板要活到这句话念完（2026-10-29 用户定），
+    所以节点不能一关就跳。估算口径与 `_nn_ready_mono` 同源（0.5s 起步 + 3.4 字/秒），
+    别再立第二个数字。
+    """
+    s = nd.get("close") or ""
+    if not s:
+        return 0.0
+    return night_script._scaled(0.5 + len(s) / 3.4)
+
+
 def _nn_open(self, i: int) -> None:
     """开一个节点：播 open 句 + 记窗口起点 + 收 `harvest_start` 的决策。"""
     nd = self._nn_nodes[i]
     nid = nd["id"]
     self._nn_i = i
     self._nn_at = time.monotonic()
+    # ★ 2026-10-29（用户定：「执行顺序与播报顺序一致」+ 窗口内可改）：
+    #   把"现在问的是哪一问"写给引擎。引擎没有时钟、也不该有时钟，
+    #   但它必须知道当前是解药窗口还是毒药窗口 —— 以前用一个 witch_asked
+    #   糊两问，结果是用了解药就再也不会毒人。
+    self.game.night["stage"] = nid
+    self._nn_closing = None
     self._nn_need_arm = bool(_nn_humans_of(self, nid))
     self._nn_tick15 = False                  # 每个节点重置「还剩15秒」只喊一次
     self.human_wait_since = None            # 换节点 ⇒ 换窗口：旧 arm 一律作废
     self.human_wait_pending_since = None
     if nd.get("say"):
+        # ★ 2026-10-29：预言家确认的那一刻已经念过「他是这个」了 —— 这个节点
+        #   再念一遍就是全场听两次。节点本身照旧留着走它的 3 秒留白。
+        _already = (nid == "seer_result"
+                    and self.game.night.get("seer_result_spoken"))
         # `at` = 这一行**产生**的时刻（墙上时间）—— 定稿的验收标准是
         # "闭眼句必须在倒计时归零之后才念出来"，能不能验收就看它能不能被量出来。
-        self.timeline.append({"t": "sys", "s": nd["say"], "voice": JUDGE_VOICE,
-                              "delay": nd.get("gap") or 0,
-                              "stage": night_script.stage_of(nid),
-                              "node": nid, "at": time.time()})
+        if not _already:
+            self.timeline.append({"t": "sys", "s": nd["say"], "voice": JUDGE_VOICE,
+                                  "delay": nd.get("gap") or 0,
+                                  "stage": night_script.stage_of(nid),
+                                  "node": nid, "at": time.time()})
     for kind in (nd.get("harvest_start") or ()):
         self._nn_hard.add(kind)             # 定稿：狼刀节点**开始**收 [守卫, 狼]
 
@@ -348,6 +412,17 @@ def _nn_close(self, nd: Dict) -> None:
     #   再结算；反过来的话"人狼一次没动"会被当成一张空刀票，等于让 AFK 废掉刀口。
     if nid == "wolf":
         self.game.settle_wolf_window()
+    # ★ 2026-10-29（用户定：窗口内可改、以结束时为准）：另外四个窗口同理，
+    #   **扣药 / 定案 / 置 asked 全部推到这一刻**。顺序同样重要 ——
+    #   先注入人类默认动作（没动的人按默认），再结算。
+    elif nid == "guard":
+        self.game.settle_guard_window()
+    elif nid == "witch_heal":
+        self.game.settle_witch_heal()
+    elif nid == "witch_poison":
+        self.game.settle_witch_poison()
+    elif nid == "seer":
+        self.game.settle_seer_window()
     if nd.get("close"):
         self.timeline.append({"t": "sys", "s": nd["close"], "voice": JUDGE_VOICE,
                               "delay": nd.get("close_gap", night_script.GAP),
@@ -422,7 +497,20 @@ def _night_clock(self) -> bool:
                 out = True
         if time.monotonic() < _nn_deadline(self, nd["id"]):
             break
-        _nn_close(self, nd)
+        # ★ 2026-10-29（用户定：「喊完『守卫请闭眼』后立即退出守卫窗口」）：
+        #   闭眼句是窗口结束的**同一刻**产生的。以前这一刻就推进到下一节点
+        #   ⇒ 面板先被收掉、闭眼句还在念，用户听到的是"窗口比闭眼句退得早"。
+        #   现在：窗口结束 → 产生闭眼句 → **等它念完** → 才推进节点。
+        #   这期间 `_nn_cur` 仍是本节点，`now_state` 会带上 `closing`，
+        #   前端据此把面板留到这句话念完。
+        if not getattr(self, "_nn_closing", None):
+            _nn_close(self, nd)
+            self._nn_closing = {"node": nd["id"],
+                                "until": time.monotonic() + _close_say_secs(nd)}
+            out = True
+        if time.monotonic() < self._nn_closing["until"]:
+            break
+        self._nn_closing = None
         self._nn_i += 1
         self._nn_need_arm = False
         self._nn_tick15 = False
@@ -730,10 +818,27 @@ def _human_blocking(g, p) -> bool:
     acts = g.actions_for(p.seat)
     if not acts:
         return False
+    # ★ 2026-10-29（窗口内可改的必然代价）：点了之后 `actions_for` 仍然挂着这个动作
+    #   （否则面板当场消失、改都没法改），但那**不等于他在卡流程** ——
+    #   不把这条判出来的话，pending 会整窗停在 human_night，`drive()` 就不再
+    #   在锁外 sleep，墙钟不流逝 ⇒ 15/90 秒的窗口永远走不完，局面卡死在第一夜。
+    n = g.night
     if set(acts) <= {"kill", "confirm"}:
-        pts = g.night.get("wolf_points") or {}
-        if p.seat in pts:            # -1（空刀）也算交过了
+        if p.seat in (n.get("wolf_points") or {}):   # -1（空刀）也算交过了
             return False
+    if set(acts) <= {"guard"} and n.get("guard_asked"):
+        return False
+    if set(acts) <= {"heal", "pass"} and n.get("heal_picked"):
+        return False
+    if set(acts) <= {"poison", "pass"} and n.get("poison_picked"):
+        return False
+    # ★ 2026-10-29：预言家同理 —— `investigate` 现在也是"窗口内随时可改"的，
+    #   点完人待办不会消失。判据看**有没有交过**（investigate is not None），
+    #   不是看确认过没有：点了没确认的这段也算"已经出手"，窗口该照走。
+    #   （只看 seer_confirmed 的话，人一点号码 pending 就整窗停在 human_night，
+    #    泵线程会空转到窗口结束 —— 守卫/女巫那两条没有这个洞，口径必须一致。）
+    if set(acts) <= {"investigate", "confirm"} and n.get("investigate") is not None:
+        return False
     return True
 
 
