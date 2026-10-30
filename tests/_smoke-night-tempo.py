@@ -80,8 +80,14 @@ def first_night(tl):
     return out
 
 
-def until_dawn(sess, cap_s: float = 150.0) -> None:
-    """推到「天亮了」那句出现（= 第一夜走完）。"""
+def until_dawn(sess, cap_s: float = 240.0) -> None:
+    """推到「天亮了」那句出现（= 第一夜走完）。
+
+    ⚠️ 2026-10-30：上限从 150s 抬到 240s —— **12 人局的狼刀窗口是 90 秒**
+    （`WOLF_WIN_BY_SIZE`：6 人 30s / 9 人 60s / 12 人 90s，2026-10-28 用户定），
+    整夜理论时长 = 守卫 15 + 狼刀 90 + 女巫 2×15 + 预言家 15+15 ≈ 165s，
+    原来那个 150s 的上限**必然**在预言家段之前就把循环掐断 ⇒
+    「他是这个 / 预言家请闭眼 / 天亮了」三条全是 None。不是被测行为变了。"""
     t0 = time.monotonic()
     while time.monotonic() - t0 < cap_s:
         if any(str(x.get("s", "")).startswith("天亮了") for x in sess.timeline):

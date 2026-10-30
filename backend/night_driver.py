@@ -191,7 +191,21 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     返回 None = 时间线里找不到该节点（老对局/无播报句），调用方自行兜底。
     """
     tl = self.timeline or []
-    idx = next((i for i, x in enumerate(tl) if x.get("node") == node_id), -1)
+    # 🔴 2026-10-30 第二起（用户实机："白天放逐投票后，法官喊完『第二夜，天黑请闭眼』
+    #    之前，狼人界面就已经跳出来、倒计时还在走"）：
+    #    这里原来是从**头**找第一条 `node == node_id` 的句子 —— 而第二夜起，
+    #    第一夜的同名节点（"狼人请睁眼…"）永远排在前面 ⇒ 找到的是**上一夜**
+    #    那条，`_queue_end_mono` 于是返回一个**已经过去**的时刻 ⇒
+    #    `started` 立刻为真、倒计时从节点一开就跑满。第一夜正常、第二夜必现，
+    #    与用户的现象逐字吻合。
+    #    现在从**本节点开启的位置**（`_nn_tl0`，`_nn_open` 记的 timeline 长度）
+    #    往后找；找不到（`seer_result` 的「他是这个」是在确认那一刻提前播的，
+    #    位于节点开启之前）再退到"从后往前取最近一条"。
+    _from = getattr(self, "_nn_tl0", 0) or 0
+    idx = next((i for i in range(_from, len(tl)) if tl[i].get("node") == node_id), -1)
+    if idx < 0:
+        idx = next((i for i in range(len(tl) - 1, -1, -1)
+                    if tl[i].get("node") == node_id), -1)
     if idx < 0:
         return None
     # ⚠️ 估算的每个成分（留白/字数时长/+2s 尾巴）都按 win_scale 缩放：
@@ -215,7 +229,34 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     #   ⚠️ **玩家发言（t == "say"）必须继续跳过**：那是几百字的正文，一句就虚增
     #      几十秒；而且白天的发言时长由驱动器的定时器裁决，跟客户端队列不同步，
     #      把积压串进来会把起算点推到一分钟后（2026-10-23 实机事故，见上）。
-    return _queue_end_mono(self, idx)
+    _end = _queue_end_mono(self, idx)
+    if _end is None:
+        return None
+    # ★ 2026-10-30：**不许早于本节点开启的时刻**。节点还没开就不可能"念完"——
+    #   没有这一刀的话，任何"找错那一夜的句子"都会返回一个过去的时刻，
+    #   `started` 立刻为真、倒计时当场从满窗起走（用户实机：第二夜狼人面板
+    #   抢在「天黑请闭眼」之前弹出）。这是最后一道闸，代价为零。
+    #   ⚠️ `_nn_at` 只有真 Session 才有（测试用 SimpleNamespace 造 timeline 时没有）——
+    #      拿 0.0 当默认值会把墙上时间换算出来的负数夹成 0，口径就废了。
+    _at = getattr(self, "_nn_at", None) or 0.0
+    return max(_end, _at) if _at else _end
+
+
+def _line_of_node(self, node_id: str) -> int:
+    """**本夜**最后一次播到该节点的句子下标（-1 = 本夜还没播到）。
+
+    为什么需要它：时间线是**整局**的，同名节点每夜都会再出现一次。
+    "从后往前取最近一条"能对上大多数场景，但"本夜还没到这一节"时
+    （比如第二夜刚验完人、`seer_close` 还没产生）会退化成**上一夜**的下标
+    —— 前端拿它做"念完了没有"的比较，就会一直判成"早念完了"。
+    这里用 `_night_tl0`（本夜起点）把搜索范围钉死。
+    """
+    tl = self.timeline or []
+    start = int(getattr(self, "_night_tl0", 0) or 0)
+    for i in range(len(tl) - 1, start - 1, -1):
+        if tl[i].get("node") == node_id:
+            return i
+    return -1
 
 
 def _queue_end_mono(self, idx: int) -> Optional[float]:
@@ -418,6 +459,9 @@ def _nn_open(self, i: int) -> None:
     nid = nd["id"]
     self._nn_i = i
     self._nn_at = time.monotonic()
+    # ★ 2026-10-30：记下"本节点在 timeline 里从哪一条开始"—— `_nn_ready_mono`
+    #   靠它区分**这一夜**的同名节点和上一夜的（否则第二夜起 started 会立刻为真）。
+    self._nn_tl0 = len(self.timeline)
     # ★ 2026-10-29（用户定：「执行顺序与播报顺序一致」+ 窗口内可改）：
     #   把"现在问的是哪一问"写给引擎。引擎没有时钟、也不该有时钟，
     #   但它必须知道当前是解药窗口还是毒药窗口 —— 以前用一个 witch_asked
@@ -499,6 +543,10 @@ def _night_clock(self) -> bool:
         return False
     if getattr(self, "_nn_round", None) != g.round:
         self._nn_round = g.round
+        # ★ 2026-10-30：本夜在 timeline 里的起点。`_line_of_node` 靠它把"本夜的
+        #   同一节点"和**上一夜**的分开（前端「预言家请闭眼念完就收结果屏」
+        #   原来拿第一夜的下标，第二夜起结果屏一摊出来就被收掉）。
+        self._night_tl0 = len(self.timeline)
         roles = {p.role.value for p in g.players}
         self._nn_nodes = [nd for nd in night_script.build(roles, g.round)
                           if nd["id"] not in night_script.SKIP_IN_ANNOUNCE]

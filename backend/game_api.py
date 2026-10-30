@@ -580,6 +580,13 @@ class Session:
             #   ⚠️ 字段名**不能**叫 `now` —— 上面那个 `now` 是"当前面板状态机"
             #   （now_state()），同名会把整个界面打崩（dict 后者覆盖前者）。
             "server_now": time.time(),
+            # ★ 2026-10-30（用户实机：第二夜起预言家验完人，结果屏一闪就没了）：
+            #   **本夜**「预言家请闭眼」那句在时间线里的下标（-1 = 本夜还没播到）。
+            #   前端原来用 nightNodeIdx 从头找第一条 —— 第二夜起命中的是第一夜的
+            #   下标，于是"已经念完"恒成立，结果屏刚摊开就被收掉。
+            #   时间线是全局长度，只有服务端知道哪一条属于**这一夜**。
+            "seer_close_line": (night_driver._line_of_node(self, "seer_close")
+                                if g.phase is Phase.NIGHT else -1),
             "players": [
                 {"seat": p.seat, "display": p.display, "lives": p.lives,
                  "alive": p.alive, "kind": p.kind}

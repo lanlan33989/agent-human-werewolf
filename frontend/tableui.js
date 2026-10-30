@@ -537,7 +537,11 @@ async function tick(){
        （或天亮离夜）⇒ 强制清 seerBig + 撤结果屏。wheelTags 的验人标记只画在
        轮盘面板里，面板一撤随之消失。 */
     try {
-      var _scIdx = nightNodeIdx('seer_close');
+      /* ★ 2026-10-30：下标只认服务端下发的**本夜**那一条（`seer_close_line`）。
+         原来用 nightNodeIdx('seer_close') 从头找 ⇒ 第二夜起拿到第一夜的下标 ⇒
+         "已经念完"恒成立 ⇒ 结果屏刚摊出来就被收掉（用户："验人窗口还是没出来"）。 */
+      var _scIdx = (typeof PUBLIC.seer_close_line === 'number')
+        ? PUBLIC.seer_close_line : nightNodeIdx('seer_close');
       if ((_scIdx >= 0 && SPOKE_DONE && SPOKE_DONE.idx >= _scIdx && SPOKE_DONE.at > 0)
           || PUBLIC.phase !== 'night'){
         if (typeof resetSeerBig === 'function') resetSeerBig();

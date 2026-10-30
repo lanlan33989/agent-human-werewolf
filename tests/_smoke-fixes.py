@@ -1572,6 +1572,109 @@ check("★ ⑲ 未开口时大圆写「点击发言」（原来写的是「点�
 check("★ ⑲ 只显示**本次**验人结果（onlyNo），不再把历史验人全堆到大圆",
       "function showPrivateResult(seatNo, v, title, onlyNo)" in _tui19)
 
+# ================================================================ ⑳ 2026-10-30
+# 用户实机（第二夜起必现的两条，其实是**同一个**根因）：
+#   ① 「白天放逐投票后，法官喊完『第二夜，天黑请闭眼』之前，狼人界面就已经
+#      跳出来了，并且倒计时在走」
+#   ② 「预言家的验人窗口还是没出来」
+#
+# 根因：时间线是**整局**的，同名节点每夜都会再出现一次。
+#   · `_nn_ready_mono` 结构上取的是"第一条 node == 本节点"的句子 ⇒ 第二夜起
+#     命中的是**第一夜**那条，`_queue_end_mono` 返回一个早已过去的时刻 ⇒
+#     `started` 立刻为真（面板抢跑）而 `until_left` 变成负数
+#     （前端 `openHandoff` 判 `_expired` ⇒ **整窗不弹**）。
+#   · 前端 `nightNodeIdx` 同样从头找 ⇒「预言家请闭眼之后收结果屏」那条清理
+#     在每个 tick 都成立 ⇒ 结果屏刚摊出来就被收掉。
+print("=" * 74)
+print("⑳ 第二夜起：同名节点不许命中上一夜的句子（面板抢跑 / 验人窗口不出现）")
+print("=" * 74)
+
+from engine import Board as _B20, Role as _R20  # noqa: E402
+
+_scale20 = night_script.win_scale()
+night_script.set_win_scale(0.06)          # 缩窗：跑到第二夜只要几秒
+try:
+    _b20 = _B20(key="_t_seer20", label="测试板：预言家/2 狼/3 民",
+                roles=[_R20.SEER, _R20.WOLF, _R20.WOLF, _R20.VILLAGER,
+                       _R20.VILLAGER, _R20.VILLAGER], lives=1)
+    _s20 = None
+    for _seed20 in range(1, 60):
+        _cand = game_api.Session(board=_b20, humans=1, seed=_seed20)
+        if _cand.game.player(0).role is _R20.SEER:
+            _s20 = _cand
+            break
+    check("（前提）造出「人类是预言家」的局", _s20 is not None,
+          "60 个 seed 都没抽到")
+
+    _g20 = _s20.game
+    _t20 = _time.monotonic()
+    _seen_rounds = set()
+    _r2 = {}
+    while _time.monotonic() - _t20 < 25 and not _g20.winner:
+        _s20.auto_advance(60, deadline=_time.time() + 0.3)
+        if _g20.phase.value in ("discuss", "lastword") and _g20.current_speaker() == 0:
+            _s20.act(0, "speak", None, "过")
+        if _g20.phase.value == "vote" and _g20.can_vote(0):
+            _s20.act(0, "vote", next((p.seat for p in _g20.players
+                                      if p.alive and p.seat != 0), 0), None)
+        _cur20 = _ndrv._nn_cur(_s20)
+        if _g20.phase.value == "night" and _cur20 and _cur20 not in _r2:
+            # 第三项 = 这一刻「窗口还剩多久关」（monotonic 差）。
+            # 生产 bug 下 `est` 是上一夜的过去时刻 ⇒ 这个值会是负数
+            # ⇒ 前端 `_expired` 判过期、面板整窗不弹。
+            _r2[_cur20] = (_g20.round, _s20.now_state(),
+                           getattr(_s20, "_nn_tl0", 0),
+                           _ndrv._nn_deadline(_s20, _cur20) - _time.monotonic())
+        if _g20.round == 2 and _cur20 == "seer" and not _g20.night.get("seer_confirmed"):
+            _acts20 = _g20.actions_for(0)
+            if "investigate" in _acts20:
+                _s20.act(0, "investigate",
+                         next(p.seat for p in _g20.players if p.alive and p.seat != 0),
+                         None)
+                _s20.act(0, "confirm", None, None)
+        _seen_rounds.add(_g20.round)
+        if _g20.round >= 2 and "seer_result" in _r2:
+            break
+        _time.sleep(0.02)
+
+    check("（前提）这局真的走到了第二夜", 2 in _seen_rounds, str(_seen_rounds))
+    _n20 = _r2.get("wolf")
+    check("★ ⑳ 第二夜：「狼人请睁眼」刚开时 started **还没真**（法官还在念播报）",
+          _n20 is not None and _n20[1].get("started") is False,
+          str((_n20 or (None, {}))[1])[:120])
+    _left20 = (_n20[3] if _n20 else None)
+    check("★ ⑳ 第二夜：「狼人请睁眼」的窗口还没过期（过期 ⇒ 前端整窗不弹面板）",
+          _left20 is not None and _left20 > 0,
+          f"窗口剩余={_left20}")
+
+    _s20n = _r2.get("seer")
+    check("★ ⑳ 第二夜：验人窗口的倒计时同样是**正的**（否则面板被 `_expired` 挡掉）",
+          _s20n is not None and (_s20n[1].get("until_left") or 0) > 0,
+          str((_s20n or (None, {}))[1].get("until_left")))
+    check("★ ⑳ 第二夜：起算点（`_nn_ready_mono`）必须指向**本夜**那句，不许在过去",
+          _s20n is not None
+          and (_ndrv._nn_ready_mono(_s20, "seer") or 0) >= _s20._nn_at,
+          f"ready={_ndrv._nn_ready_mono(_s20, 'seer')} at={_s20._nn_at}")
+
+    # `seer_close_line`：只认**本夜**那一条（旧口径拿第一夜的下标 ⇒
+    # 前端每个 tick 都判"早念完了"⇒ 结果屏刚摊开就被收掉）。
+    _scl = _s20.public_state().get("seer_close_line")
+    check("★ ⑳ `seer_close_line` 落在本夜范围内（-1 或 >= 本夜起点），"
+          "不许是上一夜的下标",
+          isinstance(_scl, int) and (_scl == -1 or _scl >= getattr(_s20, "_night_tl0", 0)),
+          f"line={_scl} night_tl0={getattr(_s20, '_night_tl0', 0)}")
+finally:
+    night_script.set_win_scale(_scale20)
+
+# ---- ⑳ 前端：两处"从头找"一起改掉 ------------------------------------
+_sui20 = (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8")
+_tui20 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+check("★ ⑳ nightNodeIdx 改成**从后往前**（当前节点的句子总是最新那条）",
+      "for (var j = tl.length - 1; j >= 0; j--)" in _sui20,
+      "还是从头找 ⇒ 第二夜起一直命中第一夜的句子")
+check("★ ⑳ 结果屏的清理只认服务端下发的 `seer_close_line`",
+      "PUBLIC.seer_close_line" in _tui20)
+
 print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")

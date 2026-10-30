@@ -312,11 +312,13 @@ function voicedUp(){
    stage === need.role 的句子。改播报文案不会再弄坏门控；
    老局 timeline 没有 stage 时回退整队播报门（保守，不会更糟）。 */
 function nightStageIdx(need){
-  /* 该座位的「请睁眼」句（stage === role）在时间线里的下标（-1 = 老局/非夜间）。 */
+  /* 该座位的「请睁眼」句（stage === role）在时间线里的下标（-1 = 老局/非夜间）。
+     ★ 2026-10-30：与 `nightNodeIdx` 同一个坑 —— 时间线是**整局**的，同名 stage
+     每夜都再出现一次，从头找会拿到**第一夜**那句（早已播过 ⇒ 门控永远放行）。 */
   var role = need && need.role;
   if (!role) return -1;
   var tl = (PUBLIC && PUBLIC.timeline) || [];
-  for (var j = 0; j < tl.length; j++){
+  for (var j = tl.length - 1; j >= 0; j--){
     if (tl[j].stage === role) return j;
   }
   return -1;
@@ -326,7 +328,13 @@ function nightStageIdx(need){
 function nightNodeIdx(nid){
   if (!nid) return -1;
   var tl = (PUBLIC && PUBLIC.timeline) || [];
-  for (var j = 0; j < tl.length; j++){
+  /* 🔴 2026-10-30（用户实机：第二夜起狼人面板在法官喊「天黑请闭眼」之前就弹、
+     预言家窗口整窗不出现）：这里原来**从头**找第一条 —— 第二夜起永远命中
+     第一夜的同名句（"狼人请睁眼…"），算出来的下标早已播过。
+     两头都坏了：门控立刻放行（面板抢跑），而"预言家请闭眼之后才收结果屏"
+     那条清理在每个 tick 都成立（结果屏一摊出来就被收掉）。
+     ⇒ 改从**后往前**取最近一条：当前节点的句子总是最新产生的那条。 */
+  for (var j = tl.length - 1; j >= 0; j--){
     if (tl[j].node === nid) return j;
   }
   return -1;
