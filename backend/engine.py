@@ -508,6 +508,10 @@ class Game:
                       "guard": None, "guard_asked": False,
                       "wolf_points": {}, "wolf_confirm": [], "wolf_order": [],
                       "wolf_followed": [], "kill_settled": False, "wolf_steps": 0,
+                      # wolf_decided_by：这一夜刀口最终由谁说了算
+                      #   "human" = 真人狼表态即定 / "ai" = AI 多数决 / "none" = 没有活狼
+                      #   只在 debug_log 与复盘里有意义，**不进播报**。
+                      "wolf_decided_by": None,
                       # wolf_quiet：协商步数到顶后停止内耗（不是定案，见 wolf_force_settle）
                       "wolf_quiet": False}
         self.log(f"第 {self.round} 夜，天黑请闭眼。")
@@ -521,8 +525,9 @@ class Game:
         · target >= 0 → 点这个座位；**允许自刀**（target == actor，面杀本来就有）
         · target == -1 → 提议空刀
         · 改点会把自己从"已确认"里移除（改了就得重新确认）
-        · **窗口内不定案**：点子只作记录，刀口由窗口结束时按多数决定
-          （见 `settle_wolf_window`）—— 用户 2026-10-28 定："这期间可任意修改刀口"
+        · **窗口内不定案**：点子只作记录，刀口由窗口结束时决定 ——
+          真人狼表过态就以他为准（2026-10-30 用户定），否则按多数
+          （见 `settle_wolf_window`）。用户 2026-10-28 定："这期间可任意修改刀口"
 
         为什么要有这套：以前只有一只狼能定刀，其余狼（含 AI 狼）连"队友点了谁"
         都不知道。白天投票时狼各投各的、一只跟大势一只咬好人 ⇒ 立刻暴露。
@@ -610,8 +615,12 @@ class Game:
     def settle_wolf_window(self) -> None:
         """★ 2026-10-28（用户定）：狼刀窗口**结束时**结算，以当时的点子为准。
 
-        规则（用户逐字）：出现意见不合时按刀口对象最多者执行（2、3 打 5，4 打 7
-        ⇒ 刀 5）；刀口平票则在并列的对象里随机；**空刀不参与刀口票计数**。
+        规则（2026-10-30 更新，用户逐字）：
+        · **真人狼表过态就以真人为准** ——「真人选 5 号，其他几个 AI 都选 6 号
+          ⇒ 刀 5 号」；真人点空刀 ⇒ 当夜空刀。
+        · 真人没表态（整窗一次没点）⇒ 才走原来的多数决：意见不合按刀口对象
+          最多者执行（2、3 打 5，4 打 7 ⇒ 刀 5）；平票在并列对象里随机；
+          **空刀不参与 AI 的刀口票计数**。
 
         为什么放在窗口末而不是"全员确认即定"：用户明确要求这几十分钟里
         狼可以任意改刀，"以结束时的选择为准"。所以协商过程只记点子，
@@ -620,19 +629,57 @@ class Game:
         self._settle_wolf_kill()
 
     def _settle_wolf_kill(self) -> None:
-        """按**刀口多数决**定案（用户定的规则，照面杀）。
+        """定刀：★ 2026-10-30（用户定）**真人狼的刀口优先**，没有真人才走多数决。
 
-        · 统计每只活狼此刻点的座位；**空刀(-1) 与没表态都不进计数**
-        · 票数唯一最高 ⇒ 那就是今夜的刀口
-        · 并列最高 ⇒ 在并列对象里**随机**取一个（`self.rng`，可复现）
-        · 一张有效票都没有 ⇒ 空刀（kill = -1）
+        规则（用户逐字）：
+        · 真人狼表过态（点过某个号码，或点了"空刀"）⇒ **就以真人的为准**。
+          哪怕其余 AI 狼全点别人：「真人选 5 号，其他几个 AI 都选 6 号 ⇒ 刀 5 号」。
+        · 真人点了空刀 ⇒ **当夜就是空刀**。空刀在真人手里是**有效决议**，
+          不再像 AI 票那样"不参与计数"（用户明确要求）。
+        · 真人整窗没表态（`wolf_points` 里没有他这一项）⇒ 回落到原来的 AI 刀口
+          多数决：票多者胜、平票随机、空刀不参与计数、全空则空刀。
+
+        多个真人狼：先在**真人内部**按多数决；真人与真人平票才随机（空刀参与，
+        它和座位号一样是一张票）。真人的票投出去后 AI 的票就不再计入 ——
+        这是"人定的算"的直接含义，不叠加成"真人 1 票 vs AI 3 票"。
+
+        为什么把"真人优先"放在**结算**而不是**点刀时**：真人整段窗口内都能改
+        （2026-10-28 定），点刀只是记录；谁能号令刀口只能在窗口关闭这一刻判。
         """
         wolves = [q.seat for q in self.alive if q.role.is_wolf]
         if not wolves:
             self.night["kill"] = -1
             self.night["kill_settled"] = True
+            self.night["wolf_decided_by"] = "none"
             return
         pts = self.night.get("wolf_points") or {}
+
+        # ---- ① 真人狼优先（点过就算，-1 空刀也算）----
+        human_picks = [pts[s] for s in wolves
+                       if self.player(s).kind != "ai" and pts.get(s) is not None]
+        if human_picks:
+            if len(set(human_picks)) == 1:
+                final = human_picks[0]
+            else:
+                hc: Dict[int, int] = {}
+                for t in human_picks:
+                    hc[t] = hc.get(t, 0) + 1
+                top = max(hc.values())
+                leaders = sorted(t for t, n in hc.items() if n == top)
+                final = leaders[0] if len(leaders) == 1 else self.rng.choice(leaders)
+                self.note("真人狼之间刀口不一致（"
+                          + "、".join("空刀" if t < 0 else f"{t + 1}号"
+                                      for t in sorted(hc))
+                          + "），按真人内部的多数决定刀。")
+            self.night["kill"] = final
+            self.night["kill_settled"] = True
+            self.night["wolf_decided_by"] = "human"
+            self.note("真人狼定刀："
+                      + ("空刀" if final < 0 else f"{final + 1}号")
+                      + f"（真人 {len(human_picks)} 票；AI 狼的点子不再计入）")
+            return
+
+        # ---- ② 没有真人表态：原来的 AI 刀口多数决 ----
         counts: Dict[int, int] = {}
         for s in wolves:
             t = pts.get(s)
@@ -651,6 +698,7 @@ class Game:
                           + " 号），随机定刀。")
         self.night["kill"] = final
         self.night["kill_settled"] = True
+        self.night["wolf_decided_by"] = "ai"
 
     # ============================================================ 窗口结算
     #
@@ -893,6 +941,7 @@ class Game:
             n["wolf_confirm"] = [s for s in (n.get("wolf_confirm") or []) if s != actor]
             n["kill"] = None
             n["kill_settled"] = False
+            n["wolf_decided_by"] = None
             return
         if p.role is Role.SEER:
             n["investigate"] = None

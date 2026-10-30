@@ -1328,6 +1328,161 @@ check("★ ⑰ started=false 时不显示读秒",
 check("★ ⑰ 后端把 started 下发给发言屏（now_state 的 speak 分支）",
       "_speech_started" in (BASE / "backend" / "game_api.py").read_text(encoding="utf-8"))
 
+# ================================================================ ⑱ 2026-10-30
+# 用户定：「狼队夜间刀口从原来的平票改为**以真人刀口为准**」
+#   真人选 5 号、其余 AI 都选 6 号 ⇒ 刀 5 号；真人选空刀 ⇒ 当夜空刀；
+#   真人整窗没表态 ⇒ 才按 AI 刀口走原来的多数决（平票随机、空刀不计数）。
+print("=" * 74)
+print("⑱ 狼刀：真人表态即定刀（AI 票不再计入）")
+
+_b18 = _B16(key="_t_wolf18", label="测试板：3 狼 + 预言家 + 2 民",
+            roles=[_R16.WOLF, _R16.WOLF, _R16.WOLF,
+                   _R16.SEER, _R16.VILLAGER, _R16.VILLAGER], lives=1)
+
+
+def _wolf18(seed: int, human_idx=None):
+    """造一局 3 狼 3 好；human_idx 指定把第几只狼改成真人。"""
+    g = _G16(_b18, ["ai"] * 6, seed=seed)
+    g.start()
+    ws = [p.seat for p in g.alive if p.role.is_wolf]
+    if human_idx is not None:
+        g.player(ws[human_idx]).kind = "human"
+    goods = [p.seat for p in g.alive if not p.role.is_wolf]
+    return g, ws, goods
+
+
+# ---- ⑱-1 真人一票压过 AI 两票 -----------------------------------------
+_g18a, _w18a, _d18a = _wolf18(71, human_idx=1)
+_g18a.night_kill(_w18a[0], _d18a[1])
+_g18a.night_kill(_w18a[1], _d18a[0])       # 真人（第 2 只狼）点 d0
+_g18a.night_kill(_w18a[2], _d18a[1])
+_g18a.settle_wolf_window()
+check("★ ⑱ 真人 1 票 vs AI 2 票 ⇒ **听真人的**（刀 d0，不是 d1）",
+      _g18a.night.get("kill") == _d18a[0]
+      and _g18a.night.get("wolf_decided_by") == "human",
+      f"kill={_g18a.night.get('kill')} 期望={_d18a[0]} by={_g18a.night.get('wolf_decided_by')}")
+
+# ---- ⑱-2 真人点空刀 ⇒ 当夜空刀 ----------------------------------------
+_g18b, _w18b, _d18b = _wolf18(72, human_idx=1)
+_g18b.night_kill(_w18b[0], _d18b[0])
+_g18b.night_kill(_w18b[1], -1)             # 真人：空刀
+_g18b.night_kill(_w18b[2], _d18b[0])
+_g18b.settle_wolf_window()
+check("★ ⑱ 真人点空刀 ⇒ 当夜空刀（AI 两张刀票全部作废）",
+      _g18b.night.get("kill") == -1
+      and _g18b.night.get("kill_settled")
+      and _g18b.night.get("wolf_decided_by") == "human",
+      f"kill={_g18b.night.get('kill')} by={_g18b.night.get('wolf_decided_by')}")
+
+# ---- ⑱-3 真人未表态 ⇒ 回落 AI 多数决 ----------------------------------
+_g18c, _w18c, _d18c = _wolf18(73, human_idx=1)
+_g18c.night_kill(_w18c[0], _d18c[0])
+_g18c.night_kill(_w18c[2], _d18c[0])       # 真人 _w18c[1] 一次没点
+_g18c.settle_wolf_window()
+check("★ ⑱ 真人没表态 ⇒ 按 AI 刀口多数决（不能被当成「真人投了空刀」）",
+      _g18c.night.get("kill") == _d18c[0]
+      and _g18c.night.get("wolf_decided_by") == "ai",
+      f"kill={_g18c.night.get('kill')} by={_g18c.night.get('wolf_decided_by')}")
+
+# ---- ⑱-4 真人撤回点刀 ⇒ 又变回"未表态" --------------------------------
+_g18d, _w18d, _d18d = _wolf18(74, human_idx=0)
+_g18d.night_kill(_w18d[0], _d18d[0])       # 真人点 d0（此处会盖过 AI 的票）
+_g18d.night_clear(_w18d[0])                # 再点同一个号码 = 撤销
+_g18d.night_kill(_w18d[1], _d18d[1])
+_g18d.night_kill(_w18d[2], _d18d[1])
+_g18d.settle_wolf_window()
+check("★ ⑱ 真人撤回后就是「没表态」⇒ 回到 AI 多数决（d1）",
+      _g18d.night.get("kill") == _d18d[1]
+      and _g18d.night.get("wolf_decided_by") == "ai",
+      f"kill={_g18d.night.get('kill')} by={_g18d.night.get('wolf_decided_by')}")
+
+# ---- ⑱-5 两个真人意见一致 ⇒ 就是那个；不一致 ⇒ 真人内部多数 -------------
+_g18e, _w18e, _d18e = _wolf18(75, human_idx=None)
+_g18e.player(_w18e[0]).kind = "human"
+_g18e.player(_w18e[2]).kind = "human"
+_g18e.night_kill(_w18e[0], _d18e[0])
+_g18e.night_kill(_w18e[1], _d18e[1])
+_g18e.night_kill(_w18e[2], _d18e[0])
+_g18e.settle_wolf_window()
+check("★ ⑱ 两个真人同点 d0 ⇒ 刀 d0（AI 那一票 d1 不算）",
+      _g18e.night.get("kill") == _d18e[0], f"kill={_g18e.night.get('kill')}")
+
+_g18f, _w18f, _d18f = _wolf18(76, human_idx=None)
+_g18f.player(_w18f[0]).kind = "human"
+_g18f.player(_w18f[1]).kind = "human"
+_g18f.night_kill(_w18f[0], _d18f[0])
+_g18f.night_kill(_w18f[1], _d18f[1])       # 真人 1:1 分歧，AI 那一票不再决定
+_g18f.night_kill(_w18f[2], _d18f[0])
+_g18f.settle_wolf_window()
+check("★ ⑱ 两个真人 1:1 ⇒ 在**真人**的两个对象里随机（AI 那一票不参与）",
+      _g18f.night.get("kill") in (_d18f[0], _d18f[1])
+      and _g18f.night.get("wolf_decided_by") == "human",
+      f"kill={_g18f.night.get('kill')} by={_g18f.night.get('wolf_decided_by')}")
+
+# ---- ⑱-6 到点兜底**不给真人狼**注入刀（没点 = 没表态）-----------------
+_inj_notes18 = []
+
+
+class _FakeWolfG18:
+    night = {"wolf_points": {}}
+
+    def player(self, s):
+        return _types.SimpleNamespace(kind="human")
+
+    def note(self, t):
+        _inj_notes18.append(t)
+
+    players: list = []
+
+
+_fs18 = _types.SimpleNamespace(
+    game=_FakeWolfG18(),
+    _act_locked=lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("不该给真人狼注入刀口 —— 那等于伪造真人意志")))
+_ndrv._inject_default(_fs18, 2, ["kill", "confirm"], "wolf")
+check("★ ⑱ 到点兜底不给真人狼注入 follow_kill（没点就是没表态，留给 AI 多数决）",
+      bool(_inj_notes18) and "没表态" in (_inj_notes18[-1] if _inj_notes18 else ""),
+      str(_inj_notes18))
+
+# 反面：AI 狼的兜底照旧（跟随已点过的队友），别把功能一并删了
+_inj_calls18 = []
+
+
+class _FakeAiG18:
+    night = {"wolf_points": {0: 3}}
+    players = [_types.SimpleNamespace(
+        seat=0, role=_types.SimpleNamespace(value="wolf"))]
+
+    def player(self, s):
+        return _types.SimpleNamespace(kind="ai")
+
+    def actions_for(self, s):
+        return []
+
+    def note(self, t):
+        pass
+
+
+_fs18b = _types.SimpleNamespace(
+    game=_FakeAiG18(),
+    _act_locked=lambda seat, act, tgt, x: _inj_calls18.append((seat, act, tgt)))
+_ndrv._inject_default(_fs18b, 5, ["kill", "confirm"], "wolf")
+check("★ ⑱ AI 狼的到点兜底照旧（跟随座位序第一只点过刀的狼）",
+      (5, "kill", 3) in _inj_calls18, str(_inj_calls18))
+
+# ---- ⑱-7 源码级：判据必须是「是不是真人」，不能退回"先手/座位序" ------
+_eng18 = (BASE / "backend" / "engine.py").read_text(encoding="utf-8")
+check("★ ⑱ 结算里先挑真人票（kind != 'ai' + 点过）",
+      'human_picks = [pts[s] for s in wolves' in _eng18
+      and 'self.player(s).kind != "ai"' in _eng18)
+check("★ ⑱ 真人的空刀也进 human_picks（不像 AI 票那样被 `t < 0` 过滤）",
+      "if self.player(s).kind != \"ai\" and pts.get(s) is not None" in _eng18)
+check("★ ⑱ 定刀依据留痕（wolf_decided_by: human / ai / none）",
+      _eng18.count('"wolf_decided_by"') >= 3)
+check("★ ⑱ 真人狼整窗没点时，driver 不注入刀口（只写一条内部备注）",
+      "整窗没表态，刀口交给 AI 多数决" in
+      (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
+
 print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")

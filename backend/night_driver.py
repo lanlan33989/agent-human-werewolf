@@ -378,6 +378,15 @@ def _inject_default(self, seat: int, acts: List[str],
             #    用**它点的目标**、跳过空刀提议（-1）；真的谁都没点过才 -1。
             g = self.game
             pts = g.night.get("wolf_points") or {}
+            # ★ 2026-10-30（用户定「真人选5号、AI 都选6号 ⇒ 刀5号」）：
+            #   真人狼**整窗没点**就是"没表态"，绝不替他点刀。
+            #   以前这里给他注入"跟随第一只已点的狼"，等于**伪造真人意志** ——
+            #   新规则下"真人表态即定刀"，这一注入会让 AFK 的真人把 AI 的刀口
+            #   抢成自己的（而且只跟随座位序第一只狼，未必是 AI 的多数）。
+            #   未表态 ⇒ 结算时回落到 AI 多数决（`engine._settle_wolf_kill` ②）。
+            if g.player(seat).kind != "ai":
+                g.note(f"{seat + 1}号（真人狼）整窗没表态，刀口交给 AI 多数决。")
+                return
             follow = None
             for pp in g.players:
                 if pp.role.value == "wolf" and pts.get(pp.seat) not in (None, -1):
@@ -457,9 +466,10 @@ def _nn_close(self, nd: Dict) -> None:
     finally:
         self._nn_injecting = False
     # ★ 2026-10-28（用户定）：狼刀**在窗口结束的这一刻**结算 ——
-    #   按刀口多数决、平票随机、空刀不参与计票（见 engine.settle_wolf_window）。
-    #   顺序很重要：先注入人类默认动作（没点刀的人狼按 follow_kill 跟随队友），
-    #   再结算；反过来的话"人狼一次没动"会被当成一张空刀票，等于让 AFK 废掉刀口。
+    #   2026-10-30 起：真人狼表过态就以他为准（空刀也算表态），
+    #   真人整窗没动才按 AI 刀口多数决、平票随机（见 engine._settle_wolf_kill）。
+    #   顺序很重要：先注入人类默认动作（**只对没表态的 AI 狼**注入 follow_kill，
+    #   真人狼不注入 —— 他"没点"就是没表态，不能替他伪造一票），再结算。
     if nid == "wolf":
         self.game.settle_wolf_window()
     # ★ 2026-10-29（用户定：窗口内可改、以结束时为准）：另外四个窗口同理，

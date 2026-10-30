@@ -750,12 +750,11 @@ _n2.settle_wolf_window()
 check("★ 分歧 1:1 ⇒ 在两个刀口里随机（不再按'先手'）",
       _n2.night.get("kill") in (_g2[0], _g2[1]), f"kill={_n2.night.get('kill')}")
 
-# ③ 三狼分歧 2:1 ⇒ 按多数决
+# ③ 三狼分歧 2:1 ⇒ 按多数决（**全 AI**：这条只在"真人没表态"时才走得通，
+#    真人一旦点了刀就以他为准，见 ③b）
 _n3 = Game(_B3, kinds=["ai"] * 5, seed=33)
 _n3.start()
 _w3 = _wolves_of(_n3)
-_n3.player(_w3[1]).kind = "human"
-_n3.player(_w3[2]).kind = "human"
 _g3 = [p.seat for p in _n3.alive if not p.role.is_wolf]
 _n3.night_kill(_w3[0], _g3[1])
 _n3.night_kill(_w3[1], _g3[0])
@@ -765,6 +764,64 @@ for _s3 in _w3:
 _n3.settle_wolf_window()
 check("★ 分歧按**刀口多数决**（2 票 1 票 ⇒ 刀 2 票那个）",
       _n3.night.get("kill") == _g3[0], f"kill={_n3.night.get('kill')} 期望={_g3[0]}")
+
+# ③b ★ 2026-10-30（用户定）：**真人狼表态即定刀**，AI 的票不再计入
+_n3b = Game(_B3, kinds=["ai"] * 5, seed=133)
+_n3b.start()
+_w3b = _wolves_of(_n3b)
+_n3b.player(_w3b[1]).kind = "human"
+_g3b = [p.seat for p in _n3b.alive if not p.role.is_wolf]
+_n3b.night_kill(_w3b[0], _g3b[1])
+_n3b.night_kill(_w3b[1], _g3b[0])          # 真人狼点 g3b[0]
+_n3b.night_kill(_w3b[2], _g3b[1])
+_n3b.settle_wolf_window()
+check("★★ 真人狼的刀口优先（两只 AI 都点 g1，真人点 g0 ⇒ 刀 g0）",
+      _n3b.night.get("kill") == _g3b[0]
+      and _n3b.night.get("wolf_decided_by") == "human",
+      f"kill={_n3b.night.get('kill')} 期望={_g3b[0]} by={_n3b.night.get('wolf_decided_by')}")
+
+# ③c 真人点空刀 ⇒ 当夜空刀（空刀在真人手里是**有效决议**，不是"不参与计数"）
+_n3c = Game(_B3, kinds=["ai"] * 5, seed=134)
+_n3c.start()
+_w3c = _wolves_of(_n3c)
+_n3c.player(_w3c[1]).kind = "human"
+_g3c = next(p.seat for p in _n3c.alive if not p.role.is_wolf)
+_n3c.night_kill(_w3c[0], _g3c)
+_n3c.night_kill(_w3c[1], -1)               # 真人狼：空刀
+_n3c.night_kill(_w3c[2], _g3c)
+_n3c.settle_wolf_window()
+check("★★ 真人点空刀 ⇒ 当夜空刀（AI 两张刀票全部作废，不允许被覆盖）",
+      _n3c.night.get("kill") == -1
+      and _n3c.night.get("kill_settled")
+      and _n3c.night.get("wolf_decided_by") == "human",
+      f"kill={_n3c.night.get('kill')} by={_n3c.night.get('wolf_decided_by')}")
+
+# ③d 真人整窗没表态 ⇒ 回落到 AI 刀口多数决（原规则照旧）
+_n3d = Game(_B3, kinds=["ai"] * 5, seed=135)
+_n3d.start()
+_w3d = _wolves_of(_n3d)
+_n3d.player(_w3d[1]).kind = "human"
+_g3d = [p.seat for p in _n3d.alive if not p.role.is_wolf]
+_n3d.night_kill(_w3d[0], _g3d[0])
+_n3d.night_kill(_w3d[2], _g3d[0])          # 真人 _w3d[1] 一次没点
+_n3d.settle_wolf_window()
+check("★★ 真人没表态 ⇒ 按 AI 刀口多数决（不能被当成「真人点了空刀」）",
+      _n3d.night.get("kill") == _g3d[0]
+      and _n3d.night.get("wolf_decided_by") == "ai",
+      f"kill={_n3d.night.get('kill')} by={_n3d.night.get('wolf_decided_by')}")
+
+# ③e 唯一真人的点与所有 AI 相反、且真人**不是座位序第一个** ⇒ 仍然听真人的
+_n3e = Game(_B3, kinds=["ai"] * 5, seed=136)
+_n3e.start()
+_w3e = _wolves_of(_n3e)
+_n3e.player(_w3e[2]).kind = "human"
+_g3e = [p.seat for p in _n3e.alive if not p.role.is_wolf]
+_n3e.night_kill(_w3e[0], _g3e[1])
+_n3e.night_kill(_w3e[1], _g3e[1])
+_n3e.night_kill(_w3e[2], _g3e[0])
+_n3e.settle_wolf_window()
+check("★★ 真人排在最后也照样定刀（不是「先手说了算」、更不是「座位小的赢」）",
+      _n3e.night.get("kill") == _g3e[0], f"kill={_n3e.night.get('kill')}")
 
 # ④ 确认后改点 ⇒ 确认被撤销
 _n4 = Game(_B2, kinds=["ai"] * 5, seed=34)
