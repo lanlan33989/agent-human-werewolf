@@ -215,6 +215,29 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     #   ⚠️ **玩家发言（t == "say"）必须继续跳过**：那是几百字的正文，一句就虚增
     #      几十秒；而且白天的发言时长由驱动器的定时器裁决，跟客户端队列不同步，
     #      把积压串进来会把起算点推到一分钟后（2026-10-23 实机事故，见上）。
+    return _queue_end_mono(self, idx)
+
+
+def _queue_end_mono(self, idx: int) -> Optional[float]:
+    """timeline 第 `idx` 句**念完**的时刻（**monotonic**）。
+
+    串行累加口径（夜间面板与白天发言共用同一份，绝不各写一套）：
+      · 参与累加的：夜间剧本句（带 `node`）+ 法官句（`t == "sys"`）
+      · 跳过的：玩家长发言（`t == "say"`，几百字一句会虚增几十秒）
+      · `max(t, start)` 把"客户端积压"如实并进来 —— 上一句没念完不能开下一句
+      · 每句时长 = `0.5 + 字数/3.4`（rate 0.98 的中文本地合成口径）
+      · 全部按 `win_scale` 缩放（测试缩窗时没有真实语音，节奏必须跟着缩）
+
+    ★ 2026-10-30：从 `_nn_ready_mono` 里抽出来的。用户实机报
+      「夜间还没结束就显示 4 号正在发言、倒计时还在减」——
+      根因是**发言的 120 秒从"驱动推进到 DISCUSS 那一拍"起算**，
+      而那一刻法官还在念「天亮了…昨夜 X 出局…4号请发言」。
+      现在 `_sp_state` 也调这个函数，面板/读秒/播报同拍。
+    """
+    tl = self.timeline or []
+    if idx < 0 or idx >= len(tl):
+        return None
+    _sc = night_script.win_scale()
     t = None
     for j in range(idx + 1):
         x = tl[j]
@@ -230,8 +253,35 @@ def _nn_ready_mono(self, node_id: str) -> Optional[float]:
     #   尾巴的 +2 秒去掉了 —— 那一截是 2026-10-06 "播报最后一个字后 2 秒起算"
     #   的旧口径，用户实机的观感就是"念完了面板还要愣两秒才出来"。
     #   现在起算点 = 那句**念完**的那一刻，面板、读秒、播报三者同拍。
-    ready_wall = t
-    return time.monotonic() + (ready_wall - time.time())   # 墙钟 → monotonic
+    return time.monotonic() + (t - time.time())            # 墙钟 → monotonic
+
+
+def _speech_ready_mono(self, kind: str, seat: int) -> Optional[float]:
+    """「N 号请发言」/「N 号请留遗言」那句**念完**的时刻（monotonic）。
+
+    找不到那条播报（老对局 / 语音关闭 / AI 发言没有开场句）时返回 None，
+    调用方按"立刻开始"处理 —— 宁可早，不可把人的麦锁住。
+
+    ⚠️ 从后往前找：同一个座位在一轮里可能说两次（平票加时），
+       要找的是**刚刚这一条**，不是第一轮那条。
+    """
+    say = f"{seat + 1}号请留遗言" if kind == "lastword" else f"{seat + 1}号请发言"
+    tl = self.timeline or []
+    for i in range(len(tl) - 1, -1, -1):
+        x = tl[i]
+        if x.get("t") == "sys" and (x.get("s") or "") == say:
+            end = _queue_end_mono(self, i)
+            if end is None:
+                return None
+            # ★ 夹一个上限：**最多只等这一句的朗读时长**。
+            #   串行累加在"积压"时会一路往后推（服务端一口气写了好几句，
+            #   实测能推出十几秒），而客户端的 `lines_due` 对落后太多的旧句是
+            #   **直接跳过**的 —— 它不会真按服务端的积压节奏一句句补完。
+            #   不夹的话，一旦积压，人就要干等十几秒才拿到麦。
+            _sc = night_script.win_scale()
+            cap = time.monotonic() + _sc * (0.5 + len(say) / 3.4)
+            return min(end, cap)
+    return None
 
 
 def _table_size(self) -> int:
@@ -913,13 +963,38 @@ def _sp_key(self, kind: str, seat: int) -> tuple:
 
 
 def _sp_state(self, kind: str, seat: int) -> Dict:
-    """这一位这一次发言的计时状态（换人/换轮自动重起）。"""
+    """这一位这一次发言的计时状态（换人/换轮自动重起）。
+
+    ★ 2026-10-30（用户实机：「夜间还没结束、其他玩家还没发言，圆盘就显示
+      4 号正在发言中，倒计时还在减」）：
+      `at` 以前取 `time.monotonic()` —— 也就是**驱动推进到 DISCUSS 的那一拍**。
+      可服务端推进**不等播报**：那一拍法官还在念「天亮了」「昨夜 X 出局」
+      「4号请发言」，于是 120 秒在一句都还没念的时候就开始扣，
+      前端（拿到 `current_speaker` 就画大圆）看起来就是"夜里有人正在发言"。
+      现在 `at` = 「N 号请发言」**念完**的时刻（与夜间面板同一个估算器）；
+      估算不出来（无播报 / 老数据）才退回"立刻开始" —— 宁可早，不可锁麦。
+    """
     key = _sp_key(self, kind, seat)
     st = getattr(self, "_sp_state", None)
     if not st or st.get("key") != key:
-        st = {"key": key, "at": time.monotonic(), "warned": False}
+        _ready = _speech_ready_mono(self, kind, seat)
+        st = {"key": key, "at": _ready if _ready is not None else time.monotonic(),
+              "warned": False}
         self._sp_state = st
     return st
+
+
+def _speech_started(self, kind: str, seat: int) -> bool:
+    """这一位的话**现在能不能开口**（=「N 号请发言」那句念完了没有）。
+
+    与 `_speech_left` 一样**只读**：`now_state()` 每拍都调它，
+    绝不能顺手把时钟建起来 —— 那正是"起点被轮询拖歪"的老坑。
+    """
+    st = getattr(self, "_sp_state", None)
+    if st and st.get("key") == _sp_key(self, kind, seat):
+        return time.monotonic() >= st["at"]
+    _ready = _speech_ready_mono(self, kind, seat)
+    return True if _ready is None else time.monotonic() >= _ready
 
 
 def _speech_left(self, kind: str, seat: int) -> float:
@@ -931,7 +1006,10 @@ def _speech_left(self, kind: str, seat: int) -> float:
     st = getattr(self, "_sp_state", None)
     if not st or st.get("key") != _sp_key(self, kind, seat):
         return speech_io.speech_window()
-    return speech_io.speech_window() - (time.monotonic() - st["at"])
+    # 夹住上限：`at` 可能取在**未来**（「N号请发言」还没念完）——
+    # 那时算出的是 120+，前端读秒一上来就"超窗"了。念完之前一律显示满窗。
+    return min(speech_io.speech_window(),
+               speech_io.speech_window() - (time.monotonic() - st["at"]))
 
 
 def _speech_guard(self, kind: str, seat: int, end_fn) -> str:

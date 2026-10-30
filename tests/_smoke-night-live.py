@@ -157,10 +157,15 @@ def run_night(seed=7, humans=4, ais=5, scale=0.12, verbose=False, skip_heal=Fals
         #   "毒药窗口满窗" —— 那不是漂移。以前毒药窗口根本没有面板
         #   （witch_asked 把第二问掐死了），所以这条撞不上；现在第二问真的出现，
         #   必须按节点分段比，否则修好的东西反被判成回归。
+        # ★ 2026-10-30：阈值从 0.001 放到 0.15。
+        #   `until` 是 `time.time() + (deadline_mono - monotonic())` —— 两个时钟
+        #   的速率有微差（NTP 微调 / 计时器精度），相邻两拍实测会涨 10~30 毫秒。
+        #   那不是"窗口重启"（重启是整整一个窗口，15s 级），0.001 只会制造假红。
+        #   0.15s 与 I1 里 `g + 0.15 >= w` 用的是同一档容差。
         if u and last_until and now.get("seat") is not None and now.get("started"):
             if (last_until[0] == now.get("seat")
                     and last_until[1] == now.get("node")
-                    and u > last_until[2] + 0.001):
+                    and u > last_until[2] + 0.15):
                 stat["until_missing"] += 1          # 同一人**同一节点**内倒着涨 = 漂移
         last_until = ((now.get("seat"), now.get("node"), u)
                       if (u and now.get("started")) else None)

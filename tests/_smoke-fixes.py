@@ -1268,6 +1268,66 @@ check("★ ③ 后端把 `closing` 下发给前端（now_state 的 none 分支�
 check("★ ③ 节点推进要等闭眼句念完（_nn_closing 闸）",
       "_nn_closing" in (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
 
+# ================================================================ ⑰ 2026-10-30
+# 用户实机：「夜间还没结束、其他玩家还没发言时，圆盘就显示了 4 号（真人）
+#            正在发言中，且倒计时在减少」
+# 根因两层：
+#   ① 服务端：发言的 120 秒从「驱动推进到 DISCUSS 那一拍」起算，而推进**不等播报**
+#      ⇒ 法官还在念「天亮了…昨夜 X 出局…4号请发言」，读秒已经在掉。
+#   ② 前端：大圆只看 `current_speaker` 就画「X号正在发言中」，没有播报门
+#      （`_gateOk` 对 speak 用的是 voicedUp()，本机音频队列暂时为空时会放行）。
+# 修法：`now.started` 下发（语义与夜间 wheel 完全一致）+ 计时起点 = 那句念完。
+print("=" * 74)
+print("⑰ 发言必须等「N号请发言」念完（夜间播报里不许抢先显示/读秒）")
+print("=" * 74)
+
+from engine import Phase as _Ph17  # noqa: E402
+
+_scale17 = night_script.win_scale()
+night_script.set_win_scale(1.0)    # 量"还没念完"必须用真实时长（缩窗后只剩 0.04s）
+try:
+    _s17 = game_api.Session(humans=6, ais=0, seed=3)
+    _g17 = _s17.game
+    _g17.phase = _Ph17.DISCUSS
+    _g17.speaking_order = [p.seat for p in _g17.alive]
+    _g17.speak_cursor = 0
+    _spk17 = _g17.current_speaker()
+    speech_io._announce_speaker(_s17, _spk17)   # 法官刚把「N号请发言」排进队列
+    _t17 = _time.monotonic()
+    _st17 = _ndrv._sp_state(_s17, "speak", _spk17)
+    _n17 = _s17.now_state()
+    _say17 = f"{_spk17 + 1}号请发言"
+    _dur17 = 0.5 + len(_say17) / 3.4
+    check("★ ⑰ 计时起点 =「N号请发言」念完那一刻（不是驱动推进那一拍）",
+          _st17["at"] - _t17 >= _dur17 * 0.8,
+          f"at-now={_st17['at'] - _t17:.2f}s 该句≈{_dur17:.2f}s")
+    check("★ ⑰ 这句没念完 ⇒ now.started=False",
+          _n17.get("kind") == "speak" and _n17.get("started") is False,
+          str(_n17)[:100])
+    check("★ ⑰ 没念完时读秒是满窗（不许已经在掉）",
+          abs((_n17.get("until_left") or 0) - speech_io.SPEECH_MAX) < 0.01,
+          f"until_left={_n17.get('until_left')}")
+    _time.sleep(max(0.0, _st17["at"] - _time.monotonic()) + 0.05)
+    _n17b = _s17.now_state()
+    check("★ ⑰ 念完之后 started=True，读秒才从满窗开始走",
+          _n17b.get("started") is True
+          and (_n17b.get("until_left") or 0) <= speech_io.SPEECH_MAX,
+          f"started={_n17b.get('started')} left={_n17b.get('until_left')}")
+finally:
+    night_script.set_win_scale(_scale17)
+
+# 前端：大圆 / 号码高亮 / 读秒 / 面板四处都必须认这个 started
+check("★ ⑰ 前端有 `speakPending`（started=false 时大圆退回法官）",
+      "function speakPending" in _tui and "speakPending()" in _tui)
+check("★ ⑰ 大圆文案与号码高亮都走 speakingSeat()（一处挡住、两处生效）",
+      "if (speakPending()) return null;" in _tui)
+check("★ ⑰ 面板/发言屏的闸把 speak 也纳入 started（不再只靠 voicedUp）",
+      "NOW.kind === 'speak'" in _tui)
+check("★ ⑰ started=false 时不显示读秒",
+      "NOW.kind === 'speak' && NOW.started === false" in _tui)
+check("★ ⑰ 后端把 started 下发给发言屏（now_state 的 speak 分支）",
+      "_speech_started" in (BASE / "backend" / "game_api.py").read_text(encoding="utf-8"))
+
 print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")

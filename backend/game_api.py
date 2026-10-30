@@ -480,10 +480,18 @@ class Session:
             # ★ 2026-10-28（用户定）：发言 120 秒上限 —— 剩余秒数照夜间那套口径下发
             #   （`until_left` 免疫设备时钟差），前端只做减法显示。
             #   到点由服务端替他把话结束（`_speech_guard`），前端不做裁决。
-            _left = max(0.0, night_driver._speech_left(self, "lastword" if _lw else "speak", sp))
+            # ★ 2026-10-30（用户实机：「夜间还没结束就显示 4 号正在发言、倒计时在减」）：
+            #   新增 `started` —— 语义与夜间 wheel 的 `started` 完全一样：
+            #   **「N 号请发言」那句念完了没有**。服务端推进不等播报，
+            #   相位到了 DISCUSS 时法官可能还在念「天亮了」「昨夜 X 出局」。
+            #   前端拿到 started=false 就该继续显示法官、不画"X号正在发言中"、
+            #   不显示读秒 —— 否则视觉比听觉提前了十几秒。
+            _kind = "lastword" if _lw else "speak"
+            _started = night_driver._speech_started(self, _kind, sp)
+            _left = max(0.0, night_driver._speech_left(self, _kind, sp))
             return {"kind": "speak", "seat": sp, "node": None,
                     "until": time.time() + _left,
-                    "until_left": round(_left, 2), "started": True,
+                    "until_left": round(_left, 2), "started": _started,
                     "need": pick, "why": "出局遗言（点大圆开始/结束）" if _lw else ""}
 
         if g.phase is Phase.VOTE:

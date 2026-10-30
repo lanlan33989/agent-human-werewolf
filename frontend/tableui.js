@@ -43,7 +43,10 @@ function paintBig(){
      `current_speaker` / `lastword_seat`。后者是兜底 —— AI 那句话播完之后
      CUR_LINE 会清空，可这一回合还没结束，大圆不该退回"法官"。 */
   var sp = speakingSeat();
-  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined) sp = l.seat;
+  /* 正在播的那条 say 更准（含遗言）——但"还没念到我这句"时不许覆盖回有人发言
+     （法官正在念「4号请发言」，队列里还躺着他上一轮的 say 残条）。 */
+  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined
+      && !speakPending()) sp = l.seat;
   if (sp !== null && sp !== undefined){
     /* ★ 2026-10-29（用户）：AI 发言时大圆原来在「1（人）」和「点击结束发言」
        之间跳 —— 那两条都是**发言屏**（人类自己的麦）的文案，AI 回合本不该出现。
@@ -71,12 +74,26 @@ function paintBigIfIdle(){
   paintBig();
 }
 
+/* 这一拍**该谁发言已经定了、但那句还没念到**（服务端 started=false）。
+   ★ 2026-10-30（用户实机：「夜间还没结束、其他玩家还没发言，圆盘就显示
+     4 号正在发言中，倒计时还在减」）：服务端推进**不等播报** —— 相位一到
+     DISCUSS，`current_speaker` 立刻有了（4 号），可法官还在念「天亮了」
+     「昨夜 X 出局」「4号请发言」。原来大圆只看 `current_speaker`，
+     于是视觉比听觉提前了十几秒。
+     现在：`started === false` ⇒ 这段就算"还没轮到"，大圆退回法官、
+     号码不高亮、读秒不显示。旧服务端不认这个字段（undefined）⇒ 行为不变。 */
+function speakPending(){
+  var n = (typeof PUBLIC !== 'undefined' && PUBLIC) ? PUBLIC.now : null;
+  return !!(n && n.kind === 'speak' && n.started === false);
+}
+
 /* 当前在说话的座位（0 基）；没人说话 = null。
    ⚠️ 遗言相位下 `current_speaker` 是 null（引擎只在 DISCUSS 里认它），
    那时认 `lastword_seat` —— 否则"出局的人正在留遗言"这一段整个不高亮。 */
 function speakingSeat(){
   if (SPK_MODE) return SPK_MODE - 1;
   if (!PUBLIC) return null;
+  if (speakPending()) return null;          /* 法官还没念到「N号请发言」 */
   if (PUBLIC.current_speaker !== null && PUBLIC.current_speaker !== undefined)
     return PUBLIC.current_speaker;
   if (PUBLIC.lastword_seat !== null && PUBLIC.lastword_seat !== undefined)
@@ -361,7 +378,7 @@ async function tick(){
     /* 三档口径（2026-10-23 起）：wheel/shoot = **服务端 started**；speak/vote = voicedUp；none = 放行。 */
     var _gateOk = NOW
       ? (NOW.kind === 'none'
-         || ((NOW.kind === 'wheel' || NOW.kind === 'shoot')
+         || ((NOW.kind === 'wheel' || NOW.kind === 'shoot' || NOW.kind === 'speak')
              /* 🔴 2026-10-23（用户实机："狼人/解药面板依旧不弹、毒药读秒 12→14→13"）：
                 面板门改听**服务端的 started**。v4 已把起算权收回服务端
                 （est = 估算"念完+2s"，水泵按墙钟走窗口），而旧门 `linePlayed`
@@ -374,7 +391,11 @@ async function tick(){
                  失联兜底在半窗置真 —— v4 的 started 已改为精确 est，不再有
                  那个半窗抢跑源。）
                 老服务端不下发 started ⇒ 退回 linePlayed（音频卡死兜底仍在其内）。 */
-             ? (typeof NOW.started === 'boolean' ? NOW.started : linePlayed(NOW.node))
+             ? (typeof NOW.started === 'boolean'
+                ? NOW.started
+                /* 旧服务端没有 started：发言退回"整队播报播完"（voicedUp），
+                   夜间仍用本段那句（linePlayed）。 */
+                : (NOW.kind === 'speak' ? voicedUp() : linePlayed(NOW.node)))
              : voicedUp()))
       : nightReady(top);
     /* 记下"这个节点的窗口第一次被看到"的时刻（上面 arm 兜底用） */
@@ -389,7 +410,11 @@ async function tick(){
        until 是服务器墙钟，设备时钟有偏差时（手机 vs 服务端）倒计时一出来
        就像"已经走了好久"。until_left 与面板 arm 同拍下发 ⇒ 面板与倒计时
        天然同时出、且从满窗起走（用户定稿口径）。老服务端没有该字段时回退 until。 */
-    if (NOW && typeof NOW.until_left === 'number'){
+    /* ★ 2026-10-30：`speak` 且 `started === false`（法官还没念到「N号请发言」）
+       时**不显示读秒** —— 服务端此刻下发的 `until_left` 是满窗（120），
+       但那是"还没开始"的满窗，显示出来就是"人还没开口，倒计时已经在掉"。 */
+    if (NOW && typeof NOW.until_left === 'number'
+        && !(NOW.kind === 'speak' && NOW.started === false)){
       NIGHT_CD = { left: Math.max(0, NOW.until_left), at: Date.now() };
     } else if (NOW && typeof NOW.until === 'number' && NOW.until > 0){
       NIGHT_CD = { left: Math.max(0, NOW.until - Date.now() / 1000),
@@ -516,6 +541,10 @@ async function tick(){
       }
     } catch (e) { /* 不拖累 tick */ }
     if (!_gateOk){
+      /* 还没念到"该你说话" ⇒ 把发言屏也收掉。
+         否则上一拍残留的麦屏会盖住法官（用户看到的就是"人还没开口，
+         大圆已经写着 4 号正在发言、读秒还在掉"）。 */
+      if (speakPending()) closeSpeakerMode();
       foot('还有话没念完…');
     } else if (NOW && !top){
       /* 服务端说"这一拍没有人类要点"（AI 在算 / 窗口在走 / 收尾播报）——
