@@ -378,6 +378,12 @@ def _ai_witch_poison(self, seat: int):
     g = self.game
     agent = self.agents[seat]
     view = g.get_view_for(seat)
+    # ★ 2026-10-30（用户定「女巫一天晚上最多使用一瓶药」）：今晚已经用过解药 ⇒
+    #   毒药这一问只是流程，**AI 也不许再毒**（以前人类女巫被引擎挡住了、AI 女巫
+    #   却还能在同一夜连着用掉两瓶 —— 同一套规则两种行为）。
+    if (g.night.get("heal_settled") and g.night.get("heal") not in (None, -1)):
+        g.night_decline(seat)
+        return True
     try:
         d, flag = _pre_decide(self, seat, "poison",
                               lambda: agent.decide_target(view, self.speech, "poison"))

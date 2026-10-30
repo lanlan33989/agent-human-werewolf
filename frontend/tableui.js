@@ -205,7 +205,7 @@ function enterSpeakerMode(need){
   if (_bi) _bi.style.display = 'none';
   if (_bt) _bt.style.display = 'none';
   var _bw0 = $('bigWho');
-  if (_bw0) _bw0.textContent = '点击开始发言';
+  if (_bw0) _bw0.textContent = '点击发言';   /* ★ 2026-10-30：与 syncSpkTip 同一句，别一进屏就闪另一个词 */
   syncSpkTip();
   foot('');      /* 同上：发言屏不留提示文案（用户定 2026-10-07） */
 }
@@ -261,9 +261,13 @@ function syncSpkTip(){
      （有声音/无声音）/ 点击结束发言），识别出的文字不再上圆。 */
   var bw = $('bigWho');
   if (bw){
+    /* ★ 2026-10-30（用户实机）：还没开口时大圆写「点击结束发言」是错的 ——
+       那一下是**开始**说话，不是结束。两态文案必须分清楚：
+         没录音 = 「点击发言」（点一下开麦）
+         录音中 = 「发言中…」（再点一下结束） */
     bw.textContent = SAY_REC
       ? ('发言中' + (ok ? '（有声音）' : (st ? '（无声音）' : '')))
-      : '点击结束发言';
+      : '点击发言';
   }
   var ic = $('bigIcon');
   if (ic) ic.textContent = '';
@@ -548,9 +552,14 @@ async function tick(){
       foot('还有话没念完…');
     } else if (NOW && !top){
       /* 服务端说"这一拍没有人类要点"（AI 在算 / 窗口在走 / 收尾播报）——
-         桌上就不该有面板/发言屏。把残余的收掉，免得窗口关了还能按（会 400）。 */
+         桌上就不该有面板/发言屏。把残余的收掉，免得窗口关了还能按（会 400）。
+         ★ 2026-10-30（用户实机："预言家点了确认窗口直接退出"）：**验人结果屏例外**。
+         服务端在 `seer_confirmed` 之后 `can_act` 立刻变空（结果当场已经报过），
+         这一支会把刚摊出来的结果屏一起收掉。结果屏 `act='done'` 只由
+         「预言家请闭眼」念完（上面那段）或点圆心交回来收 —— 不在这里撤。 */
       closeSpeakerMode();
-      if (typeof closeHandoff === 'function') closeHandoff();
+      var _keepResult = !!(WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done');
+      if (typeof closeHandoff === 'function' && !_keepResult) closeHandoff();
     } else if (!HANDOFF){
       if (top && (PUBLIC.phase === 'discuss' || PUBLIC.phase === 'lastword')
           && isSpeakOnly(top)){
@@ -1912,11 +1921,15 @@ function handoffMsg(msg, bad){
 
 /* 把「只有你知道」的结论摊给本人看（目前用于预言家验人）。
    验人这一下是预言家整轮唯一拿到的信息 —— 不给结果等于白验，
-   而且玩家会以为是游戏卡住了。 */
-function showPrivateResult(seatNo, v, title){
-  /* 验人结果直接写在大圆里（私有信息不上日志区），点圆心交回 */
+   而且玩家会以为是游戏卡住了。
+
+   `onlyNo`（1-based，可选）= **只显示这一次**的验人结果。预言家一局可能验了好几个人，
+   把历史记录全塞进大圆会变成一长串（"2 号是好人；5 号是狼人；…"），最该看的
+   反而是刚刚这一下。不传就保持旧行为（全列）。 */
+function showPrivateResult(seatNo, v, title, onlyNo){
   var inv = v.investigations || {};
   var ks = Object.keys(inv);
+  if (onlyNo != null && (String(onlyNo - 1) in inv)) ks = [String(onlyNo - 1)];
   var lines = ks.map(function(k){
     return (Number(k) + 1) + ' 号是 ' + (inv[k] ? '狼人' : '好人');
   });
@@ -2023,18 +2036,21 @@ async function submit(seatNo, action, target, text){
       }
       /* 🔴 2026-10-12（用户定稿）：验人结果直接标在**拨号盘的号码按钮**上 ——
          号码被 👍（好人）/ 👎（狼人）替代，直到「预言家请闭眼」才还原数字
-         （resetSeerBig 挂在闭眼播报上）。大圆已藏 ⇒ 旧的结果屏看不见，
-         这就是"验了没反应"的原因。结果态（act='done'）不被重建冲掉。 */
+         （resetSeerBig 挂在闭眼播报上）。
+         ★ 2026-10-30（用户实机："点了确认窗口直接退出了，没有显示验人信息"）：
+         **旧写法只换图标就 return，结果屏从来没画过** —— 而服务端在
+         `seer_confirmed` 之后 `can_act` 立刻变空 ⇒ 下一拍 tick 把面板整个收掉，
+         玩家只看见 👍 闪一下。现在顺序改成：先摊结果屏（大圆写
+         「X 号是 狼人/好人」），再把目标号码换成图标；两样都留着，
+         由「预言家请闭眼」念完（或点圆心交回）才收。 */
+      showPrivateResult(seatNo, v2, '你验的结果', target);
       if (SEER_LAST && $('nightDial').classList.contains('on')){
         var _b2 = $('nightDial').querySelector('button[data-no="' + target + '"]');
         if (_b2){
           _b2.textContent = SEER_LAST.wolf ? '👎' : '👍';
           _b2.onclick = null;
-          WHEEL.act = 'done';
-          return;
         }
       }
-      showPrivateResult(seatNo, v2, '你验的结果');
       return;
     }
     /* ★ 2026-10-28（用户定）：狼刀**整窗可改** —— 点完刀**不许把面板收掉**。

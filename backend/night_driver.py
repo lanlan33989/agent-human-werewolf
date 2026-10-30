@@ -262,6 +262,13 @@ def _speech_ready_mono(self, kind: str, seat: int) -> Optional[float]:
     找不到那条播报（老对局 / 语音关闭 / AI 发言没有开场句）时返回 None，
     调用方按"立刻开始"处理 —— 宁可早，不可把人的麦锁住。
 
+    🔴 2026-10-30（用户实机："法官报天亮了之前，圆盘就显示 4 号正在发言、读秒还在掉"）：
+       **绝不在这里夹"最多只等本句时长"的上限**。上一版为了防"积压时干等十几秒"，
+       把结果夹成 `now + 本句时长`；而死者遗言的真实队列是
+       「天亮了」+「昨夜 X 出局」+「4号请留遗言」三句串行 ⇒ 夹完 2 秒就判"念完了"，
+       面板/大圆于是抢在法官报天亮之前亮起。法官**真的在念**，就该等它念完 ——
+       队列末尾（`_queue_end_mono`）是唯一正确的口径，积压不是异常而是正常的播报排队。
+
     ⚠️ 从后往前找：同一个座位在一轮里可能说两次（平票加时），
        要找的是**刚刚这一条**，不是第一轮那条。
     """
@@ -270,17 +277,7 @@ def _speech_ready_mono(self, kind: str, seat: int) -> Optional[float]:
     for i in range(len(tl) - 1, -1, -1):
         x = tl[i]
         if x.get("t") == "sys" and (x.get("s") or "") == say:
-            end = _queue_end_mono(self, i)
-            if end is None:
-                return None
-            # ★ 夹一个上限：**最多只等这一句的朗读时长**。
-            #   串行累加在"积压"时会一路往后推（服务端一口气写了好几句，
-            #   实测能推出十几秒），而客户端的 `lines_due` 对落后太多的旧句是
-            #   **直接跳过**的 —— 它不会真按服务端的积压节奏一句句补完。
-            #   不夹的话，一旦积压，人就要干等十几秒才拿到麦。
-            _sc = night_script.win_scale()
-            cap = time.monotonic() + _sc * (0.5 + len(say) / 3.4)
-            return min(end, cap)
+            return _queue_end_mono(self, i)
     return None
 
 

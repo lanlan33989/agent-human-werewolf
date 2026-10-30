@@ -2154,8 +2154,18 @@ class Game:
                     #   （`heal_settled` / `poison_settled`）。以前一个 witch_asked
                     #   糊两问，点了或放弃了解药就把毒药那问一起掐死。
                     if st == "witch_poison":
+                        # ★ 2026-10-30（用户定「女巫一天晚上最多使用一瓶药」）：
+                        #   今晚**已经用过解药**（`heal_settled` 且真的救了人）⇒
+                        #   毒药这一问只是流程：播报照常念（节点在剧本里），
+                        #   但面板**不给任何可点的东西**（前端显示为占位灰屏，
+                        #   到点由 `default='pass'` 收口）。
+                        #   以前这里只看"毒药还在不在"，于是解药 + 毒药能在同一夜
+                        #   连着用掉两瓶 —— 那是直接违反规则的。
+                        _used_heal = (self.night.get("heal_settled")
+                                      and self.night.get("heal") not in (None, -1))
                         if (not self.night.get("poison_settled")
-                                and self.private[seat].potions["poison"]):
+                                and self.private[seat].potions["poison"]
+                                and not _used_heal):
                             acts.append("poison")
                             acts.append("pass")
                     elif st == "witch_heal":

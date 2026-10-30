@@ -1483,6 +1483,95 @@ check("★ ⑱ 真人狼整窗没点时，driver 不注入刀口（只写一条�
       "整窗没表态，刀口交给 AI 多数决" in
       (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
 
+# ================================================================ ⑲ 2026-10-30
+# 用户实机四条：
+#  ① 女巫一晚最多一瓶药（用了解药后毒药窗口只走播报，面板不可点）
+#  ② 预言家点完确认窗口直接退出、没显示验人结果
+#  ③ 天亮播报之前，圆盘就显示"N号正在发言中"且读秒在掉（遗言）
+#  ④ 未开口时大圆写「点击结束发言」，应为「点击发言」
+print("=" * 74)
+print("⑲ 女巫一晚一瓶 / 验人结果屏 / 遗言等播报 / 发言文案")
+
+# ---- ⑲-1 用了解药 ⇒ 毒药窗口不给任何可点动作 ---------------------------
+_g19 = _G16(_b16, ["human"] * 6, seed=3)
+_g19.start()
+_w19 = next(p for p in _g19.players if p.role is _R16.WITCH)
+_v19 = next(p.seat for p in _g19.good_alive() if p.seat != _w19.seat)
+_g19.night["kill"] = _v19
+_g19.night["kill_settled"] = True
+_g19.night["stage"] = "witch_heal"
+_g19.night_heal(_w19.seat, _v19)
+_g19.settle_witch_heal()
+_g19.night["stage"] = "witch_poison"
+check("★ ⑲ 用了解药 ⇒ 毒药窗口**没有任何可点动作**（一晚一瓶，播报照常念）",
+      _g19.actions_for(_w19.seat) == [],
+      str(_g19.actions_for(_w19.seat)))
+check("★ ⑲ 但毒药本身不能被扣（她只是不能再用，药还在）",
+      _g19.private[_w19.seat].potions["poison"] is True)
+
+# ---- ⑲-2 对照：整夜没用解药 ⇒ 毒药照常可用 -----------------------------
+_g19b = _G16(_b16, ["human"] * 6, seed=3)
+_g19b.start()
+_w19b = next(p for p in _g19b.players if p.role is _R16.WITCH)
+_v19b = next(p.seat for p in _g19b.good_alive() if p.seat != _w19b.seat)
+_g19b.night["kill"] = _v19b
+_g19b.night["kill_settled"] = True
+_g19b.night["stage"] = "witch_heal"
+_g19b.night_decline(_w19b.seat)
+_g19b.settle_witch_heal()
+_g19b.night["stage"] = "witch_poison"
+check("★ ⑲ 没用解药 ⇒ 毒药窗口照常（poison + pass）",
+      "poison" in _g19b.actions_for(_w19b.seat),
+      str(_g19b.actions_for(_w19b.seat)))
+
+# ---- ⑲-3 AI 女巫守同一条规则 -------------------------------------------
+_ai19 = (BASE / "backend" / "ai_behaviors.py").read_text(encoding="utf-8")
+check("★ ⑲ AI 女巫也守「一晚一瓶」（人类被挡、AI 还能连着用两瓶就是 bug）",
+      'g.night.get("heal_settled") and g.night.get("heal") not in (None, -1)'
+      in _ai19)
+
+# ---- ⑲-4 遗言起算点必须排在「天亮了 + 死讯」之后 -----------------------
+_scale19 = night_script.win_scale()
+night_script.set_win_scale(1.0)          # 量真实时长（缩窗后差不出来）
+try:
+    _t19 = 1_700_000_000.0
+    _GAP19 = night_script.GAP
+    _fake19 = _types.SimpleNamespace(timeline=[
+        {"t": "sys", "s": "天亮了。", "voice": "Neil", "ts": _t19},
+        {"t": "sys", "s": "昨夜 4号 出局。", "voice": "Neil",
+         "delay": _GAP19, "ts": _t19 + 0.01},
+        {"t": "sys", "s": "4号请留遗言", "voice": "Neil",
+         "delay": _GAP19, "ts": _t19 + 0.02},
+    ])
+    _r19 = _ndrv._speech_ready_mono(_fake19, "lastword", 3)
+    _w19w = (_r19 - _time.monotonic() + _time.time()) if _r19 is not None else None
+    _d19 = lambda s: 0.5 + len(s) / 3.4
+    _need19 = _d19("天亮了。") + _d19("昨夜 4号 出局。") + _d19("4号请留遗言")
+    check("★ ⑲ 遗言起算点 = 队列末尾（天亮了 + 死讯 + 请留遗言），不许夹到「本句时长」",
+          _w19w is not None and (_w19w - _t19) >= _need19 * 0.95,
+          f"{(_w19w or 0) - _t19:.2f}s，三句要 {_need19:.2f}s")
+    # 只有一句时必须 ≈ 本句时长（别把上限删成"永远等半小时"）
+    _fake19b = _types.SimpleNamespace(timeline=[
+        {"t": "sys", "s": "4号请留遗言", "voice": "Neil", "ts": _t19}])
+    _r19b = _ndrv._speech_ready_mono(_fake19b, "lastword", 3)
+    _w19b2 = (_r19b - _time.monotonic() + _time.time()) if _r19b is not None else None
+    check("★ ⑲ 队列里只有这一句时，起算点仍 ≈ 本句朗读时长（没变成死等）",
+          _w19b2 is not None and abs((_w19b2 - _t19) - _d19("4号请留遗言")) < 0.1,
+          f"{(_w19b2 or 0) - _t19:.2f}s vs {_d19('4号请留遗言'):.2f}s")
+finally:
+    night_script.set_win_scale(_scale19)
+
+# ---- ⑲-5 前端：结果屏 / 发言文案 ---------------------------------------
+_tui19 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+check("★ ⑲ 点完「确认验人」**真的摊结果屏**（不再只换图标就 return）",
+      "showPrivateResult(seatNo, v2, '你验的结果', target)" in _tui19)
+check("★ ⑲ 结果屏不被「这一节没有人类要点」那一支撤掉（act='done' 豁免）",
+      "_keepResult" in _tui19)
+check("★ ⑲ 未开口时大圆写「点击发言」（原来写的是「点击结束发言」）",
+      ": '点击发言';" in _tui19 and ": '点击结束发言';" not in _tui19)
+check("★ ⑲ 只显示**本次**验人结果（onlyNo），不再把历史验人全堆到大圆",
+      "function showPrivateResult(seatNo, v, title, onlyNo)" in _tui19)
+
 print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")
