@@ -99,8 +99,22 @@
   原因：`MOCK_LLM=1` 时 `build_pipeline()` 装配的是 `MockLlm`，填多少 key 都不会变成真模型。
   只想跑 Mock 的人把它设回 1 即可。
 - 缺 `LLM_BASE_URL` / `LLM_MODEL` 时，返回的 `note` 会明确提示“会退化成兜底话术”。
+- **掩码不可回写（2026-11-01）**：非本机请求的 `asr/llm/tts` 仍是指纹（含 `…` 或全星号），
+  但 GET 另给 `asr_set/llm_set/tts_set` 告诉页面“到底配没配”。前端拿到指纹时不回填输入框，
+  提交空串；服务端也会拒绝任何含 `…` / 全星号的 key（`changed` 为空，`note` 里说明“掩码未写入”）。
+  根因：局域网打开 `/play` 时页面把指纹原样提交，真实 key 被 8 字符掩码覆盖 ⇒ AI 全部兜底。
 
-### 1.4 票型播报与票型框（2026-10-31）
+### 1.4 预言家结果屏与终局时机（2026-11-01）
+
+- 验人**选人即记结果**（`investigate` 的私有视图）；点「确认验人」立即摊开结果屏。
+  到点没点确认时，在「他是这个」播报或验人节点过去后自动摊开同样的结果屏，
+  至少展示 6 秒（点圆心可提前交回）。结果屏独占交接层：拨号盘/表头隐藏、大圆恢复可见，
+  播报队列的 `paintBig()` 不许覆盖结论。
+- **终局只能在夜行动全部结束后宣布**：`auto_advance` 的胜负保险丝在 `NIGHT` / `SHOOT`
+  期间不生效，由 `resolve_night()`（所有夜间动作与播报结束后）或 `night_shoot()`
+  （猎人开完枪后）裁决。禁止在狼刀窗口一结束就 `ENDED` —— 预言家当晚还没查验。
+
+### 1.5 票型播报与票型框（2026-10-31）
 
 - 法官恢复**口语版票型播报**：结算时 `public_log` / `timeline` 里会出现
   `投票结果：3 号 2 票（1 号、2 号投的）；…`，先票型后结果；平票加时那一轮也各播一次。
@@ -216,7 +230,7 @@
 | `GET /api/game/games` | 已结束清单（榜单页 `/board` 用）。行内含 `archive`=**留档编号**（`runs/<日期时间>_<局号>_v<git短哈希>`，2026-10-27 增） | |
 | `GET /api/health` | 服务与各层真假；`tts_stream`（bool）= 当前 TTS 能否服务 `/ws/tts`（2026-10-31 增） | `health.json` |
 | `GET /api/tts?…`、`WS /ws/tts` | 云端 TTS 音频；`VOICE_ON=0` 时走浏览器本地合成（Web Speech）。**`tts_stream=false`（如本地 SAPI）时不要连 `/ws/tts`**，AI 发言逐句走 `/api/tts` | |
-| `GET/POST /api/admin/play-keys` | 封面 key 回填/写入。GET 另给 `tts_mode`（auto/qwen/sapi）、`tts_active`（实际实现）、`tts_stream`、`llm_active`、`llm_mocked`、`llm_model`、`llm_base_url`；POST 可带 `tts_mode` 热切 TTS 通道，带 LLM key 时自动关 `MOCK_LLM`（2026-10-31 增） | |
+| `GET/POST /api/admin/play-keys` | 封面 key 回填/写入。GET 另给 `asr_set/llm_set/tts_set`（是否已配置）、`tts_mode`（auto/qwen/sapi）、`tts_active`（实际实现）、`tts_stream`、`llm_active`、`llm_mocked`、`llm_model`、`llm_base_url`；POST 可带 `tts_mode` 热切 TTS 通道，带 LLM key 时自动关 `MOCK_LLM`；**含 `…`/全星号的掩码值一律拒绝写入**（2026-11-01 增） | |
 | `POST /api/asr`、`WS /ws/asr` | 语音识别（16k WAV body / 流式） | |
 
 全量 46 个端点见 `docs/openapi.json`。

@@ -166,7 +166,12 @@ async function speakQueue(){
 
       /* 2026-10-07 第二期（用户定稿）：播报「他是这个」的**同时**，圆盘上给出
          大大的好（绿）/坏（红）标识，3 秒后消失（与「预言家请闭眼」同时）。 */
-      if (line.stage === 'seer_result') showSeerBig();
+      if (line.stage === 'seer_result'){
+        showSeerBig();
+        /* ★ 2026-11-01：没点确认（窗口到点收口）也要把「X 号是 好人/狼人」摊开。
+           选人时已把结果记进 SEER_LAST（tableui.js）；已经摊过就自动跳过。 */
+        if (typeof showSeerResultScreen === 'function') showSeerResultScreen();
+      }
 
       /* 2026-10-02 用户定：报名字归法官（服务端已在每条发言前插「N号请发言」），
          所以正文里那个「N号：」前缀在播报时剥掉 —— 否则同一个名字响两遍。 */

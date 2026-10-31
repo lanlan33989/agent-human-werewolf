@@ -893,7 +893,13 @@ def auto_advance(self, max_steps: int = 300,
         # 🔴 胜负保险丝（2026-10-02 用户要求：狼人数 ≥ 好人数即狼胜，
         #    无论死在白天投票还是夜里刀/毒/带）。各死亡点本已判胜
         #    （夜结算 / 猎人开枪 / 投票结算），这里是兜底。
-        if g.phase is not Phase.ENDED and g.winner is None:
+        # 🔴 2026-11-01（用户："最后一夜狼刀完、预言家还没查验就显示本局结束"）：
+        #    NIGHT / SHOOT 期间**不许**由保险丝宣布终局 —— 当夜还有预言家等窗口，
+        #    猎人也可能还没开枪。终局由 `resolve_night()`（所有夜间动作结束后）
+        #    或 `night_shoot()`（开完枪后）裁决。以前这里每拍都查，狼数一旦够
+        #    就在夜里直接 ENDED，把剩余神职的当夜行动整段吞掉。
+        if (g.phase is not Phase.ENDED and g.winner is None
+                and g.phase not in (Phase.NIGHT, Phase.SHOOT)):
             _w = g.check_winner()
             if _w:
                 g.winner = _w

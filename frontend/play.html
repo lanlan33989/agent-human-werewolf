@@ -792,9 +792,19 @@ document.addEventListener('visibilitychange', function(){
 async function loadKeys(){
   try{
     var j = await api('/api/admin/play-keys');
-    $('kAsr').value = j.asr || '';
-    $('kLlm').value = j.llm || '';
-    $('kTts').value = j.tts || '';
+    /* 🔴 2026-11-01（用户实机：Key 明明填了，AI 还是兜底）：非本机请求只回指纹
+       （形如 sk-…a506），旧代码把它当真实值回填；用户改别的配置点「应用」时
+       原样提交 ⇒ 真实 key 被 8 字符掩码覆盖。掩码一律不进输入框、不提交。 */
+    function fillKey(id, v, ph){
+      var el = $(id); if (!el) return;
+      var masked = !!v && (v.indexOf('…') >= 0 || /^\*+$/.test(v));
+      el.value = masked ? '' : (v || '');
+      el.placeholder = masked ? '已配置（本机不回显；留空保持不变）' : ph;
+      el.dataset.masked = masked ? '1' : '';
+    }
+    fillKey('kAsr', j.asr, 'ASR_API_KEY');
+    fillKey('kLlm', j.llm, 'LLM_API_KEY');
+    fillKey('kTts', j.tts, 'DASHSCOPE_API_KEY');
     $('kTtsMode').value = j.tts_mode || 'sapi';
     /* 配置台只写 key 不会替你切通道：TTS=sapi 时云端 key 是不生效的（2026-10-31
        用户填了 key 仍没 AI 声，就是因为这里没有可选项）。现在把"实际在用哪个"
@@ -807,11 +817,14 @@ async function loadKeys(){
     $('kTtsNow').textContent = _now;
     /* ★ 2026-10-31：LLM 的"当前实际"同样摆出来。`Mock` 时填 key 也不会生效
        （MOCK_LLM=1 装配的是 MockLlm），而用户只能从"AI 老是说兜底话术"里猜。 */
+    var _llmSet = (typeof j.llm_set === 'boolean')
+      ? j.llm_set : !!(j.llm && j.llm.indexOf('…') < 0);
     var _llmNow = j.llm_active ? ('当前实际：' + j.llm_active) : '当前实际：未知';
     _llmNow += j.llm_mocked
       ? '（Mock —— 这里的 Key 不生效；填好 Key 点应用会自动切到真实模型）'
       : ('（真实模型：' + (j.llm_model || '未配置模型')
-         + (j.llm ? '' : '，但未配置 Key —— 调用会退回兜底') + '）');
+         + (_llmSet ? (j.llm && j.llm.indexOf('…') >= 0 ? '，Key 已配置（本机不回显）' : '')
+                    : '，但未配置 Key —— 调用会退回兜底') + '）');
     if ($('kLlmNow')) $('kLlmNow').textContent = _llmNow;
     /* 2026-10-26 一致性检查（用户要求）：实验室第①列席位接管对局 LLM 时必须如实说，
        否则这里填的 LLM key 下一局"看起来生效了"其实被席位覆盖挡住。 */
@@ -833,13 +846,19 @@ async function refreshVoiceCaps(){
 }
 async function applyKeys(){
   var msg = $('keysMsg');
+  /* 掩码占位 + 没重新输入 ⇒ 发空串（服务端会跳过），绝不把指纹写回。 */
+  function keyValue(id){
+    var el = $(id); if (!el) return '';
+    var v = el.value.trim();
+    return (el.dataset.masked === '1' && !v) ? '' : v;
+  }
   try{
     var r = await api('/api/admin/play-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asr: $('kAsr').value.trim(),
-                             llm: $('kLlm').value.trim(),
-                             tts: $('kTts').value.trim(),
+      body: JSON.stringify({ asr: keyValue('kAsr'),
+                             llm: keyValue('kLlm'),
+                             tts: keyValue('kTts'),
                              tts_mode: $('kTtsMode').value })
     });
     msg.textContent = (r.changed && r.changed.length ? '已更新（' + r.changed.join('、') + '）—— ' : '没有变化 —— ')
@@ -1114,6 +1133,7 @@ async function newGame(){
     if (typeof SPOKE_DONE !== 'undefined') SPOKE_DONE = null;   /* 新局：播报游标从零开始 */
     resetEndLinks();                        /* 收回上一局的局末出口（见上面的注释） */
     resetSeerBig();                         /* 新局清掉上一局的验人结果大标识（见 tableui.js） */
+    SEER_LAST = null;                       /* 连兜底结果一起清（resetSeerBig 只清已展示过的） */
     cardQueue = d.seats.filter(function(s){ return s.kind === 'human'; })
                       .map(function(s){ return s.seat; });
     localStorage.setItem('tt.gid', GID);   /* 断线/刷新恢复的锚点 */

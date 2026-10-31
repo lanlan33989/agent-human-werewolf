@@ -27,6 +27,11 @@ function kindOf(seat){
 function paintBig(){
   var who = $('bigWho'), icon = $('bigIcon'), bc = $('bigCircle');
   if (!who || !icon || !bc) return;
+  /* 🔴 2026-11-01：验人结果屏（act='done'）占着大圆时，播报队列每念一句都会
+     调 paintBig() —— 它按"法官/发言者"重写 bigWho，把「2 号是 好人/狼人」
+     当场清空。用户看到的就是"结果窗口在、字没了"（或干脆以为没弹）。
+     结果只由 showPrivateResult / 点圆心收回，播报不许覆盖。 */
+  if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') return;
   if (SPK_MODE){
     bc.classList.remove('talking');
     /* ★ 2026-10-29：**这里不再写「N（人）」**。那句话原来每播一句就被
@@ -310,6 +315,10 @@ async function tick(){
     }
     return;
   }
+  /* ★ 2026-11-01（用户："预言家依旧没有验人结果窗口"）：验人节点已经过去
+     （`now.node` 不再是 seer）而结果屏还没摊开 ⇒ 自动补上。语音关掉/队列卡住
+     时也照样生效，不再依赖「他是这个」那句真的播出来。 */
+  try { showSeerResultScreen(); } catch (e) { /* 不拖累 tick */ }
   paintSeats();
   renderDots();          /* 座位小圆：阵容/存活变化才重建，光标每拍都校一次 */
   /* ★ 2026-10-29（用户：AI 发言时大圆在「1（人）」和「点击结束发言」之间跳）：
@@ -1989,6 +1998,12 @@ function showPrivateResult(seatNo, v, title, onlyNo){
                闭眼句已在播）时，屏幕不能再被"闭眼句念完"立刻收掉 ——
                至少要让人看清验的是谁、结果是什么。见 tick 里的 6 秒保护。 */
             shownAt: Date.now() };
+  /* 🔴 2026-11-01：结果屏是**交接屏**，必须占住 HANDOFF —— 否则 tick 的
+     `else if (!HANDOFF)` 分支会把它当成"没人拿手机"再 open/close 一次，
+     大圆里的「X 号是 好人/狼人」当场被清空（用户看到的就是"窗口在、字没了"）。
+     窗口内的确认路径本来就 HANDOFF=本人；到点自动补结果时这里补上。 */
+  HANDOFF = seatNo;
+  HANDOFF_SIG = null;
   renderWheelBase();
   wheelTags(v);
   var bc = $('bigCircle');
@@ -1999,10 +2014,32 @@ function showPrivateResult(seatNo, v, title, onlyNo){
   $('wheelBtns').classList.remove('on');
   $('wheelExtra').classList.remove('on');
   $('wheelExtra').innerHTML = '';
+  /* 🔴 2026-11-01（截图实锤）：拨号盘和「确认验人」仍盖在结果屏上面，
+     大圆又被 renderNightDial 置了 `visibility:hidden` ⇒ 结果虽已生成，
+     玩家看到的仍是号码盘（用户："没有验人结果窗口"）。结果屏必须独占交接层。 */
+  var _nd = $('nightDial'); if (_nd) _nd.classList.remove('on');
+  var _dh = $('dialHead'); if (_dh) _dh.classList.remove('on');
+  var _bcv = $('bigCircle'); if (_bcv) _bcv.style.visibility = '';
   $('bigTitle').textContent = '预言家';
   $('bigIcon').textContent = '🔮';
   $('bigWho').textContent = lines.join('；') || '（没有记录）';
   $('hoTip').textContent = title + '（只有你知道，点圆心交回）';
+}
+
+/* 验人窗口到点自动收口时把结果补给人看（2026-11-01 用户实机：
+   "选了人但没来得及点确认 ⇒ 整晚没有验人结果"）。
+   触发点有两处：
+     · 法官念到「他是这个」（speech_ui.js）
+     · tick 发现验人节点已经过去（语音关掉/队列卡住时的兜底）
+   已经摊开过（shown）就不重复弹。 */
+function showSeerResultScreen(){
+  if (!SEER_LAST || SEER_LAST.shown || SEER_LAST.targetNo == null) return false;
+  if (PUBLIC && SEER_LAST.round != null && PUBLIC.round !== SEER_LAST.round) return false;
+  if (PUBLIC && PUBLIC.phase === 'night' && PUBLIC.now
+      && PUBLIC.now.node === 'seer') return false;      /* 还在选人窗口里 */
+  SEER_LAST.shown = true;
+  showPrivateResult(SEER_LAST.seatNo, SEER_LAST.view, '你验的结果', SEER_LAST.targetNo);
+  return true;
 }
 
 /* ================================================================
@@ -2023,7 +2060,10 @@ function resetSeerBig(){
     var _db = _d && _d.querySelector('button[data-no="' + SEER_LAST.targetNo + '"]');
     if (_db) _db.textContent = String(SEER_LAST.targetNo);
   }
-  SEER_LAST = null;
+  /* ★ 2026-11-01：结果屏还没摊开时**保留** SEER_LAST —— 验人窗口到点自动收口
+     （没来得及点确认）时，tick 的兜底要靠它把「X 号是 好人/狼人」补给人看。
+     已经摊开过的就清掉，避免下一夜重复弹旧结果。 */
+  if (SEER_LAST && SEER_LAST.shown) SEER_LAST = null;
   if (SEER_BIG_TIMER){ clearTimeout(SEER_BIG_TIMER); SEER_BIG_TIMER = null; }
   var el = $('seerBig');
   if (el){ el.className = ''; el.textContent = ''; }
@@ -2086,7 +2126,8 @@ async function submit(seatNo, action, target, text){
       var _inv = v2.investigations || {};
       var _ti = (target != null && target !== -1) ? (target - 1) : null;
       if (_ti != null && (_ti in _inv)){
-        SEER_LAST = { seatNo: seatNo, targetNo: target, wolf: !!_inv[_ti] };
+        SEER_LAST = { seatNo: seatNo, targetNo: target, wolf: !!_inv[_ti],
+                      view: v2, round: PUBLIC.round, shown: false };
       }
       /* 🔴 2026-10-12（用户定稿）：验人结果直接标在**拨号盘的号码按钮**上 ——
          号码被 👍（好人）/ 👎（狼人）替代，直到「预言家请闭眼」才还原数字
@@ -2097,6 +2138,7 @@ async function submit(seatNo, action, target, text){
          玩家只看见 👍 闪一下。现在顺序改成：先摊结果屏（大圆写
          「X 号是 狼人/好人」），再把目标号码换成图标；两样都留着，
          由「预言家请闭眼」念完（或点圆心交回）才收。 */
+      if (SEER_LAST) SEER_LAST.shown = true;
       showPrivateResult(seatNo, v2, '你验的结果', target);
       if (SEER_LAST && $('nightDial').classList.contains('on')){
         var _b2 = $('nightDial').querySelector('button[data-no="' + target + '"]');
@@ -2119,6 +2161,24 @@ async function submit(seatNo, action, target, text){
             'pass'].indexOf(action) >= 0){
       try {
         MYVIEW = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
+        /* ★ 2026-11-01：**选人即记住结果**，不再等「确认验人」才记。
+           用户实机：验人窗口 15 秒，面板弹出/选人后往往来不及再点一次确认，
+           窗口一到点服务端收口 ⇒ 结果屏从未出现。现在：
+             · 「他是这个」播报（或验人节点过去）时用这份数据自动摊开结果屏；
+             · 点确认仍可立即摊开（原有路径不变）。 */
+        if (action === 'investigate'
+            && MYVIEW.role === 'seer'
+            && target != null && target !== -1){
+          var _inv2 = MYVIEW.investigations || {};
+          var _k2 = String(target - 1);
+          if (_k2 in _inv2){
+            SEER_LAST = { seatNo: seatNo, targetNo: target,
+                          wolf: !!_inv2[_k2], view: MYVIEW,
+                          round: PUBLIC.round, shown: false };
+          }
+        } else if (action === 'clear' && SEER_LAST && SEER_LAST.seatNo === seatNo){
+          SEER_LAST = null;              /* 预言家主动撤掉这一眼 */
+        }
         if (PUBLIC.phase === 'night'){
           renderNightDial(seatNo, MYVIEW, MYVIEW.can_act || []);
         } else {
@@ -2127,7 +2187,9 @@ async function submit(seatNo, action, target, text){
       } catch (e2) { /* 视图取不到：保持当前屏，下一拍 tick 自愈 */ }
       foot(action === 'clear'
            ? '已取消这一刀 —— 可以重新点一个号码'
-           : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）');
+           : (action === 'investigate'
+              ? '已记下要验的人 —— 可以改；到点没点确认也会把结果给你'
+              : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）'));
       setTimeout(tick, 300);
       return;
     }

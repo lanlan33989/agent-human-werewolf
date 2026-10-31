@@ -2245,6 +2245,59 @@ check("★ ㉖ 结果屏至少展示 6 秒（闭眼句刚念完也不许立刻�
       "_resultFresh" in _tui26 and "WHEEL.shownAt) < 6000" in _tui26)
 
 print("=" * 74)
+print("㉗ 验人结果兜底展示 / 终局不在夜里提前宣布")
+print("=" * 74)
+# ★ 2026-11-01 用户实机：
+#   ① "预言家依旧没有验人结果窗口" —— 选了人但没来得及点确认，窗口一到点
+#      服务端收口，结果只写进私有记录，界面从来没摊开过。
+#   ② "最后一夜狼刀完、预言家还没查验就显示本局结束" —— auto_advance 的
+#      胜负保险丝在 NIGHT 里也每拍查，狼数够就立刻 ENDED，吞掉当夜剩余动作。
+
+# 前端：选人即记结果 + 「他是这个」/节点结束时兜底摊开
+check("★ ㉗ 前端：选人（investigate）就把验人结果记进 SEER_LAST",
+      "action === 'investigate'" in _tui26 and "MYVIEW.role === 'seer'" in _tui26
+      and "view: MYVIEW" in _tui26)
+check("★ ㉗ 前端：有兜底结果屏函数（不依赖点确认）",
+      "function showSeerResultScreen" in _tui26 and "SEER_LAST.shown = true" in _tui26)
+check("★ ㉗ 前端：tick 在验人节点过去后自动补结果屏",
+      "try { showSeerResultScreen(); }" in _tui26)
+check("★ ㉗ 前端：节点收口清大标识时保留未展示的结果",
+      "if (SEER_LAST && SEER_LAST.shown) SEER_LAST = null;" in _tui26)
+check("★ ㉗ 前端：结果屏占住交接层（HANDOFF=本人）",
+      "HANDOFF = seatNo;" in _tui26 and "HANDOFF_SIG = null;" in _tui26)
+check("★ ㉗ 前端：结果屏隐藏拨号盘/表头、恢复大圆可见（否则被盖住）",
+      "var _bcv = $('bigCircle'); if (_bcv) _bcv.style.visibility = '';" in _tui26)
+check("★ ㉗ 前端：播报队列的 paintBig 不覆盖结果屏",
+      "if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') return;" in _tui26)
+_sui27 = (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8")
+check("★ ㉗ 前端：「他是这个」播报时也摊结果屏",
+      "showSeerResultScreen" in _sui27 and "line.stage === 'seer_result'" in _sui27)
+
+# 后端：NIGHT 期间保险丝不许提前终局；夜结算后照常判胜
+_s27 = _seer_session26()
+check("（前提）造出人类预言家的局（㉗）", _s27 is not None)
+if _s27 is not None:
+    _g27 = _s27.game
+    _good27 = [p.seat for p in _g27.players
+               if not p.role.is_wolf and p.role is not _R26.SEER][:2]
+    for _seat27 in _good27:
+        _g27._damage(_seat27, 1)
+    check("（前提）夜里已经满足狼数 ≥ 好人数（但还没结算）",
+          len(_g27.wolves_alive()) >= len(_g27.good_alive())
+          and _g27.phase is Phase.NIGHT and _g27.winner is None,
+          f"w={len(_g27.wolves_alive())} g={len(_g27.good_alive())} "
+          f"phase={_g27.phase} winner={_g27.winner}")
+    _res27 = _ndrv.auto_advance(_s27, max_steps=1,
+                                deadline=_time.monotonic() - 1)
+    check("★ ㉗ NIGHT 期间保险丝不提前宣布终局（仍停在夜里）",
+          _g27.phase is Phase.NIGHT and _g27.winner is None,
+          f"res={_res27} phase={_g27.phase} winner={_g27.winner}")
+    _g27.resolve_night()
+    check("★ ㉗ 夜结算完成后照常判狼胜（不耽误终局）",
+          _g27.winner == "wolf" and _g27.phase is Phase.ENDED,
+          f"winner={_g27.winner} phase={_g27.phase}")
+
+print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")
 if FAIL:

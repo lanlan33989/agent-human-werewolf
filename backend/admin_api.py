@@ -281,6 +281,16 @@ def fingerprint(v: str) -> str:
     return s[:3] + "…" + s[-4:]
 
 
+def _masked_key(v: str) -> bool:
+    """指纹/星号 — **绝不能再当 key 写回**。
+
+    2026-11-01 用户实机：从非本机打开 /play 时 GET 只回指纹，页面原样提交
+    ⇒ `sk-…a506` 覆盖了真实 key，之后所有 LLM 调用 401 走兜底。
+    真实 key 不会含省略号；全星号只会来自 fingerprint 的短值分支。
+    """
+    return "…" in v or (bool(v) and set(v) == {"*"})
+
+
 def _is_local(request: Request) -> bool:
     try:
         host = (request.client.host or "") if request.client else ""
@@ -335,6 +345,8 @@ def api_play_keys_get(request: Request):
         if not v and fallback:
             v = os.environ.get(fallback, "")
         out[name] = v if local else fingerprint(v)
+        # 非本机拿到的是指纹 ⇒ 前端不能拿它判断「有没有配 key」，也不能回写。
+        out[name + "_set"] = bool(v)
     out["llm_override"] = _lab_override_active()
     out["tts_mode"] = _tts_mode_current()
     out["tts_key_present"] = _tts_key_present()
@@ -372,9 +384,15 @@ async def api_play_keys_set(request: Request):
                                    "（DASHSCOPE_API_KEY / DASHSCOPE_TTS_API_KEY）")
     st = _state()
     changed = []
+    masked = []
     for name, env, _fb in PLAY_KEYS:
         v = str(body.get(name) or "").strip()
         if not v or env not in ADMIN_ENV_KEYS:
+            continue
+        # 🔴 2026-11-01：非本机 GET 回的是指纹（含 …）；页面原样提交会把真实 key
+        #   覆盖成 8 字符的掩码，之后所有调用 401 走兜底。掩码一律不写。
+        if _masked_key(v):
+            masked.append(name)
             continue
         if os.environ.get(env, "") == v:
             continue                     # 值没变：不写不 reload（避免假"已更新"）
@@ -394,12 +412,18 @@ async def api_play_keys_set(request: Request):
     #   ⚠️ 只在**这次提交带了 llm key** 时触发：用户如果只想切 TTS 通道、而场上
     #   恰好有 key，不该被顺手改掉 LLM 的 mock 选择。
     _llm_key = str(body.get("llm") or "").strip()
+    if _masked_key(_llm_key):
+        _llm_key = ""                    # 掩码不是用户填的新 key，别顺手改 MOCK_LLM
     if _llm_key and os.environ.get("MOCK_LLM", "").strip() != "0":
         os.environ["MOCK_LLM"] = "0"
         st.setdefault("env", {})["MOCK_LLM"] = "0"
         changed.append("MOCK_LLM")
     if not changed:
-        return {"ok": True, "changed": [], "note": "没有要更新的配置"}
+        _note = "没有要更新的配置"
+        if masked:
+            _note += ("。⚠️ " + "、".join(masked)
+                      + " 传来的是掩码（…），未写入；请重新粘贴完整 Key")
+        return {"ok": True, "changed": [], "note": _note}
     _write_state(st)
     note = "进行中的对局不受影响，下一局生效"
     _reload_ok = False
@@ -420,6 +444,9 @@ async def api_play_keys_set(request: Request):
     if _llm_key and not (os.environ.get("LLM_BASE_URL", "").strip()
                          and os.environ.get("LLM_MODEL", "").strip()):
         note += "。⚠️ 还缺 LLM_BASE_URL / LLM_MODEL，调用会退化成兜底话术"
+    if masked:
+        note += ("。⚠️ " + "、".join(masked)
+                 + " 传来的是掩码（…），未写入；请重新粘贴完整 Key")
     print("[admin] 主产品封面更新 key：" + ", ".join(changed), flush=True)
     return {"ok": True, "changed": changed, "note": note}
 

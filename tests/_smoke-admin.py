@@ -373,6 +373,32 @@ try:
     check("★ 封面能读到 LLM 的实际状态（llm_active / llm_mocked / llm_model）",
           "llm_active" in _rg and "llm_mocked" in _rg and "llm_model" in _rg,
           str(sorted(_rg))[:160])
+    check("★ 封面能区分「配了 key」与「只有指纹」（llm_set）",
+          _rg.get("llm_set") is True, str(_rg.get("llm_set")))
+
+    # 🔴 2026-11-01（用户实机：真实 key 被 8 字符掩码覆盖 ⇒ AI 还是兜底）：
+    #   非本机 GET 只回指纹（sk-…a506），页面原样提交时必须**拒绝写入**。
+    _real = "sk-test-0123456789abcdef"
+    os.environ["LLM_API_KEY"] = _real
+    os.environ["MOCK_LLM"] = "0"
+    _fp = admin_api.fingerprint(_real)
+    check("指纹形如 sk-…cdef（模拟非本机回填）",
+          "…" in _fp and _fp.endswith("cdef"), _fp)
+    _rm = client.post("/api/admin/play-keys", json={"llm": _fp})
+    _rmj = _rm.json() if _rm.status_code == 200 else {}
+    check("★ 提交掩码不会覆盖真实 key",
+          os.environ.get("LLM_API_KEY") == _real,
+          "len=" + str(len(os.environ.get("LLM_API_KEY") or "")))
+    check("★ 掩码提交返回明确提示（含「掩码」）",
+          "掩码" in (_rmj.get("note") or ""), str(_rmj)[:200])
+    check("★ 掩码提交不改 MOCK_LLM",
+          os.environ.get("MOCK_LLM") == "0", os.environ.get("MOCK_LLM"))
+    check("★ 全星号（短 key 的指纹）同样拒绝",
+          admin_api._masked_key("***") and not admin_api._masked_key(_real))
+    _html = open("frontend/play.html", encoding="utf-8").read()
+    check("★ 前端：掩码不进输入框、不随「应用」提交（dataset.masked + keyValue）",
+          "dataset.masked" in _html and "function keyValue" in _html
+          and "已配置（本机不回显" in _html)
 finally:
     admin_api.STATE_PATH = _old_state_path
     admin_api._reload_fn = _old_reload_fn
