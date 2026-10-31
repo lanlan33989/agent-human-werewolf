@@ -8,6 +8,11 @@
 用法（在 h5 目录下）：
     ./.venv/Scripts/python.exe tests/_smoke-engine.py
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import sys as _s, os as _o
 _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
 _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
@@ -293,15 +298,72 @@ check("票型文本与 demo 同格式（同票的归一组、票数多的在前�
       tv.tally_text() == "1，2→3；3→1", tv.tally_text())
 
 tv.resolve_vote()
-# ★ 2026-10-28（用户定）：法官**不再念票型**，票型只走结构化数据（界面底部票型框）。
-check("结算后公共日志里**没有**票型播报（不再念那串数字）",
-      not any(x.startswith("投票结果：") for x in tv.public_log), str(tv.public_log[-2:]))
+# ★ 2026-10-31（用户："缺少法官票型播报，补回来"）：恢复口语版票型播报 ——
+#   法官先念票型，再念出局/平票；票型框照旧显示紧凑版（两者并存）。
+_tally = [x for x in tv.public_log if x.startswith("投票结果：")]
+check("结算后公共日志里有**口语版**票型播报（法官重新念票型）",
+      len(_tally) == 1 and "3 号 2 票" in _tally[0], str(tv.public_log[-3:]))
+check("票型播报排在出局播报之前（先票型后结果）",
+      tv.public_log.index(_tally[0]) < next(
+          i for i, x in enumerate(tv.public_log) if "被投出" in x),
+      str(tv.public_log[-4:]))
 _vb = tv.vote_board()
 check("vote_board 给出票型框要的行（含弃票那行）",
       _vb.get("lines") == ["1，2→3", "3→1", "弃票：4"], str(_vb.get("lines")))
 check("vote_board 的分组带投票人与目标",
       _vb.get("groups") == [{"target": 2, "voters": [0, 1]}, {"target": 0, "voters": [2]}],
       str(_vb.get("groups")))
+check("普通结算的票型框标题是「计票」（首轮/加时两个标记都为假）",
+      not _vb.get("first_round") and not _vb.get("runoff"), str(_vb))
+
+# ---- 平票加时：两轮票型都要能看见（2026-10-31 用户："加时轮票型框内的投票显示"）
+# SEER4 四人局：0/1 各得两票 ⇒ 平票 ⇒ 0、1 再发言、其余人重投。
+tr = Game(SEER4, ["human"] * 4, seed=1)
+tr.start()
+tr.resolve_night()
+tr.open_discuss()
+tr.open_vote()
+tr.cast_vote(0, 1)
+tr.cast_vote(1, 0)
+tr.cast_vote(2, 1)
+tr.cast_vote(3, 0)
+check("平票第一轮：结算进入加时（runoff_stage=1，候选 0/1）",
+      tr.resolve_vote() is None and tr.runoff_stage == 1
+      and tr.runoff_candidates == [0, 1],
+      f"stage={tr.runoff_stage} cand={tr.runoff_candidates}")
+_tr_log = [x for x in tr.public_log if x.startswith("投票结果：")]
+check("★ 平票第一轮也念票型（加时前先说清谁几票）",
+      len(_tr_log) == 1 and "2 票" in _tr_log[0], str(tr.public_log[-3:]))
+check("加时发言期间框里是第一轮票型（标题「首轮」）",
+      tr.vote_board().get("lines") == ["2，4→1", "1，3→2"]
+      and tr.vote_board().get("first_round") is True
+      and tr.vote_board().get("runoff") is False, str(tr.vote_board()))
+check("第一轮票型没有进 vote_history（轮次口径仍是一天一条）",
+      len(tr.vote_history) == 0, str(tr.vote_history))
+tr.end_speech()                       # 0 号候选陈述
+tr.end_speech()                       # 1 号候选陈述
+tr.open_vote()                        # 其余人重投（stage 2）
+check("加时投票沿用候选集、只让非候选投（can_vote 0/1 为假）",
+      tr.runoff_stage == 2 and not tr.can_vote(0) and not tr.can_vote(1)
+      and tr.can_vote(2),
+      f"stage={tr.runoff_stage} order={tr.vote_order}")
+tr.cast_vote(2, 0)
+tr.cast_vote(3, 1)                    # 再次平票 ⇒ 平安日
+tr.resolve_vote()
+_vb2 = tr.vote_board()
+check("★ 加时结算后票型框换成**加时那一轮**的票（不再卡在第一轮）",
+      _vb2.get("lines") == ["3→1", "4→2"], str(_vb2))
+check("★ 加时轮票型框标题是「加时」（first_round=False / runoff=True）",
+      _vb2.get("first_round") is False and _vb2.get("runoff") is True, str(_vb2))
+check("★ 加时那一轮也念一次票型（两次「投票结果：」）",
+      len([x for x in tr.public_log if x.startswith("投票结果：")]) == 2,
+      str(tr.public_log[-5:]))
+check("加时票型进了 vote_history（决定出局/平安日的那一轮）",
+      tr.vote_history and tr.vote_history[-1] == {2: 0, 3: 1}, str(tr.vote_history))
+tr.next_night()
+check("进夜后「这是加时那一轮」的标记清掉（票型框不再挂着「加时」标题）",
+      tr.vote_board().get("runoff") is False
+      and tr.vote_board().get("first_round") is False, str(tr.vote_board()))
 
 tv2 = Game(SEER4, ["human"] * 4, seed=1)
 tv2.start()
@@ -425,36 +487,155 @@ def _finish(board, seed: int) -> bool:
 check("★ 现算的 4 人局能真的跑到分出胜负", _finish(make_board(2, 2), 11))
 check("★ 现算的 9 人局（2 神 2 狼）能真的跑到分出胜负", _finish(make_board(5, 4), 12))
 
-# ================================================================ 发言/投票顺序（2026-09-15 用户改）
-# 规则：都从**前一晚被刀的人**开始顺时针。三种情况都要成立。
+# ================================================================ 白天发言顺序（2026-10-30 用户定）
+# 规则（用户原话）：
+#   · 前一晚平安夜 / 多人死亡 ⇒ 随机一名存活玩家起，顺序或逆序；
+#   · 恰好一人死亡 ⇒ 从死者身边最近的两名存活玩家中随机一位起，
+#     方向由「死者 → 选中玩家」的方位决定：
+#       选中死者的顺时针侧 ⇒ 顺时针（例子：4 死、存活 1/3/5 ⇒ 5,1,3）
+#       选中死者的逆时针侧 ⇒ 逆时针（同例 ⇒ 3,1,5）
+# 投票顺序仍与发言**同一套轮转**（手机依次递给人，AI 投票也按它排队）。
+
+
+def _cw(seats, start):
+    i = seats.index(start)
+    return seats[i:] + seats[:i]
+
+
+def _ccw(seats, start):
+    i = seats.index(start)
+    return list(reversed(seats[:i + 1])) + list(reversed(seats[i + 1:]))
+
+
+def _is_rotation(order, alive):
+    return sorted(order) == sorted(alive) and len(order) == len(alive)
+
+
+# —— 恰好一人死亡：起点只可能是死者两侧最近的两个活人；方向由方位决定
+_starts = set()
+_dirs = set()
+_single_ok = True
+_single_detail = ""
+for _seed in range(21, 61):
+    _g1 = Game(make_board(3, 3), kinds=["human"] * 6, seed=_seed)
+    _g1.start()
+    _alive1 = [p.seat for p in _g1.alive]
+    _dead1 = _alive1[2]
+    _g1.wolf_agree_kill(_dead1)
+    _g1.resolve_night()
+    _order1 = _g1.open_discuss()
+    _alive1 = [p.seat for p in _g1.alive]
+    _n1 = len(_g1.players)
+    _before = next(((_dead1 - k) % _n1 for k in range(1, _n1 + 1)
+                    if (_dead1 - k) % _n1 in _alive1), None)
+    _after = next(((_dead1 + k) % _n1 for k in range(1, _n1 + 1)
+                   if (_dead1 + k) % _n1 in _alive1), None)
+    _start1 = _order1[0]
+    _want1 = (_cw(_alive1, _start1) if _start1 == _after
+              else _ccw(_alive1, _start1))
+    if (_start1 not in (_before, _after) or _order1 != _want1
+            or not _is_rotation(_order1, _alive1)):
+        _single_ok = False
+        _single_detail = (f"seed={_seed} dead={_dead1} start={_start1} "
+                          f"before={_before} after={_after} order={_order1}")
+        break
+    _starts.add(_start1)
+    _dirs.add("cw" if _start1 == _after else "ccw")
+check("★ 一人死亡：起点只可能是死者两侧最近的存活玩家（随机二选一）",
+      _single_ok, _single_detail)
+check("……方向由「死者→选中玩家」的方位决定，且两个方向都会出现",
+      _single_ok and _dirs == {"cw", "ccw"} and len(_starts) >= 2,
+      f"starts={sorted(_starts)} dirs={sorted(_dirs)}")
+
+# 用户原例：4 号死，存活 1/3/5 ⇒ 只能是「5,1,3」或「3,1,5」
+from engine import Board as _BoardEx  # noqa: E402
+
+_EX_BOARD = _BoardEx(key="ex-4", label="示例：1 狼 5 民",
+                     roles=[Role.WOLF] + [Role.VILLAGER] * 5, lives=1)
+_ex_orders = set()
+_ex_ok = True
+for _seed in range(70, 130):
+    _gx = Game(_EX_BOARD, kinds=["human"] * 6, seed=_seed)
+    _gx.start()
+    _wolfx = next(p.seat for p in _gx.alive if p.role.is_wolf)
+    if _wolfx in (1, 3, 5):
+        continue                       # 狼坐在要留空/要死的座位上：换种子
+    for _s in (1, 5):                  # 前几轮已经出局的人（本夜之前）
+        _gx.player(_s).alive = False
+    _gx.night["kill"] = 3              # 4 号本夜被刀 ⇒ 唯一死亡
+    _gx.resolve_night()
+    if _gx.phase is not Phase.DAWN:
+        continue
+    _ordx = _gx.open_discuss()
+    _ex_orders.add(tuple(_ordx))
+    if _ordx not in ([4, 0, 2], [2, 0, 4]):
+        _ex_ok = False
+        break
+check("★ 用户原例：4 号死、存活 1/3/5 ⇒ 只会是 5,1,3 或 3,1,5",
+      _ex_ok and _ex_orders <= {(4, 0, 2), (2, 0, 4)}
+      and len(_ex_orders) == 2,
+      f"orders={sorted(_ex_orders)}")
+
+# —— 平安夜 / 多人死亡：随机起点 + 随机方向（只验形态，不锁死某个种子）
+def _plan_for(seed, mode):
+    """9 人局：多人死亡时 6 人局容易直接分出胜负（2 狼 2 民就结束），
+    那样 open_discuss 根本不会发生 —— 用 9 人局保证还有白天可走。"""
+    gg = Game(make_board(5, 4), kinds=["human"] * 9, seed=seed)
+    gg.start()
+    good = [p.seat for p in gg.alive if not p.role.is_wolf]
+    if mode == "none":
+        gg.night["kill"] = None                    # 平安夜
+    else:
+        gg.night["kill"] = good[0]                 # 多人死亡：刀 + 毒
+        gg.night["poison"] = good[1]
+    gg.resolve_night()
+    if gg.phase is Phase.SHOOT and gg.shooter is not None:
+        gg.night_shoot(gg.shooter, -1)             # 猎人放弃开枪（这里只测发言顺序）
+    if gg.phase is not Phase.DAWN:
+        return None
+    return gg, gg.open_discuss(), [p.seat for p in gg.alive]
+
+
+for _mode, _label in (("none", "平安夜"), ("multi", "多人死亡")):
+    _ok = True
+    _detail = ""
+    _st, _dr = set(), set()
+    for _seed in range(31, 61):
+        _plan = _plan_for(_seed, _mode)
+        if _plan is None:
+            continue                               # 直接分出胜负/没到白天：换种子
+        _gg, _order, _alive = _plan
+        if not _is_rotation(_order, _alive):
+            _ok, _detail = False, f"seed={_seed} 不是完整轮转：{_order}"
+            break
+        if _order == _cw(_alive, _order[0]):
+            _dr.add("cw")
+        elif _order == _ccw(_alive, _order[0]):
+            _dr.add("ccw")
+        else:
+            _ok, _detail = False, f"seed={_seed} 方向不明：{_order}"
+            break
+        _st.add(_order[0])
+    check(f"★ {_label}：随机起点 + 随机方向（完整轮转、不丢人）",
+          _ok and len(_st) >= 2 and _dr == {"cw", "ccw"},
+          _detail or f"starts={sorted(_st)} dirs={sorted(_dirs)}")
+
+# 投票顺序与发言同一套（用户定的既有规则，不能被新的随机起点拆散）
 g_o = Game(make_board(3, 3), kinds=["human"] * 6, seed=21)
 g_o.start()
 _alive0 = [p.seat for p in g_o.alive]
 _knifed = _alive0[3]
 g_o.wolf_agree_kill(_knifed)
-g_o.resolve_night()                       # 一人一条命 ⇒ 被刀的人已经出局
-_spk = g_o.open_discuss()
-check("★ 被刀的人出局后：发言从**他顺时针的下一个活人**开始",
-      _spk[0] == next(s for s in _alive0 if s > _knifed), str(_spk))
+g_o.resolve_night()
+g_o.open_discuss()
 g_o.open_vote()
 check("★ 投票顺序与发言同一套轮转",
       g_o.vote_order == g_o.speaking_order, f"{g_o.vote_order} vs {g_o.speaking_order}")
 
-g_o2 = Game(make_board(3, 3), kinds=["human"] * 6, seed=22)
-g_o2.start()
-g_o2.night["kill"] = None                 # 平安夜
-g_o2.resolve_night()
-_spk2 = g_o2.open_discuss()
-check("平安夜时发言从 1 号开始（没有「被刀的人」可当锚点）",
-      _spk2[0] == min(p.seat for p in g_o2.alive), str(_spk2))
-check("发言顺序是完整的顺时针（不丢人、不重复）",
-      sorted(_spk2) == sorted(p.seat for p in g_o2.alive), str(_spk2))
-
 # ---- ★ 平安夜不许泄漏"谁被刀 / 有没有人刀 / 谁救了" -------------------
-# 旧实现拿 night["kill"] 当起点，并在公共播报里写
-# 「天亮了，从昨晚被刀的 3 号开始依次发言。」—— 而 public_log 是公开的，
-# 还会进 AI 的 prompt ⇒ 平安夜时全桌都能反推出"3 号是目标、有人救了他"。
-# 三种成因（空刀 / 被救 / 被守）在外部表现上必须完全一致。
+# 三种成因（空刀 / 被救 / 被守）在外部表现上必须完全一致：
+# 随机起点用的是同一颗种子 ⇒ 起点与方向也必须完全相同，否则"起点不同"
+# 本身就成了「有人被刀且被救」的信号。
 
 def _peaceful_night(kill):
     """造一个「第 1 夜平安」的局：kill=None = 空刀；给座位号 = 刀他再救回来。
@@ -489,15 +670,13 @@ check("★ 平安夜时公共日志里不出现「被刀」二字",
 
 g_n = Game(make_board(3, 3), kinds=["human"] * 6, seed=41)
 g_n.start()
-_wolfn = next(p.seat for p in g_n.alive if p.role.is_wolf)
 _targetn = next(p.seat for p in g_n.alive if not p.role.is_wolf)
 g_n.wolf_agree_kill(_targetn)
-g_n.resolve_night()                        # 这一晚有人出局 ⇒ 起点照旧用他
+g_n.resolve_night()                        # 这一晚有人出局
 g_n.open_discuss()
 while g_n.current_speaker() is not None:
     g_n.end_speech()
 g_n.open_vote()
-_lastn = g_n.speaking_order[-1]            # 上一轮最后发言的人
 for _p in list(g_n.alive):
     g_n.cast_vote(_p.seat, -1)             # 全员弃票：别让人出局，只测顺序
 g_n.resolve_vote()
@@ -506,11 +685,12 @@ g_n.night["kill"] = None                   # 第 2 晚：空刀 ⇒ 平安夜
 g_n.resolve_night()
 _spkn = g_n.open_discuss()
 _aliven = [p.seat for p in g_n.alive]
-_expn = next((s for s in _aliven if s >= _lastn + 1), _aliven[0])
-check("★ 第 2 晚平安夜：起点 = 上一轮最后发言者的下一位（不是固定 1 号）",
-      _spkn[0] == _expn, f"last={_lastn} 期望={_expn} 实际={_spkn}")
+check("★ 第 2 晚平安夜：随机起点 + 随机方向（仍是完整轮转）",
+      _is_rotation(_spkn, _aliven)
+      and (_spkn == _cw(_aliven, _spkn[0]) or _spkn == _ccw(_aliven, _spkn[0])),
+      str(_spkn))
 g_n.open_vote()
-check("★ 平安夜时投票顺序与发言顺序仍是同一套（换个字段不能把话说第二遍）",
+check("★ 平安夜时投票顺序与发言顺序仍是同一套",
       g_n.vote_order == g_n.speaking_order, f"{g_n.vote_order} vs {g_n.speaking_order}")
 
 # ================================================================ 三神判例（2026-09-17 加）
@@ -848,13 +1028,18 @@ _n5.settle_wolf_window()
 check("单狼局：窗口结束才定案（就是它点的那个）",
       _n5.night.get("kill") == _g5 and _n5.night.get("kill_settled"))
 
-# ⑥ 自刀 / 空刀都合法
+# ⑥ 自刀合法 / 空刀合法（2026-10-30 用户二次裁决：改回狼可以刀自己）
 _n6 = Game(_B1, kinds=["ai"] * 4, seed=36)
 _n6.start()
 _w6 = _wolves_of(_n6)[0]
 _n6.night_kill(_w6, _w6)
 _n6.settle_wolf_window()
-check("自刀合法（狼可以刀自己 —— 面杀本来就有这手）", _n6.night["kill"] == _w6)
+check("★ 自刀合法（允许刀自己，面杀本来就有）",
+      _n6.night.get("kill") == _w6 and _n6.night.get("kill_settled"),
+      f"kill={_n6.night.get('kill')} wolf={_w6}")
+_n6.resolve_night()
+check("自刀在结算时真的会死（不是只记一笔）",
+      not _n6.player(_w6).alive, f"alive={_n6.player(_w6).alive}")
 _n7 = Game(_B1, kinds=["ai"] * 4, seed=37)
 _n7.start()
 _n7.night_kill(_wolves_of(_n7)[0], -1)

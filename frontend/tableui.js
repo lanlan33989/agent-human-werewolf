@@ -43,10 +43,11 @@ function paintBig(){
      `current_speaker` / `lastword_seat`。后者是兜底 —— AI 那句话播完之后
      CUR_LINE 会清空，可这一回合还没结束，大圆不该退回"法官"。 */
   var sp = speakingSeat();
-  /* 正在播的那条 say 更准（含遗言）——但"还没念到我这句"时不许覆盖回有人发言
-     （法官正在念「4号请发言」，队列里还躺着他上一轮的 say 残条）。 */
-  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined
-      && !speakPending()) sp = l.seat;
+  /* 正在播的那条 say 最准（含遗言）。★ 2026-10-30（用户实机：5 号发遗言时圆盘
+     显示 1 号发言、读秒在走）：引擎在 AI 遗言说完话的**同一拍**就推进下一位，
+     所以服务端 now.seat 已经变成 1 号；这段音频却还在念 5 号。
+     判据必须以**正在播的那条 say** 为准，不能因为「下一位还没轮到」就把 5 号盖掉。 */
+  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined) sp = l.seat;
   if (sp !== null && sp !== undefined){
     /* ★ 2026-10-29（用户）：AI 发言时大圆原来在「1（人）」和「点击结束发言」
        之间跳 —— 那两条都是**发言屏**（人类自己的麦）的文案，AI 回合本不该出现。
@@ -56,7 +57,7 @@ function paintBig(){
     who.textContent = (sp + 1) + '号正在发言中';
     icon.textContent = '💬';
     moveDotCursor();
-    paintNumberGlow();
+    paintNumberGlow(sp);          /* 用「大圆正在演的那个人」高亮，别再去问引擎当前轮到谁 */
     return;
   }
   bc.classList.remove('talking');
@@ -104,10 +105,10 @@ function speakingSeat(){
 /* 号码小圆高亮（2026-10-29 用户定）：给**轮盘上那圈号码**（.wnum）加 .speaking。
    为什么不去动 .seat：`#p4 .seat{display:none}` —— 那些座位圈在手机上根本
    不显示（2026-10-02 改成"单个大圆"时收掉了），之前往它们身上加类当然没人看得见。 */
-function paintNumberGlow(){
+function paintNumberGlow(who){
   var box = $('hoActs');
   if (!box) return;
-  var who = speakingSeat();
+  if (who === undefined) who = speakingSeat();
   var bs = box.querySelectorAll('.wnum');
   for (var i = 0; i < bs.length; i++){
     var no = Number(bs[i].getAttribute('data-no'));
@@ -291,7 +292,9 @@ async function tick(){
      而进桌面时 `enterTable()` 会重新调一次 tick() —— "停"和"重启"都是自愈的。 */
   if (!$('p4') || !$('p4').classList.contains('on')) return;
   try {
-    PUBLIC = await api('/api/game/' + GID + '/public');
+    /* X-Played：已播完的行数 —— 服务端用它保证白天/夜间交替翻页（2026-10-31） */
+    PUBLIC = await api('/api/game/' + GID + '/public',
+                       {headers: {'X-Played': String(playedCount())}});
   } catch (e) {
     /* ★ 这里以前是 `catch (e) { return; }` —— **整个轮询循环就此静默停住**，
        界面永久冻在最后一屏、一句提示都没有。真机上就是这么卡住的：
@@ -542,10 +545,18 @@ async function tick(){
          "已经念完"恒成立 ⇒ 结果屏刚摊出来就被收掉（用户："验人窗口还是没出来"）。 */
       var _scIdx = (typeof PUBLIC.seer_close_line === 'number')
         ? PUBLIC.seer_close_line : nightNodeIdx('seer_close');
+      /* 🔴 2026-10-31（用户："验人窗口一闪而过，什么都看不到"）：
+         晚一步点确认时（目标已选、窗口刚关、闭眼句已经在播/播完），
+         `seer_close` 的判据当拍就成立 ⇒ 结果屏刚摊开就被收掉。
+         结果屏至少展示 6 秒（本人点圆心可以提前交回）—— 这是"看得见"的底线，
+         不是新的流程节拍：正常时辰（早确认）本来就远超过 6 秒。 */
+      var _resultFresh = !!(WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done'
+                            && WHEEL.shownAt
+                            && (Date.now() - WHEEL.shownAt) < 6000);
       if ((_scIdx >= 0 && SPOKE_DONE && SPOKE_DONE.idx >= _scIdx && SPOKE_DONE.at > 0)
           || PUBLIC.phase !== 'night'){
         if (typeof resetSeerBig === 'function') resetSeerBig();
-        if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') closeHandoff();
+        if (!_resultFresh && WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') closeHandoff();
       }
     } catch (e) { /* 不拖累 tick */ }
     if (!_gateOk){
@@ -1159,6 +1170,10 @@ function renderNightDial(seatNo, v, acts){
     } else {
       players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });  // 投票可自投
     }
+  } else if (act === 'kill'){
+    /* ★ 2026-10-31（用户定：改回狼可以刀自己）：自刀是合法刀口
+       （骗女巫的解药），号码池必须包含自己。其余动作仍排除自己。 */
+    players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });
   } else if (act){
     others(v).forEach(function(p){ if (p.alive) pool[p.seat] = true; }); // 其余不含自己
   }
@@ -1730,6 +1745,7 @@ function openSpeakFallback(seatNo){
    把它们逐条显示在屏幕上，比隔着屏幕来回猜快得多 ——
    这也是"手机上情况不一样"的唯一有效解法：**先让差异可见**。 */
 var DIAG_ASR_ERR = '', DIAG_NET = [], DIAG_CANCEL = 0;
+var DIAG_TTS = '（点「试语音」检测）';
 function diagRefresh(){
   var el = $('diagPanel'); if (!el) return;
   var d = (Rec.diag ? Rec.diag() : {});
@@ -1772,6 +1788,7 @@ function diagRefresh(){
     ['法官通道', (typeof JudgeVoice !== 'undefined' && JudgeVoice.diagText)
       ? JudgeVoice.diagText()
       : '<span class="bad">judge_voice.js 未加载（/judge_voice.js 是不是 404？）</span>'],
+    ['TTS 通道', DIAG_TTS],
     ['最近播报', LAST_TTS
       ? ((LAST_TTS.ok ? '<span class="ok">ok</span>' : '<span class="bad">失败</span>')
          + '｜' + (LAST_TTS.how || '?')
@@ -1818,19 +1835,48 @@ function diagRefresh(){
   };
   $('diagSpeak').onclick = async function(){
     DIAG_ASR_ERR = '（正在播报…）';
+    DIAG_TTS = '（正在检测…）';
     diagRefresh();
-    try {
-      var sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent('诊断：这是一句测试语音'));
-      await sp.promise;
-      DIAG_ASR_ERR = sp.error() ? ('TTS 出错：' + sp.error()) : '（TTS 正常，刚才听到声音了吗？）';
-    } catch (e) { DIAG_ASR_ERR = 'TTS 失败：' + e; }
+    var h = {};
+    try { h = await (await fetch('/api/health')).json(); } catch (e) { /* 老服务端 */ }
+    var _stream = !!h.tts_stream, _impl = h.tts || '?';
+    /* ★ 2026-10-31：按**服务端实际通道**测，不再无条件连 /ws/tts。
+       本地 SAPI 伺候不了流式通道，那是有意拒绝；以前把它当"TTS 出错"显示，
+       用户填了 key 之后看到的就是这条假警报（AI 其实已经从 /api/tts 出声）。 */
+    var _ai = '';
+    if (_stream){
+      try {
+        var sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent('诊断：这是一句测试语音'));
+        await sp.promise;
+        _ai = sp.error() ? ('TTS 出错：' + sp.error())
+                         : ('TTS 正常（流式，首片 ' + Math.round(sp.firstMs() || 0) + 'ms）');
+      } catch (e) { _ai = 'TTS 失败：' + e; }
+    } else {
+      try {
+        var _t0 = time_ms();
+        var r = await fetch('/api/tts?text=' + encodeURIComponent('诊断：这是一句测试语音') + '&rate=0');
+        if (!r.ok){
+          var _et = '';
+          try { _et = (await r.json()).error || ''; } catch (e2) { /* 非 JSON */ }
+          _ai = 'TTS 出错（HTTP ' + r.status + '）：' + _et;
+        } else {
+          var _b = await r.blob();
+          await playBlob(_b);
+          _ai = 'TTS 正常（' + _impl + '，' + _b.size + 'B，'
+                + Math.round(time_ms() - _t0) + 'ms）';
+        }
+      } catch (e) { _ai = 'TTS 失败：' + e; }
+    }
+    DIAG_TTS = _ai + '｜服务端 TTS=' + _impl
+             + (_stream ? '（流式）' : '（非流式，AI 逐句走 /api/tts）');
+    DIAG_ASR_ERR = _ai;
     /* 同一颗按钮顺带测**法官本地通道** —— 两条路互不相干（云端 vs 浏览器合成），
        必须都过一遍才知道哑的是哪一条。 */
     if (typeof JudgeVoice !== 'undefined' && JudgeVoice.speakAwait){
       try {
-        await JudgeVoice.speakAwait('诊断：法官播报测试', true);
-        DIAG_ASR_ERR += ' ｜法官本地合成已调起（第二声是法官）';
-      } catch (e) { DIAG_ASR_ERR += ' ｜法官合成抛错：' + e; }
+        var _jok = await JudgeVoice.speakAwait('诊断：法官播报测试', true);
+        DIAG_TTS += '｜法官本地合成：' + (_jok === false ? '没出声' : '已调起（第二声是法官）');
+      } catch (e) { DIAG_TTS += '｜法官合成抛错：' + e; }
     }
     diagRefresh();
   };
@@ -1938,7 +1984,11 @@ function showPrivateResult(seatNo, v, title, onlyNo){
     return (Number(k) + 1) + ' 号是 ' + (inv[k] ? '狼人' : '好人');
   });
   WHEEL = { mode: 'act', seatNo: seatNo, view: v, act: 'done',
-            pick: null, sub: null, angle: WHEEL.angle };
+            pick: null, sub: null, angle: WHEEL.angle,
+            /* 2026-10-31：结果屏的**展示起点**。晚一步确认（窗口已关、
+               闭眼句已在播）时，屏幕不能再被"闭眼句念完"立刻收掉 ——
+               至少要让人看清验的是谁、结果是什么。见 tick 里的 6 秒保护。 */
+            shownAt: Date.now() };
   renderWheelBase();
   wheelTags(v);
   var bc = $('bigCircle');

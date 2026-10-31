@@ -9,6 +9,11 @@
 用法（在 h5 目录下）：
     ./.venv/Scripts/python.exe tests/_smoke-game-api.py
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import os
 import sys
 
@@ -83,8 +88,12 @@ check("★ 拖拽编排：layout 照单全收（human_seats 0 基 = [1,2]，即 
 r = client.post("/api/game/new",
                 json={"humans": 2, "ais": 2,
                       "layout": ["human", "human", "human", "ai"]})
-check("★ layout 的人类数与 humans 对不上 ⇒ 400（不许静默改排法）",
-      r.status_code == 400, str(r.status_code))
+# 🔴 2026-10-26 宽容化：人类数对不上是前端残留旧座次（上局 2 真人这局 0 真人）的
+#    典型症状 —— 直接忽略编排、退回默认座次，比 400 更符合直觉。
+#    长度/取值仍然是强校验（下面另有一条）。
+check("★ layout 的人类数与 humans 对不上 ⇒ 忽略编排、退回默认座次（不 400）",
+      r.status_code == 200 and r.json()["human_seats"] == [0, 2],
+      f"{r.status_code} {r.json().get('human_seats')}")
 
 # ================================================================ 开局
 
@@ -604,6 +613,26 @@ _r_badlv = client.post("/api/game/new",
 check("★ 未知档位返回 400（不静默退回默认档）",
       _r_badlv.status_code == 400, _r_badlv.text[:120])
 
+# ================================================================ 昼夜交替门（2026-10-31）
+# 前端在 /public 的 X-Played 头里报「已播完的行数」；服务端据此决定能不能翻相位。
+_r_gate = client.post("/api/game/new", json={"humans": 0, "ais": 4, "seed": 7})
+_gid_gate = _r_gate.json()["gid"]
+_s_gate = _ga.SESSIONS[_gid_gate]
+_r_gate1 = client.get(f"/api/game/{_gid_gate}/public",
+                      headers={"X-Played": "0"})
+check("★ /public 接收 X-Played（昼夜交替门的客户端回执）",
+      _r_gate1.status_code == 200 and _s_gate.client_seen
+      and _s_gate.client_played == 0,
+      f"seen={_s_gate.client_seen} played={_s_gate.client_played}")
+_len_gate_before = len(_s_gate.timeline)
+_r_gate2 = client.get(f"/api/game/{_gid_gate}/public",
+                      headers={"X-Played": "99999"})
+check("★ X-Played 夹在**上报那一刻**的时间线长度内（前端算错也不会越界）",
+      _s_gate.client_played == _len_gate_before
+      and _s_gate.client_played <= len(_s_gate.timeline),
+      f"played={_s_gate.client_played} 上报时={_len_gate_before} "
+      f"现在={len(_s_gate.timeline)}")
+
 # ================================================================ 测量层接口（批四）
 # ⚠️ 不能用文件开头那个 gid：上面的"会话淘汰"测试清过 SESSIONS，它已经 404 了。
 _r_m = client.post("/api/game/new", json={"humans": 2, "ais": 2, "level": "认真"})
@@ -727,29 +756,31 @@ check("★ 榜单页可访问（纯展示页，不碰对局状态）",
 check("★ 榜单页里引用了两个数据源（stats + games）",
       "/api/game/stats" in _bd6.text and "/api/game/games" in _bd6.text, "")
 
-# ================================================================ 发言方式的开关（2026-09-18）
-# 挑战式发言顺序（被点名的人先回应）走的是**既有那条规则开关通路** ——
-# 加一条表项，前端下拉自动就有了（前端不写死键名，见 play.html 的 renderSwitches）。
+# ================================================================ 已删除的两个开关（2026-10-12）
+# 🔴 用户当日定：平票处理（tie_vote_rule）/ 发言方式（speech_mode）两个选项**彻底删除**。
+#    行为固定为 no_exile + rotation。这里验的是"删干净了"：
+#    开关表里没有、设置通路明确拒绝、公开状态仍是固定值 ——
+#    最怕的是"前端还在传、后端静默忽略"，玩家以为选上了实际没生效。
 _r_set = client.get("/api/game/settings")
 _sw = {s["key"]: s for s in _r_set.json().get("switches", [])}
-check("★ 规则开关表里有「发言方式」，是二选一（前端自动渲染成下拉，不用改前端）",
-      "speech_mode" in _sw and _sw["speech_mode"]["type"] == "choice"
-      and [o["value"] for o in _sw["speech_mode"]["options"]] == ["rotation", "challenge"],
-      str(_sw.get("speech_mode"))[:140])
+check("★ 开关表里已没有发言方式/平票处理两项（前端不会再渲染它们）",
+      "speech_mode" not in _sw and "tie_vote_rule" not in _sw,
+      str(sorted(_sw)))
 
-_r_bad_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "随便"}})
-check("★ 非法的发言方式被拒（不静默退回默认 —— 静默的话玩家选了小讨论却拿到普通局）",
+_r_bad_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "challenge"}})
+check("★ 再传已删除的 speech_mode ⇒ 400（不静默忽略）",
       _r_bad_mode.status_code == 400, _r_bad_mode.text[:120])
+_r_bad_tie = client.post("/api/game/settings", json={"settings": {"tie_vote_rule": "random"}})
+check("★ 再传已删除的 tie_vote_rule ⇒ 400（不静默忽略）",
+      _r_bad_tie.status_code == 400, _r_bad_tie.text[:120])
 
-_r_ok_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "challenge"}})
-check("★ 能设置成「被点名的人先回应」", _r_ok_mode.status_code == 200, _r_ok_mode.text[:120])
 _r_sp = client.post("/api/game/new", json={"humans": 2, "ais": 2})
 _gid_sp = _r_sp.json()["gid"] if _r_sp.status_code == 200 else None
 if _gid_sp:
-    check("★ 新开的局真的带着这个发言方式（不是设置存了、开局没用上）",
-          client.get(f"/api/game/{_gid_sp}/public").json().get("speech_mode") == "challenge",
-          str(client.get(f"/api/game/{_gid_sp}/public").json().get("speech_mode")))
-client.post("/api/game/settings", json={"settings": {"speech_mode": "rotation"}})   # 复原
+    _pub_sp = client.get(f"/api/game/{_gid_sp}/public").json()
+    check("★ 新开的局固定 rotation（行为不随设置漂移）",
+          _pub_sp.get("speech_mode") == "rotation",
+          str(_pub_sp.get("speech_mode")))
 
 # ================================================================ 手机入口（2026-09-19）
 # 手机上要用**局域网 https** 打开：`http://<局域网IP>` 不是安全上下文，

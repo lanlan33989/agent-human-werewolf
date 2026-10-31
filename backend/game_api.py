@@ -30,7 +30,7 @@ import uuid
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -351,6 +351,23 @@ class Session:
         self._pre_round = None
         self._pre_vote_key = None
         self._vote_grace_at = None
+        # 昼夜交替门（2026-10-31）：前端每次 /public 用 X-Played 上报
+        # 已播完的时间线行数；翻相位（入夜 / 天亮）前必须追平。
+        self.client_seen = False
+        self.client_played = -1
+        self.client_poll_at = 0.0
+        self._phase_gate = None
+
+    def note_client_played(self, n: int) -> None:
+        """前端上报已播完的行数（X-Played）；昼夜交替门读它。"""
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return
+        self.client_seen = True
+        self.client_poll_at = time.monotonic()
+        if n > self.client_played:
+            self.client_played = min(n, len(self.timeline))
 
     def _harvest(self):        return night_driver._harvest(self)
     def drive(self, budget=1.5):
@@ -441,12 +458,17 @@ class Session:
             #    `lines_due` = 本段的播报行 + 各自 `not_before`（= at + delay，
             #    即"这句最早什么时候该开口"）—— 音频按它播，落后太多的直接跳过。
             tl = self.timeline or []
-            panel_line = next((i for i, x in enumerate(tl)
-                               if x.get("node") == cur), -1)
+            # 🔴 2026-10-31：只认**本夜**的那一条 —— 原来从头找第一条同名节点，
+            #   第二夜起命中的是第一夜的句子（`panel_line` 于是永远指向上半夜）。
+            #   前端的 arm 兜底/`_stalled` 拿它判"这句是不是正在播"，指错就会
+            #   在错误时点放行（面板抢跑或等不到），与 `_nn_ready_mono` 同源修复。
+            panel_line = night_driver._line_of_node(self, cur)
+            _tl0 = int(getattr(self, "_night_tl0", 0) or 0)
             lines_due = [{"i": i, "s": (x.get("s") or "")[:60],
                           "not_before": round((x.get("at") or 0)
                                               + (x.get("delay") or 0), 2)}
-                         for i, x in enumerate(tl) if x.get("node") == cur]
+                         for i, x in enumerate(tl) if i >= _tl0
+                         and x.get("node") == cur]
             # 🔴 v4（2026-10-22，参考队友局域网版架构）：
             #    `started` 不再只认客户端 arm —— 服务端按台词表**自己估算**
             #    "本节点那句播完 + 2s"（`_nn_ready_mono`），到点自动置真。
@@ -520,8 +542,13 @@ class Session:
         key = (g.round, tuple(sorted(roles)))
         if getattr(self, "_plan_key", None) != key:
             self._plan_key = key
+            _size = len(g.players)
+            # ★ 2026-10-30：`win` 必须走 `window_of`（狼刀按人数 30/60/90），
+            #   不能直接抄表里的兜底值 —— 表里狼刀写的是 20，前端若按它渲染
+            #   读秒就和真实窗口对不上（6 人局差 10 秒）。
             self._plan_cache = [
-                {"id": nd["id"], "say": nd["say"], "win": nd.get("win") or 0,
+                {"id": nd["id"], "say": nd["say"],
+                 "win": night_script.window_of(nd["id"], _size),
                  "gap": nd.get("gap") or 0, "close": nd.get("close"),
                  "close_gap": nd.get("close_gap") or 0}
                 for nd in night_script.build(roles, g.round)]
@@ -612,8 +639,8 @@ class Session:
             "voted_seats": sorted(g.votes.keys()) if g.phase is Phase.VOTE else [],
             "votes": {} if g.phase is Phase.VOTE else dict(g.votes),
             # ★ 2026-10-28（用户定）：界面底部「票型框」的数据源。
-            #   法官不再念票型（那串"3 号 2 票（1 号、4 号投的）"听着费力），
-            #   改成这个小框：`lines` 就是直接显示的行，形如 "2，3→5"。
+            #   2026-10-31：法官恢复口语版票型播报，票型框同步显示紧凑版（两者并存）。
+            #   `lines` 就是直接显示的行，形如 "2，3→5"；加时结算后换成加时那一轮。
             #   可见性纪律由 engine.vote_board() 保证 —— 投票进行中它拿不到本轮票型。
             "vote_board": g.vote_board(),
             "pending": self.pending,
@@ -785,7 +812,7 @@ class Session:
             if target is None:
                 raise ValueError("刀人需要 target")
             # 多狼局里这是「点一个人」（提议），不是定案；单狼局点即定案。
-            # target = -1 表示空刀提议，target == seat 表示自刀 —— 两者都合法（面杀本来就有）。
+            # target = -1 表示空刀提议；target == seat 表示自刀 —— 两者都合法。
             g.night_kill(seat, target)
 
         elif action == "investigate":
@@ -1215,7 +1242,8 @@ def pending_seats(gid: str) -> Dict[str, Any]:
 
 
 @router.get("/{gid}/public")
-def public(gid: str) -> Dict[str, Any]:
+def public(gid: str,
+           x_played: Optional[int] = Header(None, alias="X-Played")) -> Dict[str, Any]:
     """
     ⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。
 
@@ -1223,8 +1251,16 @@ def public(gid: str) -> Dict[str, Any]:
     如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。
     让它在这里推，开局就能立刻返回、桌面自己长出来。
     （`pending == "working"` 就表示"还在推进"，前端照常继续轮询即可。）
+
+    `X-Played`（2026-10-31）：前端已播完的时间线行数。昼夜交替门用它确认
+    上一相位的最后一句真的念完了，才允许翻到下一相位；没有这个头（老前端/
+    无头测试）时门直接放行，行为与以前一致。
     """
     s = _get(gid)
+    # 直接调用（进程内评测 / 测试）时默认值仍是 Header 对象，不是 int ⇒ 用类型判定，
+    # 别让“没有 HTTP 头”变成一次 TypeError。
+    if isinstance(x_played, int) and x_played >= 0:
+        s.note_client_played(x_played)
     s.drive(POLL_BUDGET)
     return s.public_state()
 

@@ -213,7 +213,9 @@ def _ai_wolf_propose(self, seat: int):
         target = None
     if target is None:
         pts = g.night.get("wolf_points") or {}
-        mates = [t for s, t in pts.items() if s != seat and t is not None]
+        # 跟随队友：不能跟"空刀"(-1)。跟到**自己**头上是合法的自刀。
+        mates = [t for s, t in pts.items()
+                 if s != seat and t is not None and t >= 0]
         if mates:
             target = mates[0]              # 跟随队友（默认行为）
         else:
@@ -245,8 +247,11 @@ def _ai_wolf_maybe_follow(self, seat: int) -> bool:
         return False
     if seat in followed or not humans:
         return False
+    # 能跟随的目标必须：不是自己的点子、不是空刀(-1)。
+    # 队友点了你 ⇒ 跟随 = 自刀，这是允许的（骗女巫的药）。
     want = next((pts.get(s) for s in humans
-                 if pts.get(s) is not None and pts.get(s) != mine), None)
+                 if pts.get(s) is not None and pts.get(s) != mine
+                 and pts.get(s) >= 0), None)
     if want is None:
         return False
     followed.append(seat)

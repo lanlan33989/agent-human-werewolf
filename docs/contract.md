@@ -3,6 +3,9 @@
 > **v1.1（2026-10-27，纯加法不破坏）**：`GET /api/game/games` 的行里增加 `archive` 字段
 > （留档目录名）—— 榜单页要给出"这一局存到哪儿了"。另：§0 的推荐开发形态改为
 > `frontend/mock/mock_server.py` 单端口方案，并新增 §0.1 并行五步。
+>
+> **2026-10-31（纯加法不破坏）**：§1.1 `X-Played` 昼夜回执；`now.started` 增加
+> "等「N号请发言」真播完"的语义；§1.2 TTS 通道能力（`tts_stream` / `tts_mode`）。
 
 > **规矩**：所有协议字段以本文件为准。谁想加/改字段，先改本文 + commit，另一方跟进 ——
 > 不许口头说"我这边加了个字段你适配一下"。每次破坏性改动把 `v` 加一并在此记录。
@@ -66,6 +69,45 @@
 | `winner` | str|null | 终局胜负；非 null 即对局结束 |
 | `board` / `board_key` / `level` / `speech_mode` | — | 板子/档位/发言方式 |
 
+### 1.1 昼夜交替回执（2026-10-31）
+
+- 请求头 `X-Played: <int>`（可选）：前端已**播完**的 `timeline` 行数（从 0 开始计数，
+  正在念的那一行不算）。不改变任何 JSON 字段。
+- 用途：服务端在 **入夜（白天→黑夜）** 与 **天亮结算（黑夜→白天）** 两处等这个回执
+  追平，才允许翻相位 —— 上一相位的最后一句没播完，下一相位的面板/播报不会出现。
+- 不带该头（老前端 / 无头测试）：服务端按旧行为直接翻页；页面关闭或 3 秒没有新轮询
+  也会放行，避免整局卡死。关闭语音时前端直接把已播行数报成整条时间线长度。
+- 前端实现：`speech_ui.js` 的 `playedCount()` + `tableui.js` 轮询的请求头；
+  详见 `_handoff/docx/前端改动说明-昼夜播报交替.docx`。
+
+### 1.2 TTS 通道能力（2026-10-31）
+
+- `GET /api/health` 新增 `tts_stream: bool`：当前装配的 TTS 能否服务 `WS /ws/tts`。
+  本地 SAPI / Mock 为 `false`（该通道会明确拒绝，不是故障），云端 Qwen + key 为 `true`。
+- 前端启动先读它：`false` ⇒ AI 发言逐句 `GET /api/tts`；`true` ⇒ 先试 `/ws/tts`，
+  失败再回落 `/api/tts`。同时决定诊断面板测哪条通道，避免把预期内的拒绝显示成"TTS 出错"。
+- `GET /api/admin/play-keys` 增加 `tts_mode`（`auto` / `qwen` / `sapi`）、`tts_active`
+  （实际实现类名）、`tts_stream`；POST 可带 `tts_mode` 热切通道（`auto` = 有云端 key 走
+  Qwen，否则 SAPI）。进行中的对局不受影响，下一局生效。
+
+### 1.3 LLM 通道状态（2026-10-31）
+
+- `GET /api/admin/play-keys` 再增：`llm_active`（实际实现类名）、`llm_mocked`（bool）、
+  `llm_model`、`llm_base_url`。封面用它显示“Mock / 真实模型”，不再让用户从 AI 的发言里猜。
+- `POST /api/admin/play-keys`：带了非空 `llm` key（或场上已有 `LLM_API_KEY`）时，
+  **自动把 `MOCK_LLM` 置 0 并持久化**（`_runtime.json`），返回的 `changed` 里会含 `MOCK_LLM`。
+  原因：`MOCK_LLM=1` 时 `build_pipeline()` 装配的是 `MockLlm`，填多少 key 都不会变成真模型。
+  只想跑 Mock 的人把它设回 1 即可。
+- 缺 `LLM_BASE_URL` / `LLM_MODEL` 时，返回的 `note` 会明确提示“会退化成兜底话术”。
+
+### 1.4 票型播报与票型框（2026-10-31）
+
+- 法官恢复**口语版票型播报**：结算时 `public_log` / `timeline` 里会出现
+  `投票结果：3 号 2 票（1 号、2 号投的）；…`，先票型后结果；平票加时那一轮也各播一次。
+- 界面底部「票型框」仍走 `public.vote_board`：
+  `lines` 是紧凑行（`2，3→5` / `弃票：4`），`first_round` 表示正在显示第一轮（加时进行中），
+  `runoff` 表示显示的是**加时结算后**的那一轮。进夜后两个标记都清掉（回到普通「计票」）。
+
 ### `timeline[]` 每条的字段
 
 ```json
@@ -91,8 +133,8 @@
 | `seat` | 该操作的人类座位（不是你 ⇒ 面板不弹） |
 | `node` | 夜节点名：`wolf / guard / seer / witch_heal / witch_poison / shoot …` |
 | `until` / `until_left` | 窗口截止（绝对时间戳）/ 剩余秒数（**前端只渲染，不做裁决**） |
-| `started` | 服务端窗口是否已正式开始 —— **面板弹出必须听它**，不许前端自己提前弹 |
-| `panel_line` / `lines_due` | 面板提示文案与到期播报行 |
+| `started` | 服务端窗口是否已正式开始 —— **面板弹出必须听它**，不许前端自己提前弹。`kind:"speak"` 时它按 `X-Played` 等「N号请发言」那句真播完（2026-10-31 增）：上一句 AI 发言还在客户端队列里时恒为 `false`，此时前端不亮号码、不起读秒 |
+| `panel_line` / `lines_due` | 面板提示文案与到期播报行。**只指本夜**的同名节点（2026-10-31 修：原来从整局时间线从头找，第二夜起会指回第一夜） |
 | `need` | 需要的输入形态：`target` / `yesno` / `text` |
 
 ⚠️ 最近一周的 bug 高发区（联调重点演练）：`started=false→true` 的面板弹出时机、
@@ -172,8 +214,9 @@
 | `POST /api/game/{gid}/arm` | 面板 arm（播报念完的确认）；**不延长窗口** | |
 | `GET /api/game/rules` / `settings` | 档位表 / 规则开关表（前端控件**由它生成**，不写死） | `rules.json` / `settings.json` |
 | `GET /api/game/games` | 已结束清单（榜单页 `/board` 用）。行内含 `archive`=**留档编号**（`runs/<日期时间>_<局号>_v<git短哈希>`，2026-10-27 增） | |
-| `GET /api/health` | 服务与各层真假 | `health.json` |
-| `GET /api/tts?…`、`WS /ws/tts` | 云端 TTS 音频；`VOICE_ON=0` 时走浏览器本地合成（Web Speech） | |
+| `GET /api/health` | 服务与各层真假；`tts_stream`（bool）= 当前 TTS 能否服务 `/ws/tts`（2026-10-31 增） | `health.json` |
+| `GET /api/tts?…`、`WS /ws/tts` | 云端 TTS 音频；`VOICE_ON=0` 时走浏览器本地合成（Web Speech）。**`tts_stream=false`（如本地 SAPI）时不要连 `/ws/tts`**，AI 发言逐句走 `/api/tts` | |
+| `GET/POST /api/admin/play-keys` | 封面 key 回填/写入。GET 另给 `tts_mode`（auto/qwen/sapi）、`tts_active`（实际实现）、`tts_stream`、`llm_active`、`llm_mocked`、`llm_model`、`llm_base_url`；POST 可带 `tts_mode` 热切 TTS 通道，带 LLM key 时自动关 `MOCK_LLM`（2026-10-31 增） | |
 | `POST /api/asr`、`WS /ws/asr` | 语音识别（16k WAV body / 流式） | |
 
 全量 46 个端点见 `docs/openapi.json`。

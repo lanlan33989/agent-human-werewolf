@@ -14,6 +14,11 @@ D5 回归：语音接进对局（本地 TTS + 共享录音模块 + 半双工）
 """
 from __future__ import annotations
 
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import io
 import re
 import sys
@@ -119,23 +124,103 @@ check("空文本不报错、返回空音频", r.status_code == 200 and r.content
       f"{r.status_code} {len(r.content)}B")
 
 print("=" * 74)
+print("②b TTS 通道能力 / 封面切换（2026-10-31）")
+# 用户填了 key 仍没 AI 声：TTS=sapi 时云端 key 不生效，而封面原来没有切通道的入口。
+# 现在由服务端 /api/health 公布 tts_stream，前端据此选 WS 还是 /api/tts。
+r = c.get("/api/health")
+_h = r.json()
+check("★ /api/health 公布 tts_stream（前端据此决定走不走流式）",
+      isinstance(_h.get("tts_stream"), bool), str(_h))
+check("tts_stream 与实际装配的实现一致",
+      _h.get("tts_stream") == isinstance(server.TTS, server.QwenTts),
+      f"{_h.get('tts')} / {_h.get('tts_stream')}")
+r = c.get("/api/admin/play-keys")
+_j = r.json()
+check("封面 key 接口回填 TTS 通道", _j.get("tts_mode") in ("auto", "qwen", "sapi"),
+      str(_j.get("tts_mode")))
+check("封面 key 接口报告实际在用的 TTS", bool(_j.get("tts_active")),
+      str(_j.get("tts_active")))
+
+import asyncio                                              # noqa: E402
+import json as _json                                        # noqa: E402
+import tempfile                                             # noqa: E402
+from fastapi import HTTPException                           # noqa: E402
+import admin_api                                            # noqa: E402
+
+class _Req:                                                 # noqa: D401
+    def __init__(self, body):
+        self._body = body
+        self.client = type("C", (), {"host": "testclient"})()
+    async def json(self):
+        return self._body
+
+_old_state, _old_reload = admin_api.STATE_PATH, admin_api._reload_fn
+_old_tts = os.environ.get("TTS")
+_old_k1 = os.environ.get("DASHSCOPE_TTS_API_KEY")
+_old_k2 = os.environ.get("DASHSCOPE_API_KEY")
+try:
+    with tempfile.TemporaryDirectory() as _td:
+        admin_api.STATE_PATH = Path(_td) / "_runtime.json"
+        _calls = []
+        admin_api._reload_fn = lambda: _calls.append(True)
+
+        os.environ.pop("DASHSCOPE_TTS_API_KEY", None)
+        os.environ.pop("DASHSCOPE_API_KEY", None)
+        _denied = False
+        try:
+            asyncio.run(admin_api.api_play_keys_set(_Req({"tts_mode": "qwen"})))
+        except HTTPException as e:
+            _denied = (e.status_code == 400)
+        check("切云端但没有任何 TTS key ⇒ 400（不静默切过去）", _denied)
+
+        os.environ["DASHSCOPE_API_KEY"] = "test-key-not-real"
+        # 前提：从**本地**切到云端。用户配置可能已经是 qwen（_runtime.json 里存过），
+        # 此时再请求 qwen 是“没有变化”，测不到切换。先归位到 sapi。
+        os.environ["TTS"] = "sapi"
+        _r = asyncio.run(admin_api.api_play_keys_set(
+            _Req({"tts": "test-key-not-real", "tts_mode": "qwen"})))
+        check("填 key + 选云端 ⇒ 切换成功并热替换",
+              _r.get("ok") and "TTS" in (_r.get("changed") or []) and bool(_calls),
+              str(_r))
+        _saved = _json.loads((Path(_td) / "_runtime.json").read_text(encoding="utf-8"))
+        check("切换写进运行时状态（重启后仍是 qwen）",
+              _saved.get("env", {}).get("TTS") == "qwen", str(_saved.get("env", {}).get("TTS")))
+        _g = admin_api.api_play_keys_get(_Req({}))
+        check("GET 回填当前通道 = qwen", _g.get("tts_mode") == "qwen",
+              str(_g.get("tts_mode")))
+
+        asyncio.run(admin_api.api_play_keys_set(_Req({"tts_mode": "sapi"})))
+        check("可以切回本地 SAPI", os.environ.get("TTS") == "sapi")
+finally:
+    admin_api.STATE_PATH, admin_api._reload_fn = _old_state, _old_reload
+    if _old_tts is None:
+        os.environ.pop("TTS", None)
+    else:
+        os.environ["TTS"] = _old_tts
+    for _n, _v in (("DASHSCOPE_TTS_API_KEY", _old_k1), ("DASHSCOPE_API_KEY", _old_k2)):
+        if _v is None:
+            os.environ.pop(_n, None)
+        else:
+            os.environ[_n] = _v
+
+print("=" * 74)
 print("③ 前端：半双工与共享模块（静态检查）")
 # 2026-10-06：game.html（/game 旧界面）已删除。原 game 断言逐条甄别
 # （详见 HANDOFF §10.7 2026-10-06）：前四条改指向 p2（play.html+tableui.js）；
 # 其余五条（插嘴采集/自适应阈值/串音提示/法官语速/播报开关）未移植到
 # play.html 的大圆形态，随页面删除退役。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = (((BASE / "frontend" / "play.html").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js（1900 行硬线，见 §2.1.4）
       # ⇒ 扫描的**文件清单跟着走**（判据一字未改、强度不变；同 §10.7 2026-10-02 那次）。
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 # 🔴 2026-10-23：探针页 index.html 已删（用户：非游戏画面）—— 它的 5 条判据随之退役
 
 # 🔴 2026-10-07（`tableui.js → speech_ui.js` 拆分时踩到的坑，值得单独上锁）：
 #    本站静态资源是 server.py 里**一个文件一条路由**（不是 StaticFiles 挂目录）——
 #    拆出 / 新增 js 时，极易只改 `play.html` 而忘了补路由 ⇒ 浏览器静默 404、
 #    页面少一整块功能（那次差点让整块播报队列消失，且**所有 smoke 都不会红**）。
-_srv = (BASE / "server.py").read_text(encoding="utf-8")
+_srv = (BASE / "backend" / "server.py").read_text(encoding="utf-8")
 _refs = set(re.findall(r'<script src="/([^"]+\.js)"', p2))
 check("★ 每个被 play.html 引用的 js 都有 server.py 路由（拆文件时最容易漏的一条）",
       bool(_refs) and all('"/%s"' % s in _srv for s in _refs),
@@ -151,6 +236,20 @@ check("play.html：有麦克风入口（#hoSay，大圆发言模式复用）",
       "hoSay" in p2 and "startSay" in p2)
 check("play.html：时间线播报有并发保护（半双工）",
       "if (SPEAKING || !VOICE_ON" in p2)
+
+# ★ 2026-10-31：AI 无声那一轮的上锁断言（详见 HANDOFF §10.7 同日）
+check("封面有 TTS 通道选择器（本地 / 云端 / 自动）",
+      'id="kTtsMode"' in p2 and 'value="auto"' in p2
+      and 'value="sapi"' in p2 and 'value="qwen"' in p2)
+check("封面把通道选择一并提交",
+      "tts_mode: $('kTtsMode').value" in p2)
+check("流式开关由 /api/health 的 tts_stream 决定（SAPI 不再先吃一次 WS error）",
+      "var VOICE_STREAM = false;" in p2 and "VOICE_STREAM = !!h.tts_stream" in p2)
+check("诊断面板按实际通道测语音（非流式走 /api/tts）",
+      "h.tts_stream" in p2 and "/api/tts?text=" in p2
+      and "服务端 TTS=" in p2)
+check("法官本地合成成功不再被诊断面板标成 stream",
+      "else if (!_loc)" in p2 and "how: 'local'" in p2)
 
 print("=" * 74)
 print("④ 新对局页 /play（界面照 demo/index.html，数据走真引擎）")
@@ -177,8 +276,11 @@ check("play.html 的数据只来自引擎（没有把 demo 的剧本函数搬过
 
 # ★ 防漂移：table.js 的排座算法必须与 demo/index.html 里那一段**逐字相同**。
 # 否则「界面以 demo 为绝对参照」这句话就会随着时间默默失效。
-demo_src = (BASE.parent / "demo" / "index.html").read_text(encoding="utf-8")
-table_src = (BASE / "table.js").read_text(encoding="utf-8")
+# demo/ 是仓库外的对照目录（和 HANDOFF 一样）：工作区里没有这份拷贝时跳过，
+# 不让一条"参照文件缺失"把整条回归判红。
+_demo_path = BASE.parent / "demo" / "index.html"
+demo_src = _demo_path.read_text(encoding="utf-8") if _demo_path.exists() else None
+table_src = (BASE / "frontend" / "table.js").read_text(encoding="utf-8")
 
 
 def _one_function(src, name):
@@ -196,10 +298,13 @@ def _one_function(src, name):
     return src[i:j + 1]
 
 
-check("★ table.js 的 equalChord 与 demo 逐字一致（防两边慢慢漂开）",
-      _one_function(table_src, "equalChord") == _one_function(demo_src, "equalChord"))
-check("★ table.js 的 layout 与 demo 逐字一致",
-      _one_function(table_src, "layout") == _one_function(demo_src, "layout"))
+if demo_src is None:
+    SKIP.append("demo/index.html 不在工作区（防漂移对照跳过）")
+else:
+    check("★ table.js 的 equalChord 与 demo 逐字一致（防两边慢慢漂开）",
+          _one_function(table_src, "equalChord") == _one_function(demo_src, "equalChord"))
+    check("★ table.js 的 layout 与 demo 逐字一致",
+          _one_function(table_src, "layout") == _one_function(demo_src, "layout"))
 
 print("=" * 74)
 total = len(PASS) + len(FAIL)

@@ -13,6 +13,11 @@
 """
 from __future__ import annotations
 
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import time as _time  # noqa: E402  （夜间节拍是墙上时间，测试要等它）
 
 import io
@@ -834,7 +839,14 @@ for _i in range(3000):
         elif "investigate" in acts and others:
             s12.act(seat, "investigate", others[0], None)
         elif "vote" in acts and others:
-            s12.act(seat, "vote", others[0], None)
+            # 加时投票（runoff stage=2）只能投平票者之一 —— 候选集只认服务端，
+            # 机器人照 others[0] 投会撞引擎的校验（2026-10-30 实测）。
+            _rv12 = v.get("runoff") or {}
+            if _rv12.get("stage") == 2:
+                _pool12 = [x for x in (_rv12.get("votable") or []) if x != seat]
+            else:
+                _pool12 = others
+            s12.act(seat, "vote", _pool12[0] if _pool12 else -1, None)
         else:
             s12.act(seat, "pass", None, None)
     except Exception as e:                              # noqa: BLE001
@@ -1221,20 +1233,26 @@ night_script.set_win_scale(0.5)          # 放大到能明显区分两种口径
 try:
     _t0 = 1_700_000_000.0
     _GAP = night_script.GAP
-    _fake = _types.SimpleNamespace(timeline=[
+    class _P4:
+        def __init__(self, seat, kind):
+            self.seat, self.kind = seat, kind
+    _players4 = [_P4(i, "human" if i == 1 else "ai") for i in range(6)]
+    _game4 = _types.SimpleNamespace(
+        players=_players4, player=lambda s: _players4[int(s)])
+    _tl4 = [
         {"t": "sys", "s": "投票结果：2号、3号、4号投给5号；5号投给2号；6号弃票。",
          "voice": "Neil", "ts": _t0},
         {"t": "sys", "s": "5号 被投出并出局。", "voice": "Neil", "ts": _t0 + 0.01},
-        # 玩家长发言（t == "say"）：几百字，绝不许进串行累加，否则起算点被推到一分钟外
+        # 玩家的长发言（t == "say"）：人类的话客户端只停 0.4s（不复述），
+        # 不能按字数累加，否则起算点被推到一分钟外。
         {"t": "say", "s": "我" * 400, "seat": 1, "voice": "", "ts": _t0 + 0.02},
         {"t": "sys", "s": "第 2 夜，天黑请闭眼。", "voice": "Neil",
          "delay": _GAP, "ts": _t0 + 0.03},
         {"t": "sys", "s": "守卫请睁眼，请选择今晚你要守护的人", "voice": "Neil",
          "delay": _GAP, "node": "guard", "at": _t0 + 0.04},
-    ])
+    ]
+    _fake = _types.SimpleNamespace(timeline=_tl4, game=_game4)
     _est = _ndrv._nn_ready_mono(_fake, "guard")
-    # `_nn_ready_mono` 回的是 **monotonic**，而时间线里的 `ts/at` 是墙上时间 ——
-    # 换算回墙上再比，不然比出来是 -17 亿秒（第一次写就是这么错的）。
     _est_wall = (_est - _time.monotonic() + _time.time()) if _est is not None else None
     _sc4 = night_script.win_scale()
     _dur = lambda s: _sc4 * (0.5 + len(s) / 3.4)   # 与实现同源的口径（含缩放）
@@ -1248,9 +1266,29 @@ try:
     check("★ ④ 起算点也排在「天黑请闭眼」念完之后",
           _est is not None and _d > _span_day + 3.0,
           f"est-t0={_d:.2f}s（+3s = GAP 留白）")
-    check("★ ④ 玩家长发言（t=say）**不参与**累加（否则一夜的面板会被推后一分钟）",
+    check("★ ④ 玩家 say **不参与夜间起算**（否则第二夜面板被推后一分钟）",
           _est is not None and _d < 20,
           f"est-t0={_d:.2f}s")
+
+    # ★ 2026-10-30：say 的时长只在**白天发言**的起算里算，而且只算紧邻的
+    #   上一句开场白之后的 say。AI 的长发言必须占队列（遗言没念完，下一位
+    #   不能拿到麦）；人类的话客户端只停 0.4s。
+    def _speech_est(seat, text):
+        _tl = [{"t": "sys", "s": "4号请留遗言", "ts": _t0},
+               {"t": "say", "s": text, "seat": seat, "ts": _t0 + 0.01},
+               {"t": "sys", "s": "5号请发言", "ts": _t0 + 0.02}]
+        _fx = _types.SimpleNamespace(timeline=_tl, game=_game4)
+        _e = _ndrv._speech_ready_mono(_fx, "speak", 4)
+        return ((_e - _time.monotonic() + _time.time()) - _t0) if _e else -1
+
+    _d_ai = _speech_est(2, "我" * 400)
+    _d_hu = _speech_est(1, "我" * 400)
+    check("★ ④ AI 的发言**占队列**（遗言/发言没念完，下一位不能拿到麦）",
+          _d_ai >= _dur("我" * 400),
+          f"est-t0={_d_ai:.2f}s，AI 这段至少要念 {_dur('我' * 400):.2f}s")
+    check("★ ④ 人类的长发言只按 0.4s 计（客户端不复述，不按字数推后）",
+          _d_hu > 0 and _d_hu < 5,
+          f"est-t0={_d_hu:.2f}s（人话只停 0.4s）")
 finally:
     night_script.set_win_scale(_scale_saved4)
 
@@ -1267,6 +1305,9 @@ check("★ ③ 后端把 `closing` 下发给前端（now_state 的 none 分支�
       '"closing"' in (BASE / "backend" / "game_api.py").read_text(encoding="utf-8"))
 check("★ ③ 节点推进要等闭眼句念完（_nn_closing 闸）",
       "_nn_closing" in (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
+check("★ 自刀合法：夜间拨号盘的狼刀号码池包含自己（不再用 others）",
+      "act === 'kill'" in _tui and "自刀是合法刀口" in _tui,
+      "夜间拨号盘把自刀排除了 ⇒ 人狼点不到自己")
 
 # ================================================================ ⑰ 2026-10-30
 # 用户实机：「夜间还没结束、其他玩家还没发言时，圆盘就显示了 4 号（真人）
@@ -1651,6 +1692,16 @@ try:
     check("★ ⑳ 第二夜：验人窗口的倒计时同样是**正的**（否则面板被 `_expired` 挡掉）",
           _s20n is not None and (_s20n[1].get("until_left") or 0) > 0,
           str((_s20n or (None, {}))[1].get("until_left")))
+    # ★ 2026-10-31：`now_state.panel_line` 原来也是**从头**找第一条同名节点 ⇒
+    #   第二夜起指回第一夜那句 ⇒ 前端 arm 兜底/`_stalled` 全按错误的句子判定。
+    #   现在与 `_nn_ready_mono` 同源（`_line_of_node`，只看本夜）。
+    #   （`_r2` 是"第一次见到该节点"，夜里四段都在第一夜就会填满；
+    #     所以这里用源码断言 + `seer_close_line` 的动态断言，不拿旧快照冒充第二夜。）
+    _gapi20 = (BASE / "backend" / "game_api.py").read_text(encoding="utf-8")
+    check("★ ⑳ `panel_line` 用 `_line_of_node`（只认本夜），不再从头 next()",
+          "panel_line = night_driver._line_of_node(self, cur)" in _gapi20
+          and "panel_line = next((i for i, x in enumerate(tl)" not in _gapi20,
+          "旧写法会把第二夜的 panel_line 指回第一夜")
     check("★ ⑳ 第二夜：起算点（`_nn_ready_mono`）必须指向**本夜**那句，不许在过去",
           _s20n is not None
           and (_ndrv._nn_ready_mono(_s20, "seer") or 0) >= _s20._nn_at,
@@ -1674,6 +1725,524 @@ check("★ ⑳ nightNodeIdx 改成**从后往前**（当前节点的句子总是
       "还是从头找 ⇒ 第二夜起一直命中第一夜的句子")
 check("★ ⑳ 结果屏的清理只认服务端下发的 `seer_close_line`",
       "PUBLIC.seer_close_line" in _tui20)
+
+print("=" * 74)
+print("㉑ 夜间动作的引擎侧防线（2026-10-30）：一晚一瓶 + 关窗后不许再改")
+
+
+def _mk21(n=6, seed=7):
+    _s = game_api.Session(humans=0, ais=n, seed=seed)
+    return _s, _s.game
+
+
+def _witch21(g):
+    return next(p for p in g.players if p.role is Role.WITCH)
+
+
+def _other21(g, seat):
+    return next(q.seat for q in g.players if q.alive and q.seat != seat)
+
+
+_s21, _g21 = _mk21()
+_w21 = _witch21(_g21)
+_g21.night["kill"] = _other21(_g21, _w21.seat)
+_g21.night["kill_settled"] = True
+_g21.night["stage"] = "witch_heal"
+_g21.night_heal(_w21.seat, _g21.night["kill"])
+_g21.night["stage"] = "witch_poison"
+try:
+    _g21.night_poison(_w21.seat, _other21(_g21, _w21.seat))
+    _err21 = ""
+except PermissionError as _e21:
+    _err21 = str(_e21)
+check("★ ㉑ 女巫用了解药就不能再毒人（引擎拒 —— 一晚最多一瓶）",
+      bool(_err21), _err21 or "竟然下毒成功了")
+
+_s22, _g22 = _mk21()
+_w22 = _witch21(_g22)
+_g22.night["kill"] = _other21(_g22, _w22.seat)
+_g22.night["kill_settled"] = True
+_g22.night["stage"] = "witch_heal"
+_g22.night_heal(_w22.seat, _g22.night["kill"])
+_g22.settle_witch_heal()
+try:
+    _g22.night_clear(_w22.seat)
+    _err22 = ""
+except RuntimeError as _e22:
+    _err22 = str(_e22)
+check("★ ㉑ 解药结算之后不许再撤回（否则扣掉的药会被还回来 ⇒ 一夜两瓶）",
+      bool(_err22), _err22 or "撤回成功了")
+
+_s23, _g23 = _mk21()
+_w23 = _witch21(_g23)
+_g23.night["kill"] = _other21(_g23, _w23.seat)
+_g23.night["kill_settled"] = True
+_g23.night["stage"] = "witch_poison"
+_g23.night_poison(_w23.seat, _other21(_g23, _w23.seat))
+_g23.settle_witch_poison()
+try:
+    _g23.night_poison(_w23.seat, _other21(_g23, _w23.seat))
+    _err23 = ""
+except RuntimeError as _e23:
+    _err23 = str(_e23)
+check("★ ㉑ 毒药窗口关闭后不许再改（结算已经落地）", bool(_err23), _err23 or "改了")
+
+_s24, _g24 = _mk21()
+_se24 = next(p for p in _g24.players if p.role is Role.SEER)
+_g24.night["stage"] = "seer"
+_g24.night_investigate(_se24.seat, _other21(_g24, _se24.seat))
+_g24.night["seer_confirmed"] = True
+try:
+    _g24.night_investigate(_se24.seat, _other21(_g24, _other21(_g24, _se24.seat)))
+    _err24 = ""
+except RuntimeError as _e24:
+    _err24 = str(_e24)
+check("★ ㉑ 预言家确认之后不许再换目标（结果已经报出去了）",
+      bool(_err24), _err24 or "换了")
+
+_s25, _g25 = _mk21()
+_wo25 = next(p for p in _g25.players if p.role.is_wolf)
+_g25.night["stage"] = "wolf"
+_g25.night_kill(_wo25.seat, _other21(_g25, _wo25.seat))
+_g25.settle_wolf_window()
+try:
+    _g25.night_kill(_wo25.seat, _other21(_g25, _other21(_g25, _wo25.seat)))
+    _err25 = ""
+except RuntimeError as _e25:
+    _err25 = str(_e25)
+check("★ ㉑ 狼刀结算之后不许再改（点子与真正落地的 kill 会打架）",
+      bool(_err25), _err25 or "改了")
+
+for _n26, _want26 in ((6, 30), (9, 60), (12, 90)):
+    _s26, _ = _mk21(_n26, seed=3)
+    _plan26 = {x["id"]: x["win"] for x in _s26._night_plan()}
+    # 本文件前面把窗口缩到了 0.02（跑得快）；plan 里的秒数走同一个缩放。
+    _exp26 = _want26 * night_script.win_scale()
+    check(f"★ ㉑ {_n26} 人局 night_plan 里的狼刀窗口 = {_want26} 秒（按当前缩放）"
+          "—— 表里的兜底值 20 不许下发给前端",
+          abs(float(_plan26.get("wolf") or 0) - _exp26) < 0.01,
+          f"got={_plan26.get('wolf')} want={_exp26}")
+
+print("=" * 74)
+print("㉒ 遗言→白天：下一位的读秒/麦克风必须等遗言念完")
+# 用户实机：5 号发遗言时圆盘显示 1 号（真人）发言、倒计时在走。
+# 根因：引擎在 AI 遗言说完的同一拍就推进下一位，而 `_queue_end_mono` 以前
+# 跳过 say 的时长 ⇒ 「1号请发言」被估成马上念完 ⇒ started 提前为真。
+_lw_found = False
+for _seed in (7, 12, 0, 3, 5, 9, 2, 4, 6, 8, 10, 11, 13, 14):
+    _s_lw = game_api.Session(humans=1, ais=5, seed=_seed)
+    for _ in range(500):
+        if _s_lw.game.phase.value == "discuss":
+            break
+        _s_lw.drive(0.05)
+    if _s_lw.game.phase.value != "discuss" or _s_lw.pending != "human_speak":
+        continue
+    _now_lw = _s_lw.now_state()
+    _spk_lw = _now_lw.get("seat")
+    if _spk_lw is None or _s_lw.game.player(_spk_lw).kind != "human":
+        continue
+    _dead_lw = {d["seat"] for d in _s_lw.game.deaths
+                if d["round"] == _s_lw.game.round}
+    _lwsay = [x for x in _s_lw.timeline
+              if x.get("t") == "say" and x.get("seat") in _dead_lw]
+    if not _lwsay:
+        continue
+    _ready_lw = _ndrv._speech_ready_mono(_s_lw, "speak", _spk_lw)
+    check("★ ㉒ 遗言还在队列里 ⇒ 下一位 started=False（圆盘/读秒不许提前）",
+          _now_lw.get("started") is False
+          and _ready_lw is not None and _ready_lw > _time.monotonic(),
+          f"seed={_seed} now={_now_lw.get('kind')},{_spk_lw},"
+          f"started={_now_lw.get('started')} ready={_ready_lw}")
+    check("★ ㉒ 大圆以「正在播的那条 say」为准（遗言座位不被下一位顶掉）",
+          "l.t === 'say' && l.seat !== null" in _tui)
+    _lw_found = True
+    break
+if not _lw_found:
+    check("★ ㉒ 造出「AI 遗言 + 下一位人类」的场景", False, "这些种子里都没出现")
+
+print("=" * 74)
+print("㉓ 夜间起算不许被白天 AI 发言的时长拖后（第二夜验人窗口整窗不弹的根因）")
+# 2026-10-30 用户实机：预言家在某些情况下验人窗口有问题。
+# 多局复现：上一轮把 say 计入队列后，**白天每一句 AI 发言**都被累加进夜间
+# `_nn_ready_mono`。12 句发言的估算时长≈75 秒 ⇒ 第二夜验人窗口的 started
+# 被推到 ~96 秒后（窗口只有 15 秒）⇒ 面板整窗不弹。
+# 现在：夜间起算**不计 say**；白天发音只从上一句「请发言/请留遗言」起算，
+# 只把紧邻的遗言 say 计进去。
+_scale23 = night_script.win_scale()
+night_script.set_win_scale(1.0)
+try:
+    _now23 = _time.time()
+    _fake23 = _types.SimpleNamespace(
+        timeline=([{"t": "say", "seat": 1, "s": "长" * 400,
+                    "at": _now23 - 900} for _ in range(12)]
+                  + [{"t": "sys", "s": "第 2 夜，天黑请闭眼。",
+                      "node": "open", "at": _now23 - 5},
+                     {"t": "sys", "s": "预言家请睁眼，请选择今晚你要查验的人",
+                      "node": "seer", "at": _now23}]),
+        _nn_tl0=12, _nn_at=_time.monotonic() - 5)
+    _est23 = _ndrv._nn_ready_mono(_fake23, "seer")
+    _d23 = ((_est23 - _time.monotonic() + _time.time()) - _now23) \
+        if _est23 is not None else -1
+    check("★ ㉓ 12 句白天 AI 发言（估时 ≈75s）不许算进夜间 est",
+          _est23 is not None and 3 < _d23 < 15,
+          f"est 被推后 {_d23:.1f}s（应当只等『预言家请睁眼』这一句 ≈6s）")
+
+    def _kind23(seat):
+        return _types.SimpleNamespace(kind="ai")
+
+    _fake23b = _types.SimpleNamespace(
+        timeline=([{"t": "say", "seat": 1, "s": "旧发言" * 120,
+                    "at": _now23 - 1500} for _ in range(5)]
+                  + [{"t": "sys", "s": "5号请留遗言", "at": _now23 - 30},
+                     {"t": "say", "seat": 4, "s": "遗言" * 100, "at": _now23 - 29},
+                     {"t": "sys", "s": "1号请发言", "at": _now23 - 28}]),
+        game=_types.SimpleNamespace(
+            player=lambda s: _types.SimpleNamespace(kind="ai")))
+    _est23b = _ndrv._speech_ready_mono(_fake23b, "speak", 0)
+    _d23b = ((_est23b - _time.monotonic() + _time.time()) - _now23) \
+        if _est23b is not None else -1
+    check("★ ㉓ 白天起算仍算**紧邻的遗言 say**（5 号还在念 ⇒ 1 号不能开麦）",
+          _est23b is not None and 20 < _d23b < 80,
+          f"est 距现在 {_d23b:.1f}s（遗言 say ≈59s + 两句法官话）")
+    check("★ ㉓ 白天起算**不算**更早的历史发言（只从上一句开场白开始）",
+          _est23b is not None and _d23b < 90,
+          f"est 距现在 {_d23b:.1f}s（若累加 5 句旧发言会多出 ~590s）")
+finally:
+    night_script.set_win_scale(_scale23)
+
+# 真实 Session：首夜平安夜的首日发言起点必须真的随机（用户实机连两把 1 号）。
+# 不能直接 resolve_night() 硬跳 —— 驱动器的节点时钟还停在夜里，会接着往下走。
+# 这里把「狼刀结算」和「毒药」在第一夜改成空操作，走**完整的驱动路径**。
+_scale23c = night_script.win_scale()
+night_script.set_win_scale(0.01)
+_orig_settle23 = Game.settle_wolf_window
+_orig_poison23 = Game.night_poison
+try:
+    def _settle23(self):
+        _orig_settle23(self)
+        if self.round == 1:
+            self.night["kill"] = -1
+
+    def _poison23(self, actor, target):
+        if self.round == 1:
+            self.night["poison"] = -1
+            return
+        return _orig_poison23(self, actor, target)
+
+    Game.settle_wolf_window = _settle23
+    Game.night_poison = _poison23
+    _starts23 = set()
+    for _seed23 in range(70, 82):
+        _s23 = game_api.Session(humans=0, ais=9, seed=_seed23)
+        for _ in range(400):
+            if _s23.game.phase.value in ("discuss", "ended"):
+                break
+            _s23.drive(0.05)
+            _time.sleep(0.003)
+        if (_s23.game.phase.value == "discuss"
+                and _s23.game.speaking_order):
+            _starts23.add(_s23.game.speaking_order[0])
+    check("★ ㉓ 真实 Session：首夜平安夜的首日起点不是写死 1 号（12 局不全相同）",
+          len(_starts23) >= 2, f"starts={sorted(_starts23)}")
+finally:
+    Game.settle_wolf_window = _orig_settle23
+    Game.night_poison = _orig_poison23
+    night_script.set_win_scale(_scale23c)
+
+
+# ================================================================ ㉔ 2026-10-31
+# 用户定：「白天和夜间是交替进行，不能并行」。
+# 服务端推进可以不等播报，但**翻相位**必须等客户端把上一相位最后一句念完：
+# 入夜（白天→黑夜）与天亮（黑夜→白天）两个方向都要拦。
+print("=" * 74)
+print("㉔ 昼夜交替：上一相位没播完，不许翻到下一相位（不能并行）")
+print("=" * 74)
+
+_scale24 = night_script.win_scale()
+night_script.set_win_scale(0.05)
+try:
+    # ---- 夜间 → 白天：天亮结算前必须等夜间播报播完 ----
+    _s24 = game_api.Session(humans=0, ais=6, seed=31)
+    _g24 = _s24.game
+    check("（前提）㉔ 开局在夜间", _g24.phase is Phase.NIGHT, _g24.phase.value)
+    _s24._nn_round = _g24.round
+    _s24._nn_nodes = list(getattr(_s24, "_nn_nodes", []) or [])
+    _s24._nn_i = len(_s24._nn_nodes)       # 节点时钟已走完
+    _s24._nn_closing = None
+    _s24._night_done = lambda: True         # AI 动作也已落定
+    _s24.client_seen = True
+    _s24.client_poll_at = _time.monotonic()
+    _s24.client_played = max(0, len(_s24.timeline) - 1)
+    _len24 = len(_s24.timeline)
+    _r24 = _s24._advance_night()
+    check("★ ㉔ 夜间播报没播完：天亮结算被拦住（working，仍是 night）",
+          _r24 == "working" and _g24.phase is Phase.NIGHT,
+          f"ret={_r24} phase={_g24.phase.value}")
+    check("★ ㉔ 没放行之前，时间线里不许出现『天亮了』",
+          all("天亮了" not in (x.get("s") or "")
+              for x in _s24.timeline[_len24:]),
+          str(_s24.timeline[_len24:])[:120])
+
+    _s24.client_played = len(_s24.timeline)  # 客户端追平
+    _r24b = _s24._advance_night()
+    check("★ ㉔ 客户端播完：才允许结算进白天",
+          _r24b == "continue" and _g24.phase in (Phase.DAWN, Phase.SHOOT),
+          f"ret={_r24b} phase={_g24.phase.value}")
+    check("★ ㉔ 天亮句在放行之后才进时间线",
+          any("天亮了" in (x.get("s") or "") for x in _s24.timeline))
+
+    # ---- 白天 → 黑夜：入夜前必须等白天播报（投票结果/遗言/死讯）播完 ----
+    _s24b = game_api.Session(humans=0, ais=6, seed=32)
+    _g24b = _s24b.game
+    _g24b.phase = Phase.EXILE               # 白天收尾点（无需真跑一轮投票）
+    _s24b.client_seen = True
+    _s24b.client_poll_at = _time.monotonic()
+    _s24b.client_played = max(0, len(_s24b.timeline) - 1)
+    _round24 = _g24b.round
+    _len24b = len(_s24b.timeline)
+    _r24c = _s24b._advance_exile()
+    check("★ ㉔ 白天播报没播完：入夜被拦住（working，仍是 EXILE、轮次不变）",
+          _r24c == "working" and _g24b.phase is Phase.EXILE
+          and _g24b.round == _round24,
+          f"ret={_r24c} phase={_g24b.phase.value} round={_g24b.round}")
+    check("★ ㉔ 没放行之前，不许喊『天黑请闭眼』/进下一夜",
+          all("天黑请闭眼" not in (x.get("s") or "")
+              for x in _s24b.timeline[_len24b:])
+          and _g24b.round == _round24,
+          str(_s24b.timeline[_len24b:])[:120])
+
+    _s24b.client_played = len(_s24b.timeline)
+    _r24d = _s24b._advance_exile()
+    check("★ ㉔ 白天播完：才允许入夜（round+1、phase=night）",
+          _r24d == "continue" and _g24b.phase is Phase.NIGHT
+          and _g24b.round == _round24 + 1,
+          f"ret={_r24d} phase={_g24b.phase.value} round={_g24b.round}")
+
+    # ---- 遗言结束 → 入夜：AI 遗言还在播时不许进黑夜（最常见的并行现场） ----
+    _s24c = game_api.Session(humans=0, ais=6, seed=33)
+    _g24c = _s24c.game
+    _g24c.phase = Phase.LASTWORD
+    _g24c.lastword_order = []
+    _g24c.lastword_cursor = 0
+    _g24c.lastword_back = "night"
+    _s24c.client_seen = True
+    _s24c.client_poll_at = _time.monotonic()
+    _s24c.client_played = max(0, len(_s24c.timeline) - 1)
+    _round24c = _g24c.round
+    _len24c = len(_s24c.timeline)
+    _r24e = _s24c._advance_lastword()
+    check("★ ㉔ 遗言还没播完：不结束遗言、不 next_night（仍是 LASTWORD、轮次不变）",
+          _r24e == "working" and _g24c.phase is Phase.LASTWORD
+          and _g24c.round == _round24c,
+          f"ret={_r24e} phase={_g24c.phase.value} round={_g24c.round}")
+    check("★ ㉔ 遗言没播完之前，时间线里不许出现『天黑请闭眼』",
+          all("天黑请闭眼" not in (x.get("s") or "")
+              for x in _s24c.timeline[_len24c:]),
+          str(_s24c.timeline[_len24c:])[:120])
+    _s24c.client_played = len(_s24c.timeline)
+    _r24f = _s24c._advance_lastword()
+    check("★ ㉔ 遗言播完：才结束遗言并进入黑夜",
+          _r24f == "continue" and _g24c.phase is Phase.NIGHT
+          and _g24c.round == _round24c + 1,
+          f"ret={_r24f} phase={_g24c.phase.value} round={_g24c.round}")
+
+    # ---- 兼容/兜底：老前端、关页、TTS 悬挂都不能把整局卡死 ----
+    _fake24 = _types.SimpleNamespace(
+        timeline=[{"t": "sys", "s": "天黑请闭眼", "at": _time.time()}],
+        client_seen=False, client_poll_at=0.0, client_played=-1,
+        _phase_gate=None)
+    check("★ ㉔ 老前端/无头上报：门直接放行（保持旧行为）",
+          _ndrv._phase_audio_done(_fake24) is True)
+    _fake24.client_seen = True
+    _fake24.client_poll_at = _time.monotonic() - 10
+    check("★ ㉔ 客户端 3 秒没来轮询（关页/切走）：门放行，不卡死整局",
+          _ndrv._phase_audio_done(_fake24) is True)
+finally:
+    night_script.set_win_scale(_scale24)
+
+# ---- ㉔ 前端/接口契约 ----
+_sui24 = (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8")
+_tui24 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+_ph24 = (BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+_gapi24 = (BASE / "backend" / "game_api.py").read_text(encoding="utf-8")
+_nd24 = (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8")
+check("★ ㉔ 前端算出『已播完行数』（当前正在念的那句不算）",
+      "function playedCount" in _sui24
+      and "SPOKE_DONE.at > 0 ? 1 : 0" in _sui24)
+check("★ ㉔ 无声模式视为整队播完（否则关语音后整局卡在翻页）",
+      "if (!VOICE_ON) return tl.length;" in _sui24)
+check("★ ㉔ 轮询 /public 带上 X-Played",
+      "'X-Played': String(playedCount())" in _tui24)
+check("★ ㉔ 服务端 /public 接收 X-Played 并交给 Session",
+      'alias="X-Played"' in _gapi24 and "note_client_played" in _gapi24)
+check("★ ㉔ 入夜与天亮两个方向都接门（至少 4 处调用）",
+      _nd24.count("_phase_audio_done(self)") >= 4,
+      f"count={_nd24.count('_phase_audio_done(self)')}")
+check("★ ㉔ 新局/接局重置播报游标（避免上一局的已播行数误放行）",
+      _ph24.count("SPOKE_DONE = null") >= 2,
+      f"count={_ph24.count('SPOKE_DONE = null')}")
+
+
+# ================================================================ ㉕ 2026-10-31
+# 用户实机：首夜平安夜，天亮随机到 3 号 AI 发言，但 1 号（真人）被高亮、
+# 显示可以发言且读秒在走。根因：服务端已经推进到 1 号，`_speech_started`
+# 却只按估算时刻判 true —— AI 3 的语音还在客户端队列里。
+# 修法：真人的 `started` / 120 秒都必须等「1号请发言」这一句真的播完
+# （X-Played 回执 > 该句下标）；这一句排在 AI 3 整个发言之后，所以也天然
+# 等完了 AI 3。下面用真实 Session + 合成时间线跑多组。
+print("=" * 74)
+print("㉕ AI 还在发言时，真人不得被高亮/起读秒（多局）")
+print("=" * 74)
+
+_seen25 = []
+for _seed25 in range(1, 13):
+    _s25 = game_api.Session(humans=1, ais=5, seed=_seed25)
+    _g25 = _s25.game
+    _hs25 = next(p.seat for p in _g25.players if p.kind == "human")
+    _ai25 = next(p.seat for p in _g25.players
+                 if p.kind == "ai" and p.alive and p.seat != _hs25)
+    _g25.phase = Phase.DISCUSS
+    _g25.round = 2
+    _g25.speaking_order = [_hs25]
+    _g25.speak_cursor = 0
+    _now25 = _time.time()
+    _long25 = "三号 AI 正在说" * 30
+    _s25.timeline = [
+        {"t": "sys", "s": f"{_ai25 + 1}号请发言", "at": _now25 - 30},
+        {"t": "say", "seat": _ai25, "s": _long25, "at": _now25 - 29},
+        {"t": "sys", "s": f"{_hs25 + 1}号请发言", "at": _now25 - 1},
+    ]
+    _s25._sp_state = None
+    _s25.client_seen = True
+    _s25.client_poll_at = _time.monotonic()
+    _win25 = speech_io.speech_window()      # 测试里按 win_scale 缩放（通常 2.4s）
+    _s25.client_played = 2          # 前两行播完；「1号请发言」还没播完
+    _ok25 = (not _ndrv._speech_started(_s25, "speak", _hs25)
+             and _ndrv._speech_left(_s25, "speak", _hs25) >= _win25 - 0.01)
+    if _seed25 == 1:
+        _n25 = _s25.now_state()
+        check("★ ㉕ AI 发言未播完：now.started=false、读秒满窗（1 号不能被高亮）",
+              _n25.get("kind") == "speak"
+              and _n25.get("started") is False
+              and (_n25.get("until_left") or 0) >= _win25 - 0.01,
+              str(_n25)[:140])
+        _calls25 = []
+        _r25 = _ndrv._speech_guard(_s25, "speak", _hs25,
+                                   lambda: _calls25.append(1))
+        check("★ ㉕ AI 发言未播完：120 秒看门狗不启动（不会替真人结束发言）",
+              _r25 == "human_speak" and not _calls25,
+              f"ret={_r25} calls={_calls25}")
+    _s25.client_played = 3          # 三行都播完
+    _ok25b = (_ndrv._speech_started(_s25, "speak", _hs25)
+              and _ndrv._speech_left(_s25, "speak", _hs25) >= _win25 - 0.01)
+    _seen25.append(bool(_ok25 and _ok25b))
+check("★ ㉕ 12 局：开场白没播完时真人不 started，播完才 started 且满窗",
+      len(_seen25) == 12 and all(_seen25),
+      f"通过 {sum(_seen25)}/12")
+check("★ ㉕ 前端：started=false 时大圆退回法官、号码不高亮（speakPending）",
+      "if (speakPending()) return null;" in (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8"))
+
+print("=" * 74)
+print("㉖ 验人结果屏不再「一闪而过」：晚确认不重复播、结果至少看得见 6 秒")
+print("=" * 74)
+# ★ 2026-10-31 用户实机："预言家的验人窗口还是有问题（一闪而过，什么都看不到）"。
+#   两个真因叠在一起：
+#     ① 晚一步点确认时（目标已选、窗口刚关），`seer_result` 节点已经把
+#        「他是这个」念过了；接口不知情又追了一句，**排在「预言家请闭眼」之后**
+#        ⇒ 结果屏等的就是闭眼句 ⇒ 刚摊开就被收掉，还多听一句重复播报。
+#     ② 前端收结果屏只认"闭眼句念完"，没有任何最短展示时间。
+#   修法：节点念过就记旗（接口不再追发）；结果屏至少展示 6 秒（点圆心可提前交回）。
+
+from engine import Board as _B26, Role as _R26  # noqa: E402
+
+_scale26 = night_script.win_scale()
+night_script.set_win_scale(0.05)
+try:
+    _b26 = _B26(key="_t_seer26", label="测试板：预言家/2 狼/3 民",
+                roles=[_R26.SEER, _R26.WOLF, _R26.WOLF, _R26.VILLAGER,
+                       _R26.VILLAGER, _R26.VILLAGER], lives=1)
+
+    def _seer_session26():
+        for _sd in range(1, 80):
+            _c = game_api.Session(board=_b26, humans=1, seed=_sd)
+            if _c.game.player(0).role is _R26.SEER:
+                return _c
+        return None
+
+    def _advance26(s):
+        s.drive(0.02)
+        _time.sleep(0.02)
+
+    def _to_seer26(s):
+        for _ in range(6000):
+            _n = s.now_state()
+            if (_n.get("node") == "seer" and _n.get("kind") == "wheel"
+                    and _n.get("started")):
+                return _n
+            _advance26(s)
+        return None
+
+    # ① 窗口内正常确认：只有一句「他是这个」，且排在「预言家请闭眼」之前
+    _s26 = _seer_session26()
+    check("（前提）造出「人类是预言家」的局", _s26 is not None, "80 个 seed 都没抽到")
+    if _s26 is not None:
+        _n26 = _to_seer26(_s26)
+        check("（前提）走到验人窗口并起算", _n26 is not None, str(_n26))
+        _s26.act(0, "investigate", 2, None)
+        _s26.act(0, "seer_confirm", None, None)
+        for _ in range(3000):
+            if any(x.get("node") == "seer_close" for x in _s26.timeline):
+                break
+            _advance26(_s26)
+        _say26 = [i for i, x in enumerate(_s26.timeline)
+                  if (x.get("s") or "") == "他是这个"]
+        _close26 = [i for i, x in enumerate(_s26.timeline)
+                    if x.get("node") == "seer_close"]
+        check("★ ㉖ 早确认：「他是这个」只播一次", len(_say26) == 1, str(_say26))
+        check("★ ㉖ 早确认：它排在「预言家请闭眼」之前（播报顺序不乱）",
+              bool(_close26 and _say26 and _say26[0] < _close26[0]),
+              f"say={_say26} close={_close26}")
+
+    # ② 晚确认（窗口已关、闭眼句已在队列）：不重复播，结果仍拿得到
+    _s26b = _seer_session26()
+    if _s26b is not None:
+        _to_seer26(_s26b)
+        _s26b.act(0, "investigate", 2, None)
+        # 模拟客户端播报落后：相位闸不许翻白天，夜停在 seer_close/dawn
+        _s26b.client_seen = True
+        _s26b.client_played = 0
+        for _ in range(6000):
+            _s26b.client_poll_at = _time.monotonic()
+            if _s26b.game.night.get("stage") in ("seer_close", "dawn"):
+                break
+            _advance26(_s26b)
+            _s26b.note_client_played(max(0, len(_s26b.timeline) - 2))
+        check("（前提）窗口关后仍停在 NIGHT（真机播报还没念完）",
+              _s26b.game.phase.value == "night",
+              f"phase={_s26b.game.phase} stage={_s26b.game.night.get('stage')}")
+        _ok26b = True
+        try:
+            _s26b.act(0, "seer_confirm", None, None)
+        except Exception as _e26:                                       # noqa: BLE001
+            _ok26b = False
+            print("    （晚确认被拒：" + type(_e26).__name__ + " " + str(_e26)[:80] + "）")
+        check("★ ㉖ 晚确认仍能拿到验人结果（窗口关了也不吞掉这一眼）", _ok26b)
+        _say26b = [i for i, x in enumerate(_s26b.timeline)
+                   if (x.get("s") or "") == "他是这个"]
+        _close26b = [i for i, x in enumerate(_s26b.timeline)
+                     if x.get("node") == "seer_close"]
+        check("★ ㉖ 晚确认不重复播「他是这个」（节点念过就不再追一句）",
+              len(_say26b) == 1, str(_say26b))
+        check("★ ㉖ 晚确认后「他是这个」仍在闭眼句之前",
+              bool(_close26b and _say26b and _say26b[0] < _close26b[0]),
+              f"say={_say26b} close={_close26b}")
+finally:
+    night_script.set_win_scale(_scale26)
+
+_tui26 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+check("★ ㉖ 结果屏记录展示起点（shownAt）", "shownAt: Date.now()" in _tui26)
+check("★ ㉖ 结果屏至少展示 6 秒（闭眼句刚念完也不许立刻收掉）",
+      "_resultFresh" in _tui26 and "WHEEL.shownAt) < 6000" in _tui26)
 
 print("=" * 74)
 total = len(PASS) + len(FAIL)

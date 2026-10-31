@@ -281,7 +281,9 @@
   animation:pickBreathe 1.5s ease-in-out infinite; }
 #p4 .tcenter.rec{ border-color:#ff5a5a;
   box-shadow:0 0 0 8px rgba(255,90,90,.25); }
-/* 票型框（2026-10-28 用户定）：法官不再念票型，改由底部这个窄条显示计票。
+/* 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报票型后仍保留）：
+   法官用嘴念票型（"3 号 2 票（1 号、4 号投的）…"），底部窄条同步显示紧凑票型，
+   首轮/加时轮分别显示（加时结算后再换成加时那一轮）。
    · 宽度约竖屏的 15%（锚在 #phone 上，所以 15% 就是手机宽度的 15%）
    · 内容多时**可上下滚动**（overflow-y:auto + 触摸惯性）
    · 每行一条："2，3→5"（2 号、3 号投给 5 号）；弃票单列一行 */
@@ -470,12 +472,23 @@
         <label style="font-size:13.5px;color:rgba(255,255,255,.86)">大模型 LLM
           <input type="password" id="kLlm" placeholder="LLM_API_KEY"
                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <!-- ★ 2026-10-31（用户："接入 LLM key 之后 AI 的发言还是兜底"）：把"现在到底
+             是 Mock 还是真模型"直接摆出来 —— 罪魁是 MOCK_LLM=1，以前完全不可见。 -->
+        <div id="kLlmNow" style="font-size:12px;color:rgba(255,255,255,.6)"></div>
         <label style="font-size:13.5px;color:rgba(255,255,255,.86)">语音合成 TTS
           <input type="password" id="kTts" placeholder="DASHSCOPE_API_KEY"
                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <label style="font-size:13.5px;color:rgba(255,255,255,.86)">TTS 通道
+          <select id="kTtsMode"
+                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit">
+            <option value="auto" style="color:#111">自动（有 Key 走云端，否则本地）</option>
+            <option value="sapi" style="color:#111">本地 SAPI（免费，单音色）</option>
+            <option value="qwen" style="color:#111">云端 Qwen（多音色，按量计费）</option>
+          </select></label>
+        <div id="kTtsNow" style="font-size:12px;color:rgba(255,255,255,.6)"></div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
-        <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key</button>
+        <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key / 通道</button>
         <span id="keysMsg" style="font-size:12px;color:rgba(255,255,255,.66)"></span>
       </div>
     </div>
@@ -528,7 +541,8 @@
       <!-- 座位号码标识排列：2026-10-07 用户定「直接去掉」。
            （`renderDots` / `moveDotCursor` 都自带 `if (!wrap) return`，删掉这个容器即可
             变成空操作；CSS 里的 #seatDots/#dotCursor/.seatdot 已成死样式，下次清理。） -->
-      <!-- 票型框（2026-10-28 用户定）：法官不再念票型，改由这个小框显示计票。
+      <!-- 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报后仍保留）：
+           法官念票型的同时，这个小框显示紧凑票型（首轮 / 加时轮）。
            宽度约竖屏 15%，内容多时上下滚动；每行一条 "2，3→5"。 -->
       <div id="voteBox"></div>
       <!-- 拨号盘（2026-10-12 用户定稿）：夜间操作 + 投票；顶部角色大字 + 倒计时 -->
@@ -615,7 +629,10 @@ var GID = null, RULES = null;
 var PUBLIC = null, SPOKEN = 0, SPEAKING = false, PAUSED = false, VOICE_ON = true;
 /* 流式播报：正在播的那一句（跳过按钮要能掐掉它）+ 总开关（?nostream=1 强制走老路） */
 var SPEAK_STREAM = null;
-var VOICE_STREAM = !/[?&]nostream=1/.test(location.search);
+/* 流式默认关：等 /api/health 的 tts_stream 确认后再开（2026-10-31）。
+   本地 SAPI 服务端会明确拒绝 /ws/tts —— 默认开只会每句先吃一次 error。
+   ?nostream=1 仍然强制关。 */
+var VOICE_STREAM = false;
 var LOCAL_LINES = [];        /* 本地产生的提示行（合规提醒等）——它们不在服务端时间线里 */
 var WSINCE = 0;              /* 本"场"开始时间（跨局累计，见 seriesSince） */
 var WREMINDED = 0;           /* 上次提醒时的分钟数（每小时提醒一次，不刷屏） */
@@ -778,11 +795,41 @@ async function loadKeys(){
     $('kAsr').value = j.asr || '';
     $('kLlm').value = j.llm || '';
     $('kTts').value = j.tts || '';
+    $('kTtsMode').value = j.tts_mode || 'sapi';
+    /* 配置台只写 key 不会替你切通道：TTS=sapi 时云端 key 是不生效的（2026-10-31
+       用户填了 key 仍没 AI 声，就是因为这里没有可选项）。现在把"实际在用哪个"
+       直接摆出来，并让用户自己选通道。 */
+    var _now = j.tts_active ? ('当前实际：' + j.tts_active) : '当前实际：未知';
+    _now += j.tts_mocked ? '（Mock —— 这里的 Key 不生效）'
+          : ((j.tts_active === 'QwenTts' && !j.tts_key_present)
+              ? '（未配置 TTS Key —— 云端不可用）'
+              : (j.tts_stream ? '（流式可用）' : '（非流式：AI 逐句走 /api/tts）'));
+    $('kTtsNow').textContent = _now;
+    /* ★ 2026-10-31：LLM 的"当前实际"同样摆出来。`Mock` 时填 key 也不会生效
+       （MOCK_LLM=1 装配的是 MockLlm），而用户只能从"AI 老是说兜底话术"里猜。 */
+    var _llmNow = j.llm_active ? ('当前实际：' + j.llm_active) : '当前实际：未知';
+    _llmNow += j.llm_mocked
+      ? '（Mock —— 这里的 Key 不生效；填好 Key 点应用会自动切到真实模型）'
+      : ('（真实模型：' + (j.llm_model || '未配置模型')
+         + (j.llm ? '' : '，但未配置 Key —— 调用会退回兜底') + '）');
+    if ($('kLlmNow')) $('kLlmNow').textContent = _llmNow;
     /* 2026-10-26 一致性检查（用户要求）：实验室第①列席位接管对局 LLM 时必须如实说，
        否则这里填的 LLM key 下一局"看起来生效了"其实被席位覆盖挡住。 */
     if (j.llm_override)
       $('keysMsg').textContent = '⚠️ 对局的 LLM 目前走实验室第①列席位（覆盖此处的 LLM key）；ASR / TTS 以这里为准';
   }catch(e){ $('keysMsg').textContent = '当前配置读取失败：' + e.message; }
+}
+
+/* AI 发言走流式还是整句：由服务端当前 TTS 实现决定（2026-10-31）。
+   SAPI 不能服务 /ws/tts —— 以前每句都先连一次 WS、吃一个 error 再回落
+   /api/tts，诊断面板还会把那条预期内的 error 当成"AI 没声"的证据。 */
+async function refreshVoiceCaps(){
+  try{
+    var h = await api('/api/health');
+    if (!/[?&]nostream=1/.test(location.search))
+      VOICE_STREAM = !!h.tts_stream;
+    return h;
+  }catch(e){ return null; }
 }
 async function applyKeys(){
   var msg = $('keysMsg');
@@ -792,10 +839,13 @@ async function applyKeys(){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asr: $('kAsr').value.trim(),
                              llm: $('kLlm').value.trim(),
-                             tts: $('kTts').value.trim() })
+                             tts: $('kTts').value.trim(),
+                             tts_mode: $('kTtsMode').value })
     });
     msg.textContent = (r.changed && r.changed.length ? '已更新（' + r.changed.join('、') + '）—— ' : '没有变化 —— ')
       + (r.note || '');
+    await loadKeys();
+    await refreshVoiceCaps();
   }catch(e){ msg.textContent = '应用失败：' + e.message; }
 }
 
@@ -1061,6 +1111,7 @@ async function newGame(){
     GID = d.gid;
     PUBLIC = d.public;
     SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null;
+    if (typeof SPOKE_DONE !== 'undefined') SPOKE_DONE = null;   /* 新局：播报游标从零开始 */
     resetEndLinks();                        /* 收回上一局的局末出口（见上面的注释） */
     resetSeerBig();                         /* 新局清掉上一局的验人结果大标识（见 tableui.js） */
     cardQueue = d.seats.filter(function(s){ return s.kind === 'human'; })
@@ -1068,6 +1119,7 @@ async function newGame(){
     localStorage.setItem('tt.gid', GID);   /* 断线/刷新恢复的锚点 */
   showResumeButton('');                  /* 开了新局 ⇒ 封面那个「继续上一局」收起来 */
     LOCAL_LINES = [];
+    if (typeof LOCAL_SPOKEN !== 'undefined') LOCAL_SPOKEN = 0;   /* 新局：本地提示行重新计 */
     keepAwake();                            /* 开局就拿屏幕常亮：夜间闭眼不能黑屏 */
     $('bootMsg').textContent = '';
     nextCard();
@@ -1198,9 +1250,10 @@ function paintSeats(){
 
 /* ---------------------------------------------------------- 票型框 / 终局弹框 */
 
-/* 票型框（2026-10-28 用户定）：
-   · 法官**不再念票型**（那串"3 号 2 票（1 号、4 号投的）"听着费力），
-     票型改由底部这个窄条显示，每行一条 "2，3→5"。
+/* 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报票型）：
+   · 法官照常用嘴念票型（"3 号 2 票（1 号、4 号投的）…"），
+     底部这个窄条同步显示紧凑票型，每行一条 "2，3→5"。
+     两者是"耳朵一份、眼睛一份"，不互相替代。
    · 数据来自 `PUBLIC.vote_board.lines`（后端已经排好序、格式化好）。
    · ⚠️ 内容没变时**绝不重画** —— 这个函数每 0.3 秒被调一次，
      重画会把用户正在滚动的票型框弹回顶部（"能滑动但一滑就回弹"）。 */
@@ -1285,7 +1338,7 @@ if ($('endPopOk')) $('endPopOk').onclick = function(){ $('endPop').classList.rem
 function renderLog(){
   /* 🔴 2026-10-12（用户：日志区在所有页面**彻底删除**）—— 时间线不再上屏，
      公有信息以法官播报为准。
-     2026-10-28：票型从"大字"改成底部窄条票型框（法官不再念票型，见 renderVoteBox）。 */
+     2026-10-28：票型从"大字"改成底部窄条票型框（2026-10-31 恢复法官播报，两者并存，见 renderVoteBox）。 */
   renderVoteBox();
 }
 
@@ -1349,6 +1402,8 @@ function showResumeButton(text, gid){
 function resumeInto(gid, pub){
   GID = gid; PUBLIC = pub;
   SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null; LOCAL_LINES = [];
+  if (typeof SPOKE_DONE !== 'undefined') SPOKE_DONE = null;   /* 接局：播报游标从零开始 */
+  if (typeof LOCAL_SPOKEN !== 'undefined') LOCAL_SPOKEN = 0;
   cardQueue = [];                    /* 身份牌已经看过了，不再走那一轮 */
   showResumeButton('');              /* 进桌面了，封面那个按钮收起来 */
   enterTable();
@@ -1440,6 +1495,9 @@ function loadScript(src){
     }
     return;
   }
+  /* 先问清楚服务端 TTS 能不能流式，再决定 AI 发言走哪条路（2026-10-31）。
+     必须赶在 tryResume 之前：`?gid=` 会立刻接进进行中的局，首句就已经要播了。 */
+  await refreshVoiceCaps();
   boot();
   await tryResume();
   /* ★ 2026-10-29：`?gid=<局号>` 直接接进指定那一局（不进封面）。

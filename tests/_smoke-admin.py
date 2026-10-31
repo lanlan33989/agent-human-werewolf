@@ -15,6 +15,11 @@
 ⚠️ 测试**不留副作用**：改过的 env / prompt / `_runtime.json` 全部深拷贝复原。
 退出码：0 = 全过；1 = 有失败；2 = 没跑成（环境不具备，例如 import 就失败）。
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import ast
 import copy
 import json
@@ -45,7 +50,10 @@ except Exception as e:  # noqa: BLE001
 #    的 cwd 都是 h5，但靠 __file__ 推算最稳。
 from pathlib import Path  # noqa: E402
 
-STATE = (Path(admin_api.__file__).resolve().parent
+# ⚠️ 状态文件在**仓库根**（server.py 的 apply_runtime_state(ROOT)），不是 backend/。
+# 2026-10-31 之前这里少了一层 parent：读不到真正的 _runtime.json ⇒ STATE_BEFORE=None，
+# 收尾时反而把仓库根那份删掉（用户已填的 key 被测试抹掉）。
+STATE = (Path(admin_api.__file__).resolve().parent.parent
          / getattr(admin_api, "STATE_NAME", "_runtime.json"))
 STATE_BEFORE = STATE.read_text(encoding="utf-8") if STATE.exists() else None
 _TEST_PROMPT_KEYS = ("agents:_STYLE_COMMON", "agents:LEVELS.认真.stake",
@@ -95,6 +103,9 @@ class Req:
 
 
 STATE = admin_api.STATE_PATH   # 清理已在 import server 之前做掉（见文件头）
+check("★ 测试推算的状态文件 == server 真正使用的文件（防止再误删仓库根的 _runtime.json）",
+      STATE == (Path(admin_api.__file__).resolve().parent.parent / admin_api.STATE_NAME),
+      f"{STATE} vs {admin_api.STATE_PATH}")
 
 # ---- 要复原的东西（深拷贝：下面会**原地改**这些表） ----
 _env_before = {k: os.environ.get(k) for k in admin_api.ADMIN_ENV_KEYS}
@@ -328,6 +339,49 @@ r = client.post("/api/admin/prompts",
                                  "value": json.dumps({"bold": "Ryan", "cunning": "Vincent"}, ensure_ascii=False)}]})
 check("整张表给合法 JSON => 200", r.status_code == 200, r.text[:140])
 check("整张表替换后立刻生效", agents.VOICE_BY_PERSONALITY.get("cunning") == "Vincent")
+
+# ---------------------------------------------------------------- 封面 LLM key
+# ★ 2026-10-31（用户报："接入 LLM key 之后 AI 的发言还是兜底"）：
+#   根因 = `MOCK_LLM=1` 时装配的是 MockLlm，填多少 key 都不会变成真模型。
+#   口径：封面填了 LLM key 就是在要真模型 ⇒ 顺手关掉 MOCK_LLM 并持久化。
+#   ⚠️ 用**临时状态文件**跑，绝不动仓库根的 `_runtime.json`（里面是真 key）。
+print('\n★ 封面：填 LLM key 自动关闭 Mock（2026-10-31 用户报的“还是兜底”）')
+import tempfile as _tempfile  # noqa: E402
+import shutil as _shutil  # noqa: E402
+
+_tmpdir = _tempfile.mkdtemp(prefix="admin_keys_")
+_old_state_path = admin_api.STATE_PATH
+_old_reload_fn = admin_api._reload_fn
+_old_key = os.environ.get("LLM_API_KEY")
+_old_mock = os.environ.get("MOCK_LLM")
+try:
+    admin_api.STATE_PATH = Path(_tmpdir) / "_runtime.json"
+    admin_api._reload_fn = lambda: {"llm": "OpenAICompatLlm", "llm_mocked": False}
+    os.environ["LLM_API_KEY"] = ""
+    os.environ["MOCK_LLM"] = "1"
+    _rk = client.post("/api/admin/play-keys", json={"llm": "sk-test-not-real"})
+    check("填 LLM key => 200", _rk.status_code == 200, _rk.text[:140])
+    _rj = _rk.json() if _rk.status_code == 200 else {}
+    check("★ 填 LLM key 时 changed 里含 MOCK_LLM（自动关 Mock）",
+          "MOCK_LLM" in (_rj.get("changed") or []), str(_rj)[:200])
+    check("★ MOCK_LLM 真的被置 0（下一局不再装配 MockLlm）",
+          os.environ.get("MOCK_LLM") == "0", os.environ.get("MOCK_LLM"))
+    _st = json.loads(admin_api.STATE_PATH.read_text(encoding="utf-8"))
+    check("★ _runtime.json 持久化了 MOCK_LLM=0（重启后仍然生效）",
+          (_st.get("env") or {}).get("MOCK_LLM") == "0", str(_st.get("env"))[:160])
+    _rg = client.get("/api/admin/play-keys").json()
+    check("★ 封面能读到 LLM 的实际状态（llm_active / llm_mocked / llm_model）",
+          "llm_active" in _rg and "llm_mocked" in _rg and "llm_model" in _rg,
+          str(sorted(_rg))[:160])
+finally:
+    admin_api.STATE_PATH = _old_state_path
+    admin_api._reload_fn = _old_reload_fn
+    for _k, _v in (("LLM_API_KEY", _old_key), ("MOCK_LLM", _old_mock)):
+        if _v is None:
+            os.environ.pop(_k, None)
+        else:
+            os.environ[_k] = _v
+    _shutil.rmtree(_tmpdir, ignore_errors=True)
 
 # ---------------------------------------------------------------- 复原（不留副作用）
 for k, v in _env_before.items():

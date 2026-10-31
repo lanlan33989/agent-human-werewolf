@@ -8,6 +8,11 @@
   · `assign_personalities` 的入参里**不许有角色**（人格一旦与角色相关，
     它就从风格变成身份信号，而且破得无声无息）
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import inspect
 import os
 import sys

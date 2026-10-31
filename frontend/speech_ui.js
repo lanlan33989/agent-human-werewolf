@@ -40,6 +40,23 @@ function time_ms(){
   return (window.performance && performance.now) ? performance.now() : Date.now();
 }
 
+/* ★ 2026-10-31（用户定：白天与夜间交替，不能并行）：
+   给 /public 的 X-Played 头 —— **已播完**的时间线行数。
+   `SPOKE_DONE.at === 0` 表示这条刚开始念（还没念完），不计入；
+   无声模式（VOICE_ON=false）不占播报时间，直接视为整队播完。 */
+function playedCount(){
+  var tl = (PUBLIC && PUBLIC.timeline) || [];
+  if (!VOICE_ON) return tl.length;
+  if (!SPOKE_DONE) return 0;
+  var n = (SPOKE_DONE.idx | 0) + (SPOKE_DONE.at > 0 ? 1 : 0);
+  return Math.max(0, Math.min(n, tl.length));
+}
+
+/* 本地提示行（合规提醒等）的独立游标：**不推进 SPOKEN** ——
+   SPOKEN 是服务端时间线的下标（夜间门控/arm 都按它算），把本地行塞进同一个
+   下标里会让"提醒念完"把后面新到的法官台词顶掉。 */
+var LOCAL_SPOKEN = 0;
+
 async function speakQueue(){
   if (SPEAKING || !VOICE_ON || !PUBLIC) return;
   SPEAKING = true;
@@ -48,8 +65,14 @@ async function speakQueue(){
   try {
     for (;;){
       if (PAUSED){ await sleep(250); continue; }
+      /* 本地提示行（合规提醒等，2026-10-12 起不在服务端时间线里）。
+         只在服务端队列**念完之后**补播，用独立游标、不动 SPOKEN ——
+         丢了这一步的话，提醒只会弹面板、永远不会被念出来。 */
       var tl = PUBLIC.timeline || [];
-      if (SPOKEN >= tl.length) break;
+      var _ll = (typeof LOCAL_LINES !== 'undefined' && LOCAL_LINES) || [];
+      if (LOCAL_SPOKEN > _ll.length) LOCAL_SPOKEN = 0;   /* 换局时 LOCAL_LINES 被清空 */
+      var _local = SPOKEN >= tl.length;
+      if (_local && LOCAL_SPOKEN >= _ll.length) break;
       /* 2026-10-04 用户定：**最后一条播完立刻就绪** —— 间隔从"播完之后睡"
          挪到"下一条之前睡"。原来播完公告还要白等 0.7~1.6s 才算"念完了"，
          「N号请发言」→ 麦可点的延迟凭空多出这一截。 */
@@ -62,7 +85,7 @@ async function speakQueue(){
      · 落后 >60s（整页刷新级别）⇒ 真·跳过（半夜刷新不该重播整夜）；
      · 落后 10~60s ⇒ **不扔句子，只压掉留白**（"播报快"指的是节奏被压，
        从来不是"句子该消失"）—— 播报完整，只是追进度。 */
-      var _due = tl[SPOKEN];
+      var _due = _local ? _ll[LOCAL_SPOKEN] : tl[SPOKEN];
       /* 🔴 2026-10-29（用户报「法官全部音效又没了」之二）：
          `at` 是**服务端**时间戳，`Date.now()` 是**本机**时钟。手机与电脑差一分钟
          以上（没开自动对时、或电脑漂了），每一句刚进队列就被判"迟到 >60 秒" ⇒
@@ -86,8 +109,11 @@ async function speakQueue(){
       var _beforePage = !!(_due && _due.at
         && (_due.at + (_due.delay || 0)) < (PAGE_AT + (_SRV_SKEW || 0) - 2));
       if (_due && _due.t === 'sys' && _beforePage && !_catchupSkip){
-        SPOKEN++;
-        SPOKE_DONE = { idx: SPOKEN - 1, at: Date.now() };
+        if (_local){ LOCAL_SPOKEN++; }
+        else {
+          SPOKEN++;
+          SPOKE_DONE = { idx: SPOKEN - 1, at: Date.now() };
+        }
         prevType = _due.t; prevLine = _due;
         continue;
       }
@@ -104,7 +130,7 @@ async function speakQueue(){
          ⚠️ `node --check` 只查语法不查未定义变量，所以当时没拦住 —— 这也说明
          播报队列需要一个"哨兵"：任何一句抛出都要能在诊断面板看见（LAST_TTS.how
          = 'queue'），见下面的外层 try。 */
-      var line = tl[SPOKEN++];
+      var line = _local ? _ll[LOCAL_SPOKEN++] : tl[SPOKEN++];
       var _t1 = 0;                     /* 本条合成耗时（填进 LAST_TTS） */
       /* 哨兵（2026-10-11 事故的直接教训）：try 块**之前**的这几行也绝不允许
          无声弄死整个队列 —— 这次的 ReferenceError 就抛在这里、页面毫无提示。
@@ -114,7 +140,7 @@ async function speakQueue(){
       /* 倒计时 arm 的依据（2026-10-06 晚用户定：播报最后一个字后 2 秒起算）——
          每条**真正念完**的时刻记在这里（idx + 时刻），nightReady 的那句被覆盖
          且满 2s，前端才向服务端 arm 起算。 */ 
-      SPOKE_DONE = { idx: SPOKEN - 1, at: 0 };   /* at 在播放完成后填 */
+      if (!_local) SPOKE_DONE = { idx: SPOKEN - 1, at: 0 };   /* at 在播放完成后填 */
       /* 播报进度条已随顶部标题栏一起删除（2026-10-05 用户定：公有信息只进日志区） */
 
       /* 🔴 2026-10-05 用户报「AI 不发声」：
@@ -129,7 +155,7 @@ async function speakQueue(){
         setLine('');
         await sleep(400);
         prevType = line.t; prevLine = line;
-      if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+      if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
         continue;
       }
 
@@ -211,7 +237,7 @@ async function speakQueue(){
           await sp.promise;
           SPEAK_STREAM = null;
           spoke = (sp.firstMs() !== null);
-          if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+          if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       /* 出过声就算成功（被跳过时 firstMs 可能为 null） */
         } catch (e) {
           SPEAK_STREAM = null;
@@ -238,7 +264,9 @@ async function speakQueue(){
             voiceHint('这一句没合成出来（HTTP ' + res.status + '）');
           } else {
             var _blob = await res.blob();
-            LAST_TTS = { ok: true, how: spoke ? 'stream' : 'api/tts',
+            /* 走到这里就是 /api/tts 出的声；`spoke` 必为 false（否则根本不会进来），
+               以前写成三元表达式只会把来源标错。 */
+            LAST_TTS = { ok: true, how: 'api/tts',
                          bytes: _blob.size, ms: _t1 ? (time_ms() - _t1) : null,
                          text: txt.slice(0, 40) };
             if (_fbLocal) LAST_TTS.fb = 'local';   /* 本地没出声 ⇒ 云端兜住的 */
@@ -248,7 +276,10 @@ async function speakQueue(){
           LAST_TTS = { ok: false, how: 'api/tts', err: String(e).slice(0, 80),
                        text: txt.slice(0, 40) };
         }
-      } else {
+      } else if (!_loc) {
+        /* ★ 2026-10-31：法官走浏览器本地合成（_loc=true）时**不要**覆盖上面记下的
+           how:'local' —— 原来这里无条件写 how:'stream'，诊断面板于是把本地法官
+           成功报成流式成功，排查"到底哪条通道哑了"时完全是误导。 */
         LAST_TTS = { ok: true, how: 'stream', text: txt.slice(0, 40) };
       }
 
@@ -268,13 +299,13 @@ async function speakQueue(){
         enterSpeakerMode({ seat: _annSeat, actions: ['speak'] });
       }
       prevType = line.t; prevLine = line;
-      if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+      if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       } catch (e) {                     /* ← 上面 try 的收口：单条失败不拖死队列 */
         LAST_TTS = { ok: false, how: 'line', err: String(e).slice(0, 100),
                      text: (line && line.s ? line.s : '').slice(0, 40) };
         voiceHint('这一句播报失败（已跳过，后面的照常念）：' + String(e).slice(0, 60));
         prevType = (line && line.t) || prevType; prevLine = line || prevLine;
-        if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+        if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       }
     }
   } finally {

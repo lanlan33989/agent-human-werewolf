@@ -17,6 +17,11 @@
 """
 from __future__ import annotations
 
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import asyncio
 import io
 import json
@@ -167,6 +172,10 @@ def main() -> int:
         import websockets  # noqa: F401
     except Exception as e:  # noqa: BLE001
         print(f"没装 websockets，这个测试跑不了：{e}")
+        return 2
+    if not (BASE / "_test_zh1.wav").exists():
+        print("夹具 _test_zh1.wav 不在工作区（*.wav 被 .gitignore —— 本地没生成就没有）"
+              "—— 这是**没跑成**，不是通过")
         return 2
     if not server_alive():
         print("服务不在 127.0.0.1:8000 上（先跑 start.py）—— 这是**没跑成**，不是通过")

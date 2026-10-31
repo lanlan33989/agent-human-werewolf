@@ -486,7 +486,7 @@
           "game"
         ],
         "summary": "Public",
-        "description": "⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。\n\n为什么必须这样：AI 的决策要调模型，大人数局一次跑不完一个回合。\n如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。\n让它在这里推，开局就能立刻返回、桌面自己长出来。\n（`pending == \"working\"` 就表示\"还在推进\"，前端照常继续轮询即可。）",
+        "description": "⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。\n\n为什么必须这样：AI 的决策要调模型，大人数局一次跑不完一个回合。\n如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。\n让它在这里推，开局就能立刻返回、桌面自己长出来。\n（`pending == \"working\"` 就表示\"还在推进\"，前端照常继续轮询即可。）\n\n`X-Played`（2026-10-31）：前端已播完的时间线行数。昼夜交替门用它确认\n上一相位的最后一句真的念完了，才允许翻到下一相位；没有这个头（老前端/\n无头测试）时门直接放行，行为与以前一致。",
         "operationId": "public_api_game__gid__public_get",
         "parameters": [
           {
@@ -496,6 +496,22 @@
             "schema": {
               "type": "string",
               "title": "Gid"
+            }
+          },
+          {
+            "name": "X-Played",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Played"
             }
           }
         ],
