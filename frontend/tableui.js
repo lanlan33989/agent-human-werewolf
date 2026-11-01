@@ -202,7 +202,16 @@ function enterSpeakerMode(need){
   $('handoff').classList.remove('on', 'speak');
   $('wheelBtns').classList.remove('on');
   $('wheelExtra').classList.remove('on');
+  /* ★ 2026-11-01（用户实机："真人无法正常发言"）：进发言屏**必须**把拨号盘收掉、
+     把大圆恢复可见 —— 它们只是上一屏的 DOM，`HANDOFF=null` 清不到。
+     不清的话：拨号盘整块盖在大圆上（而且 `renderNightDial` 把大圆设成了
+     `visibility:hidden`）⇒ 屏幕上写着「点击发言」，真人怎么点都点不到。 */
+  var _ndS = $('nightDial'); if (_ndS) _ndS.classList.remove('on');
+  var _dhS = $('dialHead'); if (_dhS) _dhS.classList.remove('on');
+  var _bcS = $('bigCircle'); if (_bcS) _bcS.style.visibility = '';
   $('bigCircle').classList.add('pickable');
+  /* 打字兜底入口（麦坏了 / 识别不通时的唯一出口 —— 见 #sayType 的接线） */
+  var _scS = $('sayCtl'); if (_scS) _scS.classList.add('on');
   /* 「打字 / 过」两个按钮已去掉（2026-10-07 用户定：发言屏只有号码 + 开麦/关麦）。
      识别失败时：再点一下关麦即可（空文本服务端会按「过」记）。 */
   paintBig();
@@ -1745,13 +1754,18 @@ function wheelTake(){
   })();
 }
 
-/* 「打字」兜底：透明输入条（识别失败时的手动出口，2026-10-05 取消卡片） */
+/* 「打字」兜底：透明输入条（识别失败 / 麦不可用时的唯一出口）。
+   ★ 2026-11-01：`HANDOFF_SIG` 必须用 `sigOf()` 的同一口径 —— 手写成
+   `'1:speak'` 与 tick 算出的 `'1:speak@'` 不相等 ⇒ 每拍都被判「屏幕过期」，
+   输入框被反复重建（字打一半就没了）。 */
 function openSpeakFallback(seatNo){
   HANDOFF = seatNo;                    /* 1-based，口径同 openHandoff */
-  HANDOFF_SIG = seatNo + ':speak';
+  HANDOFF_SIG = sigOf({ seat: seatNo - 1, actions: ['speak'] });
   MYVIEW = null; PICK = null;
   renderWheelBase();
-  renderWheelAct(seatNo, { can_act: ['speak'] });
+  /* 第三参显式给 acts：跳过 800ms 同签名防抖（这一屏是用户点出来的，必须立刻渲染） */
+  renderWheelAct(seatNo, { can_act: ['speak'] }, ['speak']);
+  var _sc = $('sayCtl'); if (_sc) _sc.classList.remove('on');
 }
 
 /* 旧 renderHandoff 卡片的后半段（发言兜底/不用药/狼盘/按钮接线）已由
@@ -2234,6 +2248,24 @@ async function submit(seatNo, action, target, text){
 /* ---------------------------------------------------------- 按住说话 */
 
 var SAY_REC = false, SAY_STREAM = null, SAY_PENDING = null;
+
+/* 开麦失败的统一收口（★ 2026-11-01 用户实机："真人无法正常发言"）：
+   原来两条失败路径都 `return` 而**不把 SAY_REC 复位** —— 大圆停在
+   「发言中（无声音）」的假录音态，实际一个字都没在录；再点一下才按「过」
+   提交，真人这一回合等于永远说不了话。
+   现在：复位录音态 + 明说原因 + **直接把打字兜底摊开**（麦坏了也得能发言）。 */
+function sayAbort(msg){
+  SAY_REC = false;
+  var hb = $('hoSay'); if (hb) hb.classList.remove('on');
+  var bc = $('bigCircle'); if (bc) bc.classList.remove('rec');
+  if (SPK_MODE) syncSpkTip();
+  $('hoStatus').textContent = msg;
+  if (SPK_MODE){
+    openSpeakFallback(SPK_MODE);
+    var t = $('fbText');
+    if (t) { try { t.focus(); } catch (e) { /* 手机不弹键盘也无妨 */ } }
+  }
+}
 async function startSay(){
   /* 防重入：一次按压**只许开一条会话**。手机上一次按压会先后触发
      touchstart 与浏览器补发的 mousedown（见下面绑定处的注释），
@@ -2290,7 +2322,8 @@ async function startSay(){
     SAY_STREAM = null;
   }
   if (!SAY_REC) return;                  /* 同上：期间松手了就别再启一条老路 */
-  try { await Rec.start(); } catch (e){ $('hoStatus').textContent = '用不了麦克风：' + Rec.describeError(e); return; }
+  try { await Rec.start(); }
+  catch (e){ sayAbort('用不了麦克风：' + Rec.describeError(e) + ' —— 可以直接打字发言'); return; }
   if ($('hoSay')) $('hoSay').classList.add('on');   /* 录音态：按钮变红（无文字） */
   $('hoStatus').textContent = '录音中…';
 }
@@ -2308,7 +2341,16 @@ async function stopSay(seatNo){
     $('hoStatus').textContent = '收尾中…';
     try { SAY_STREAM = await SAY_PENDING; } catch (e) { SAY_STREAM = null; }
     SAY_PENDING = null;
-    if (!SAY_STREAM){ $('hoStatus').textContent = '没听清，直接打字后点「说这句」'; return; }
+    if (!SAY_STREAM){
+      /* ★ 2026-11-01：通道压根没打开（权限被拒 / 建连失败）——
+         不能只留一句"再点一下"就停在原地（用户实机："真人无法正常发言"）。
+         直接把打字兜底摊开：这一回合还能说话，也能从输入条上点「过」。 */
+      var _why0 = String((Rec.diag() || {}).lastErr || '').slice(0, 60);
+      $('hoStatus').textContent = '识别通道没打开' + (_why0 ? '（' + _why0 + '）' : '')
+        + ' —— 可以直接打字发言';
+      if (SPK_MODE) openSpeakFallback(SPK_MODE);
+      return;
+    }
   }
 
   /* ① 主路：句柄在手。**三条引擎共用这一处收尾**（它们的 stop() 返回同一形状：
@@ -2436,4 +2478,28 @@ $('bigCircle').onclick = function(){
     };
     sayBtn.oncontextmenu = function(e){ e.preventDefault(); return false; };
   }
+})();
+
+/* 「⌨ 打字」：发言屏的兜底入口（★ 2026-11-01）。点它 = 放弃这次录音（不提交），
+   摊开输入条；提交走 fbGo/fbPass。正在录音时先静默取消 —— 不能走 stopSay
+   （空文本会按「过」提交，用户还没说话就丢了这一回合）。 */
+(function(){
+  var typeBtn = $('sayType');
+  if (!typeBtn) return;
+  typeBtn.onclick = function(ev){
+    if (ev) ev.stopPropagation();
+    if (!SPK_MODE) return;
+    if (SAY_REC || SAY_PENDING || SAY_STREAM){
+      SAY_REC = false;
+      if (SAY_STREAM){ try { SAY_STREAM.stop(); } catch (e) { /* ignore */ } }
+      SAY_STREAM = null; SAY_PENDING = null;
+      var hb = $('hoSay'); if (hb) hb.classList.remove('on');
+      var bc = $('bigCircle'); if (bc) bc.classList.remove('rec');
+      syncSpkTip();
+    }
+    openSpeakFallback(SPK_MODE);
+    var t = $('fbText');
+    if (t) { try { t.focus(); } catch (e) { /* ignore */ } }
+  };
+  typeBtn.oncontextmenu = function(e){ e.preventDefault(); return false; };
 })();

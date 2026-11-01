@@ -2391,6 +2391,158 @@ check("★ ㉙ 前端：已救人的号码带选中态",
       "if (v.heal_picked) b.classList.add('sel');" in _tui29)
 
 print("=" * 74)
+print("㉚ 真人发言：播收回执卡住也必须能开口（不能整局锁麦）")
+print("=" * 74)
+# ★ 2026-11-01 用户实机："真人无法正常发言"。
+#   根因：`_speech_clock` 只认客户端回执（X-Played > 开场白下标）——
+#   播报队列一卡（TTS 悬挂 / 切后台节流 / audio ended 不来），回执永远不动
+#   ⇒ started 永远 false、麦克风屏不弹、看门狗也不启动（时钟为 None）
+#   ⇒ **真人这一回合永远结束不了**。
+#   修法：游标在同一行停得超过"该行应播时长 + SPEECH_CURSOR_GRACE" ⇒ 判卡死，
+#   按已念完起算（队列在动就照常等回执，不会抢跑）。
+import game_api as _ga30  # noqa: E402
+import night_driver as _ndrv30  # noqa: E402
+import night_script as _ns30  # noqa: E402
+from engine import Phase as _Phase30  # noqa: E402
+
+_scale30 = _ns30.win_scale()
+_ns30.set_win_scale(0.02)                # 发言窗 120s→2.4s、宽限 10s→0.2s
+
+
+def _bot_to_human_speak(s, limit=12.0):
+    """把对局推到「轮到人类发言」的那一刻（其余动作由 bot 代打）。
+    返回 True = 到了；False = 超时/已结束。"""
+    t0 = _time.monotonic()
+    _frozen30 = None                      # 进入白天时把播报游标钉住 = 队列卡死
+    while _time.monotonic() - t0 < limit:
+        g = s.game
+        if g.phase is _Phase30.DISCUSS and _frozen30 is None:
+            # 真实形态：夜里一切正常播完，白天轮到某人时 TTS 悬挂 ⇒ 游标停在
+            # 上一句、再也追不上「N号请发言」⇒ 真人的麦被锁死。
+            # （若从头就钉住游标，天亮前的相位门要先等 15 秒兜底，测的就不是这回事。）
+            _frozen30 = max(0, int(getattr(s, "client_played", -1)))
+        if _frozen30 is None:
+            s.note_client_played(len(s.timeline))      # 这一段播报跟得上
+        else:
+            s.note_client_played(_frozen30)            # 只刷新"页面在线"，游标不动
+        s.drive(0.2)
+        g = s.game
+        if g.winner:
+            return False
+        if g.phase is _Phase30.DISCUSS and g.current_speaker() == 0:
+            return True
+        if g.phase is _Phase30.LASTWORD and g.current_lastword() == 0:
+            try: s.act(0, "speak", None, "遗言")
+            except Exception: pass
+            continue
+        n = s.now_state()
+        if n.get("kind") in ("wheel", "shoot") and n.get("seat") == 0:
+            # 假页面没有播报，等价于「语音关」：面板一出现就 arm（同 _smoke-night-live），
+            # 否则每个夜间窗口都要白等一次 arm 失联兜底（8s），9 个 seed 连第一夜都走不完。
+            try: s.arm_window(n.get("node") or "")
+            except Exception: pass
+            acts = (n.get("need") or {}).get("actions") or []
+            others = [p.seat for p in g.players if p.alive and p.seat != 0]
+            try:
+                if "kill" in acts:
+                    s.act(0, "kill", others[0], None); s.act(0, "confirm", None, None)
+                elif "heal" in acts or "poison" in acts or "pass" in acts:
+                    s.act(0, "pass", None, None)
+                elif "investigate" in acts:
+                    s.act(0, "investigate", others[0], None); s.act(0, "seer_confirm", None, None)
+                elif "guard" in acts:
+                    s.act(0, "guard", -1, None)
+                elif "shoot" in acts:
+                    s.act(0, "shoot", None, None)
+                elif "vote" in acts:
+                    s.act(0, "vote", others[0], None)
+            except Exception:
+                pass
+        elif g.phase is _Phase30.VOTE and g.can_vote(0):
+            try:
+                tgt = next(p.seat for p in g.players if p.alive and p.seat != 0)
+                s.act(0, "vote", tgt, None)
+            except Exception:
+                pass
+    return False
+
+
+_s30 = None
+for _seed30 in range(1, 10):
+    _cand30 = _ga30.Session(humans=1, ais=5, seed=_seed30)
+    if _bot_to_human_speak(_cand30):
+        _s30 = _cand30
+        break
+check("（前提）把对局推到「真人发言」回合（㉚）", _s30 is not None,
+      "9 个 seed 都没走到人类发言")
+if _s30 is not None:
+    _n30 = _s30.now_state()
+    check("★ ㉚ 回执卡住时，刚轮到时**不**立刻起算（仍等法官念开场白）",
+          _n30.get("kind") == "speak" and _n30.get("seat") == 0
+          and _n30.get("started") is False,
+          f"now={_n30}")
+    _t30 = _time.monotonic()
+    _opened30 = False
+    while _time.monotonic() - _t30 < 5.0:
+        _s30.note_client_played(0)       # 回执始终不动 = 播报队列卡死
+        _s30.drive(0.1)
+        _nn30 = _s30.now_state()
+        if (_s30.game.phase is _Phase30.DISCUSS
+                and _s30.game.current_speaker() == 0
+                and _nn30.get("started")):
+            _opened30 = True
+            break
+        _time.sleep(0.05)
+    check("★ ㉚ 回执卡住 ⇒ 宽限过后 started 翻真（麦克风屏能弹出）",
+          _opened30,
+          f"等了 {_time.monotonic() - _t30:.2f}s 仍未 started")
+    if _opened30:
+        _nn30b = _s30.now_state()
+        check("★ ㉚ 起算后倒计时真的在走（不是满窗挂着不动）",
+              isinstance(_nn30b.get("until_left"), (int, float))
+              and _nn30b.get("until_left") <= 2.4,
+              f"until_left={_nn30b.get('until_left')}")
+        # 真人一直不说话：看门狗必须替他结束这一回合（不能永远 human_speak）
+        _t30b = _time.monotonic()
+        _ended30 = False
+        while _time.monotonic() - _t30b < 6.0:
+            _s30.note_client_played(0)
+            _s30.drive(0.1)
+            _time.sleep(0.05)
+            if not (_s30.game.phase is _Phase30.DISCUSS
+                    and _s30.game.current_speaker() == 0):
+                _ended30 = True
+                break
+        check("★ ㉚ 到点由服务端收口（回执卡死也不会整局停在 human_speak）",
+              _ended30,
+              f"6s 后仍是 seat0 的发言（phase={_s30.game.phase} "
+              f"speaker={_s30.game.current_speaker()}）")
+_ns30.set_win_scale(_scale30)
+
+_tui30 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+_sui30 = (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8")
+_p30 = (BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+check("★ ㉚ 前端：发言屏有「打字」兜底入口（麦坏了也能发言）",
+      'id="sayType"' in _p30 and "$('sayType')" in _tui30
+      and "openSpeakFallback(SPK_MODE)" in _tui30)
+check("★ ㉚ 前端：开麦失败会复位录音态并摊开输入条（不再假「发言中」）",
+      "function sayAbort(" in _tui30 and "sayAbort('用不了麦克风：" in _tui30
+      and "SAY_REC = false;" in _tui30)
+check("★ ㉚ 前端：打字兜底的 HANDOFF_SIG 与 tick 同口径（输入框不被重建）",
+      "HANDOFF_SIG = sigOf({ seat: seatNo - 1, actions: ['speak'] });" in _tui30)
+check("★ ㉚ 前端：进入发言屏会收掉拨号盘并恢复大圆可见",
+      "_ndS.classList.remove('on')" in _tui30
+      and "_bcS.style.visibility = ''" in _tui30)
+check("★ ㉚ 前端：云端 TTS 播放有看门狗（audio ended 不来也不冻队列）",
+      "async function playBlob(blob, text)" in _sui30
+      and "cap = Math.min(60000" in _sui30
+      and "await playBlob(_blob, txt);" in _sui30)
+check("★ ㉚ 服务端：宽限常量存在且被 `_speech_clock` 使用",
+      _ndrv30.SPEECH_CURSOR_GRACE > 0
+      and "SPEECH_CURSOR_GRACE" in
+          (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
+
+print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")
 if FAIL:

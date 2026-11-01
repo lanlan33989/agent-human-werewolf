@@ -16,11 +16,35 @@
 
 /* ---------------------------------------------------------- 播报 */
 
-async function playBlob(blob){
+/* ★ 2026-11-01（用户实机："真人无法正常发言"）：
+   `Audio.onended` 不是承诺 —— 音频元素卡住 / 被系统接管 / 解码器挂起时它永远不来，
+   整条播报队列就冻在那一句上：后面的「N号请发言」不播、回执（X-Played）不前进，
+   服务端于是把发言窗口一直挂在"还没念完"（这条链的兜底见 night_driver
+   `SPEECH_CURSOR_GRACE`）。这里给每次播放一个按文本长度估的硬上限：
+   到点就**当作念完**收尾，宁可少播半句，也绝不冻住整局。 */
+async function playBlob(blob, text){
   var url = URL.createObjectURL(blob);
+  var cap = Math.min(60000, Math.max(8000, 5000 + String(text || '').length * 400));
   try {
     var a = new Audio(url);
-    await new Promise(function(res, rej){ a.onended = res; a.onerror = rej; a.play().catch(rej); });
+    await new Promise(function(res, rej){
+      var done = false;
+      var timer = setTimeout(function(){
+        if (done) return;
+        done = true;
+        try { a.pause(); } catch (e) { /* ignore */ }
+        res();                       /* 超时按"念完"处理：队列必须继续 */
+      }, cap);
+      function fin(ok, err){
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (ok) res(); else rej(err);
+      }
+      a.onended = function(){ fin(true); };
+      a.onerror = function(e){ fin(false, e); };
+      a.play().catch(function(e){ fin(false, e); });
+    });
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -275,7 +299,7 @@ async function speakQueue(){
                          bytes: _blob.size, ms: _t1 ? (time_ms() - _t1) : null,
                          text: txt.slice(0, 40) };
             if (_fbLocal) LAST_TTS.fb = 'local';   /* 本地没出声 ⇒ 云端兜住的 */
-            await playBlob(_blob);
+            await playBlob(_blob, txt);
           }
         } catch (e) {
           LAST_TTS = { ok: false, how: 'api/tts', err: String(e).slice(0, 80),

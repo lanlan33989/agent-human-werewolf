@@ -1150,6 +1150,16 @@ def _advance_dawn(self) -> str:
 #   · 同一轮里同一个人可能说两次（平票加时那一轮），所以键里必须有加时阶段；
 #   · 换人/换轮 ⇒ 键一变 ⇒ 时钟自动重起，不需要额外的"重置"调用点。
 
+# ★ 2026-11-01（用户实机："真人无法正常发言"）：
+#   「N号请发言」的**播收回执**（X-Played）只是"可以提前放行"的信号，绝不是放行
+#   的唯一条件。队列一旦卡住（TTS 悬挂 / 浏览器切后台节流 / 音频 ended 不来），
+#   回执就永远停在那一条 ⇒ 麦克风屏整局不弹、看门狗又不启动（时钟为 None）
+#   ⇒ **真人这一回合永远结束不了**。这里给回执链一个上限：当前正在播的那一行
+#   超过"它该播多久 + 这个宽限"还没播完 ⇒ 判卡死，按已念完处理 ——
+#   宁可早一点，也绝不把人的麦锁死。
+SPEECH_CURSOR_GRACE = 10.0
+
+
 def _sp_key(self, kind: str, seat: int) -> tuple:
     g = self.game
     return (kind, int(g.round), int(getattr(g, "runoff_stage", 0) or 0), int(seat))
@@ -1170,6 +1180,7 @@ def _sp_state(self, kind: str, seat: int) -> Dict:
     key = _sp_key(self, kind, seat)
     st = getattr(self, "_sp_state", None)
     if not st or st.get("key") != key:
+        self._sp_cursor = None          # 换人/换轮：卡死探测从头计时
         _ready = _speech_ready_mono(self, kind, seat)
         st = {"key": key, "at": _ready if _ready is not None else time.monotonic(),
               "play_at": None, "warned": False}
@@ -1205,17 +1216,70 @@ def _speech_audio_done(self, kind: str, seat: int) -> bool:
     return getattr(self, "client_played", -1) > idx
 
 
+def _line_play_secs(self, x: Dict) -> float:
+    """时间线上这一行在客户端播报队列里大致占多久（秒，已按 win_scale 缩放）。
+
+    与 `_queue_end_mono` 的时长口径**必须一致**（0.5 + 字数/3.4，人类发言固定 0.4）。
+    用途：判断"回执游标停在这一行多久算卡死"（见 `_speech_clock`）。
+    """
+    _sc = night_script.win_scale()
+    _dur = 0.5 + len(x.get("s") or "") / 3.4
+    if x.get("t") == "say":
+        _seat = x.get("seat")
+        _human = False
+        try:
+            _human = (_seat is not None
+                      and self.game.player(int(_seat)).kind == "human")
+        except Exception:              # noqa: BLE001  （老时间线条目没有 seat）
+            _human = False
+        _dur = 0.4 if _human else _sc * _dur
+    else:
+        _dur = _sc * _dur
+    return _dur + _sc * (x.get("delay") or 0.0)
+
+
+def _speech_cursor_stalled(self) -> bool:
+    """客户端的播报游标是不是**卡死**了（同一行停了远超它该播的时长）。
+
+    · `client_played` = 已播完的行数 ⇒ 当前正在播的是第 `client_played` 行。
+    · 游标每涨一次就重置计时 —— 只要队列在动就不算卡死（哪怕它落后很多）。
+    · 超过"当前行应播时长 + SPEECH_CURSOR_GRACE"还没动 ⇒ 判卡死：
+      TTS 悬挂 / audio ended 不来 / 页面被节流。此时**不能**再等回执。
+    """
+    cp = int(getattr(self, "client_played", -1))
+    if cp < 0:
+        return False
+    seen = getattr(self, "_sp_cursor", None)
+    if not seen or seen[0] != cp:
+        self._sp_cursor = (cp, time.monotonic())
+        return False
+    tl = self.timeline or []
+    if cp >= len(tl):
+        return False
+    return (time.monotonic() - seen[1]
+            > _line_play_secs(self, tl[cp])
+            + night_script._scaled(SPEECH_CURSOR_GRACE))
+
+
 def _speech_clock(self, kind: str, seat: int) -> Optional[float]:
     """这一位发言的**真正起算时刻**（monotonic）；None = 开场白还没播完。
 
     · 新前端：回执确认「N号请发言」播完的那一刻才起算（`play_at`），
       不拿估算时刻充当起点 —— 否则 AI 还在说、真人读秒已经先走了一截。
     · 老前端 / 无头测试：没有回执链，沿用原来的估算 `at`。
+    · ★ 2026-11-01：回执链**卡住**时不能无限等（用户实机："真人无法正常发言"）——
+      游标在同一行停得远超该行应播时长 ⇒ 判卡死，按已念完起算。
+      真人这一回合必须能开始、也必须要能被看门狗收尾。
     """
     st = _sp_state(self, kind, seat)
     if getattr(self, "client_seen", False):
         if not _speech_audio_done(self, kind, seat):
-            return None
+            if not _speech_cursor_stalled(self):
+                return None
+            if not getattr(self, "_speech_gate_late", False):
+                self._speech_gate_late = True
+                print("[speech] 播报游标卡住（client_played=%s），按已念完起算"
+                      % getattr(self, "client_played", -1), flush=True)
         if not st.get("play_at"):
             st["play_at"] = time.monotonic()
         return st["play_at"]
