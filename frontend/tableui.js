@@ -1199,6 +1199,9 @@ function renderNightDial(seatNo, v, acts){
       if (!alive[no0]) b.classList.add('dead');
       if (isHeal && v.night_victim === no0){
         b.classList.add('victim');
+        /* ★ 2026-11-01：已经点过救人 ⇒ 号码加选中态（服务端回传 heal_picked）。
+           窗口结束前都能改回「不救」—— 见下面 extra 的 clear 分支。 */
+        if (v.heal_picked) b.classList.add('sel');
         b.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'heal', no0 + 1, null); };
       } else if (act && pool[no0]){
         b.onclick = function(ev){ ev.stopPropagation(); wheelSelect(act, no0 + 1); };
@@ -1217,10 +1220,18 @@ function renderNightDial(seatNo, v, acts){
   extra.className = 'act';
   if (isHeal){
     extra.textContent = '不救';
-    /* 🔴 2026-10-12 bug2 的教训在这里落地：解药"不救"**绝不提交 pass**
+    /* ★ 2026-11-01（用户实机：点了救人之后想改回不救，按钮没反应）：
+       已经点过救人 ⇒ 这一键发 `clear` 撤回（引擎 `night_clear` 把药还回来，
+       窗口关闭时才真正扣药，所以撤回不消耗解药）；没点过 ⇒ 什么都不发。
+       🔴 2026-10-12 bug2 的教训照旧：解药"不救"**绝不提交 pass**
        （pass ⇒ witch_asked ⇒ 毒药那一问消失）。毒药的弃权由毒药窗口自己的
        到点注入负责 —— 这个按钮只是明示"我不救"，夜照常走。 */
-    extra.onclick = function(ev){ ev.stopPropagation(); };
+    var _healing = !!v.heal_picked;
+    if (_healing) extra.classList.add('sel');
+    extra.onclick = function(ev){
+      ev.stopPropagation();
+      if (_healing) submit(seatNo, 'clear', null, null);
+    };
   } else if (act === 'kill'){
     extra.textContent = '空刀';
     extra.onclick = function(ev){ ev.stopPropagation(); wheelSelect('kill', -1); };
@@ -2185,11 +2196,20 @@ async function submit(seatNo, action, target, text){
           renderWheelAct(seatNo, MYVIEW);
         }
       } catch (e2) { /* 视图取不到：保持当前屏，下一拍 tick 自愈 */ }
-      foot(action === 'clear'
-           ? '已取消这一刀 —— 可以重新点一个号码'
+      var _footMsg = (action === 'clear')
+        ? '已取消刚才的选择 —— 可以重新点一个号码'
+        : (action === 'heal'
+           ? '已选择救人 —— 窗口结束前可以点「不救」撤回'
            : (action === 'investigate'
               ? '已记下要验的人 —— 可以改；到点没点确认也会把结果给你'
-              : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）'));
+              : (action === 'poison'
+                 ? '毒药已记下：窗口结束前可以改（点别的号码就是改毒）'
+                 : (action === 'guard'
+                    ? '守护已记下：窗口结束前可以改（点别的号码就是改守）'
+                    : (action === 'pass'
+                       ? '已放弃这一问 —— 等窗口结束'
+                       : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）')))));
+      foot(_footMsg);
       setTimeout(tick, 300);
       return;
     }

@@ -2298,6 +2298,99 @@ if _s27 is not None:
           f"winner={_g27.winner} phase={_g27.phase}")
 
 print("=" * 74)
+print("㉘ 夜间窗口固定为 30/15/15/15 秒（语音开关都不叠加播报时长）")
+print("=" * 74)
+# ★ 2026-11-01 用户实机：语音关闭时四个窗口读成 42/22/23/16 秒。
+#   根因 = `_nn_deadline` 的 base 永远取 `max(节点开始, 播报估算)`：
+#   语音关 ⇒ 前端节点一开就 arm（面板立刻出现），而 base 仍钉在
+#   "法官念完那句"的估算上 ⇒ 读秒一开始就白塞十几秒播报。
+_scale28 = night_script.win_scale()
+night_script.set_win_scale(0.2)          # 6 人局狼窗 30s→6s：够 arm 又不拖测试
+try:
+    _s28 = None
+    for _seed28 in range(1, 80):
+        _cand28 = game_api.Session(humans=1, ais=5, seed=_seed28)
+        _hp28 = next((p for p in _cand28.game.players if p.kind == "human"), None)
+        if _hp28 is not None and _hp28.role.is_wolf:
+            _s28 = _cand28
+            break
+    check("（前提）造出「人类是狼」的 6 人局（㉘）", _s28 is not None,
+          "80 个 seed 都没抽到")
+    if _s28 is not None:
+        _g28 = _s28.game
+        _cur28 = _ndrv._nn_cur(_s28)
+        for _i28 in range(120):               # 构造只推一小段：等到狼窗打开
+            if _cur28 == "wolf":
+                break
+            _s28.drive(0.05)
+            _time.sleep(0.01)
+            _cur28 = _ndrv._nn_cur(_s28)
+        _win28 = night_script.window_of("wolf", len(_g28.players))
+        _t_arm28 = _time.monotonic()
+        _s28.human_wait_since = _t_arm28   # 等价于「语音关闭 ⇒ 节点一开就 arm」
+        _dl28 = _ndrv._nn_deadline(_s28, "wolf")
+        check("★ ㉘ 立即 arm（语音关）⇒ 窗口 = arm + W，不再叠加播报估算",
+              _cur28 == "wolf" and abs((_dl28 - _t_arm28) - _win28) < 0.05,
+              f"cur={_cur28} win={_win28} 实际={_dl28 - _t_arm28:.2f}")
+        _now28 = _s28.now_state()
+        check("★ ㉘ 面板可见那一刻的剩余秒数就是满窗（6 人局 = 30s，不是 42）",
+              _now28.get("started") is True
+              and abs((_now28.get("until_left") or 0) - _win28) < 0.6,
+              f"started={_now28.get('started')} left={_now28.get('until_left')}")
+        # 面板第一次可见时锚点已钉死（now_state 的职责）；之后的迟到 arm 不许再动它。
+        _dl28_pin = _ndrv._nn_deadline(_s28, "wolf")
+        _s28.human_wait_since = _t_arm28 + 3.0   # 模拟迟到的 arm
+        check("★ ㉘ 迟到的 arm 不再延长窗口（读秒不回涨）",
+              abs(_ndrv._nn_deadline(_s28, "wolf") - _dl28_pin) < 1e-6,
+              f"偏移 {_ndrv._nn_deadline(_s28, 'wolf') - _dl28_pin:.2f}s")
+finally:
+    night_script.set_win_scale(_scale28)
+
+print("=" * 74)
+print("㉙ 女巫救人后可在窗口结束前改为不救（撤回不扣药）")
+print("=" * 74)
+# ★ 2026-11-01 用户实机：点了被刀的人（救人）之后，「不救」按钮的 onclick 是空的
+#   —— 看着能点，其实撤不回来。引擎 `night_clear` 本来就支持把药还回来。
+_g29 = Game(make_board(3, 3), ["human"] * 6, seed=1)
+_g29.start()
+_w29 = next(p for p in _g29.players if p.role is Role.WITCH)
+_victim29 = next(p.seat for p in _g29.players
+                 if not p.role.is_wolf and p.seat != _w29.seat)
+_g29.wolf_agree_kill(_victim29)
+_g29.night["stage"] = "witch_heal"
+_g29.night_heal(_w29.seat, _victim29)
+_v29 = _g29.get_view_for(_w29.seat)
+check("★ ㉙ 座位视图回传 heal_picked（前端据此把「不救」变成撤回键）",
+      _v29.get("heal_picked") is True,
+      f"heal_picked={_v29.get('heal_picked')}")
+check("★ ㉙ 点了救人但还没扣药（扣药在窗口关闭时）",
+      _g29.private[_w29.seat].potions["heal"] is True
+      and _g29.night.get("heal") == _victim29,
+      f"heal={_g29.night.get('heal')} 药={_g29.private[_w29.seat].potions['heal']}")
+_g29.night_clear(_w29.seat)
+check("★ ㉙ 「不救」= clear：heal 清空、药还在、picked 复位",
+      _g29.night.get("heal") is None
+      and _g29.private[_w29.seat].potions["heal"] is True
+      and _g29.night.get("heal_picked") is False,
+      f"heal={_g29.night.get('heal')} picked={_g29.night.get('heal_picked')} "
+      f"药={_g29.private[_w29.seat].potions['heal']}")
+_g29.night_heal(_w29.seat, _victim29)
+check("★ ㉙ 撤回之后还能重新救（选择可反复改，直到窗口结束）",
+      _g29.night.get("heal") == _victim29,
+      f"heal={_g29.night.get('heal')}")
+_g29.night_clear(_w29.seat)              # 再撤一次，让窗口在"没救"的状态下结算
+_g29.settle_witch_heal()
+check("★ ㉙ 撤回后窗口关闭也不扣药（本夜等于没救）",
+      _g29.private[_w29.seat].potions["heal"] is True,
+      f"药={_g29.private[_w29.seat].potions['heal']}")
+
+_tui29 = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
+check("★ ㉙ 前端：已救人时「不救」按钮真发 clear",
+      "if (_healing) submit(seatNo, 'clear', null, null);" in _tui29)
+check("★ ㉙ 前端：已救人的号码带选中态",
+      "if (v.heal_picked) b.classList.add('sel');" in _tui29)
+
+print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")
 if FAIL:

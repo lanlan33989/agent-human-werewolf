@@ -986,9 +986,11 @@ class Game:
                 raise RuntimeError("解药已经结算，不能再改")
             if n.get("heal") is not None:
                 n["heal"] = None
+                n["heal_picked"] = False
                 self.private[actor].potions["heal"] = True
             if n.get("poison") is not None:
                 n["poison"] = None
+                n["poison_picked"] = False
                 self.private[actor].potions["poison"] = True
             n["witch_asked"] = False
             return
@@ -2185,6 +2187,10 @@ class Game:
             view["investigations"] = dict(priv.investigations)
         if p.role is Role.WITCH:
             view["potions"] = dict(priv.potions)
+            # ★ 2026-11-01（用户定）：救人之后、倒计时结束之前可以改为不救。
+            #   前端据此把「不救」变成可用的撤回键（当前窗口选没选过，只有本人需要知道）。
+            view["heal_picked"] = bool(self.night.get("heal_picked"))
+            view["poison_picked"] = bool(self.night.get("poison_picked"))
             # 女巫必须知道今晚谁被刀才能决定救不救 —— 这正是「法官私下告知」的信息。
             # 只在夜间暴露，且只给她一个人（L2）。
             if self.phase is Phase.NIGHT:

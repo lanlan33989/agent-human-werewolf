@@ -433,29 +433,52 @@ def _nn_deadline(self, node_id: str) -> float:
     ⚠️ 这条保证必须写在**这里**（只要看"armed 有没有"），不能写成"计数器攒够 N 秒"
     —— 那个计数会被 `pending` 在 `working`/`human_night` 之间来回切反复清零，
     实测**时灵时不灵**（预言家段生效、狼/女巫段不生效，正是这个原因）。
+
+    ★ 2026-11-01（用户实机：语音关闭时四个窗口读成 42/22/23/16 秒）：
+      窗口必须从**面板第一次可见**的那一刻起算，且只走满 W 秒。以前 base 取
+      `max(节点开始, 播报估算)` —— 语音关闭时前端节点一开就 arm（面板立刻出现），
+      而 base 仍钉在"法官念完那句"的估算上 ⇒ 读秒里白塞十几秒播报时长。
+      现在 arm 与播报估算**谁先到谁起算**（= 窗口最早可显示的时刻），真正的
+      锚点在 `now_state()` 第一次报告 `started` 时钉死（`_nn_pin_window`）：
+      那一刻前端才拿得到面板，读秒从满窗 W 起走。
+      · 锚点一旦钉死，之后迟到的 arm / 估算都不再改口径（读秒不回涨）；
+      · 客户端一直不轮询（面板从没显示）⇒ 用这里的**临时 deadline** 收口，
+        人类仍拿得到一整窗（`min(est, arm) + W`），不会整夜卡死。
     """
     win = night_script.window_of(node_id, _table_size(self))
+    if getattr(self, "_nn_anchor_node", None) == node_id:
+        anchor = getattr(self, "_nn_anchor", None)
+        if anchor is not None:
+            return anchor + win
     base = self._nn_at
     if getattr(self, "_nn_need_arm", False):
-        # 🔴 v4：没 arm 时不再"往后推半个窗口"（粗兜底），改用**服务端自己的
-        #    播报完成估算**精确起算（念完 +2s）—— 倒计时从满窗起走，面板与
-        #    倒计时同拍。
-        # 🔴 2026-10-23 实机（用户："毒药读秒 12→14→13、预言家从 16 开始"）：
-        #    arm **不再延长窗口**。原来 max(est, armed) 谁晚听谁 —— 面板弹出
-        #    （音频门晚于 est）那一刻窗口已走到中段，arm 一落地 deadline 又
-        #    往后跳 ⇒ 读秒先见到 12、又回涨到 14。起算权既已收回服务端（v4），
-        #    窗口就只由 est 裁决：面板弹出（= started）与读秒同拍、整窗走满。
-        #    估算失效（None）⇒ 才退回 arm / 半窗兜底（老对局没有估算依据）。
         est = _nn_ready_mono(self, node_id)
-        if est is not None:
-            base = max(base, est)
+        armed = getattr(self, "human_wait_since", None)
+        _starts = [x for x in (est, armed) if x is not None]
+        if not _starts:
+            base = base + win * 0.5     # 老对局 / 无播报：退回旧的半窗兜底
         else:
-            armed = getattr(self, "human_wait_since", None)
-            if armed is not None:
-                base = max(base, armed)     # 老对局：arm 是唯一"念完了"的信号
-            else:
-                base = base + win * 0.5     # 连 arm 都没有：退回旧的半窗兜底
+            base = max(base, min(_starts))
     return base + win
+
+
+def _nn_pin_window(self, node_id: str) -> None:
+    """钉死窗口锚点：`now_state()` 第一次报告 `started` 时调用。
+
+    ★ 2026-11-01：arm（语音关时几乎立刻到）/ 播报估算先到，但**面板还没渲染**；
+    若从 arm 起算，玩家看到的满窗会少掉一个轮询间隔（实测 29.1/30）。
+    现在把锚点定在"服务端第一次告诉客户端窗口已开始"的这一拍 —— 前端拿到的
+    第一份 `until_left` 就是满窗 W，面板可见时长也是 W。只对需要人类操作的
+    节点生效（纯 AI 节点走固定窗口，不受轮询影响）。
+    """
+    if (getattr(self, "_nn_anchor_node", None) == node_id
+            and getattr(self, "_nn_anchor", None) is not None):
+        return
+    # `now_state()` 的 wheel 分支已经确认"这一节有人要点"—— 就算 `_nn_need_arm`
+    # 因为待办晚出现还没升级，也按"要人类操作"处理（否则首拍会少掉一点窗口）。
+    self._nn_need_arm = True
+    self._nn_anchor_node = node_id
+    self._nn_anchor = time.monotonic()
 
 
 def _already_answered(self, seat: int, node_id: Optional[str]) -> bool:
@@ -550,6 +573,9 @@ def _nn_open(self, i: int) -> None:
     nid = nd["id"]
     self._nn_i = i
     self._nn_at = time.monotonic()
+    # ★ 2026-11-01：窗口锚点随节点重置 —— 面板第一次可见时钉死（见 `_nn_deadline`）。
+    self._nn_anchor = None
+    self._nn_anchor_node = None
     # ★ 2026-10-30：记下"本节点在 timeline 里从哪一条开始"—— `_nn_ready_mono`
     #   靠它区分**这一夜**的同名节点和上一夜的（否则第二夜起 started 会立刻为真）。
     self._nn_tl0 = len(self.timeline)
@@ -649,6 +675,8 @@ def _night_clock(self) -> bool:
                           if nd["id"] not in night_script.SKIP_IN_ANNOUNCE]
         self._nn_i = -1
         self._nn_at = 0.0
+        self._nn_anchor = None
+        self._nn_anchor_node = None
         self._nn_need_arm = False
         self._nn_hard: set = set()
         self._nn_tick15 = False

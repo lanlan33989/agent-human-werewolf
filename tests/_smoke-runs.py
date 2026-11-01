@@ -138,10 +138,27 @@ def main() -> int:
     check("timeline 有行（公开动作流）", len(tl) > 0, str(len(tl)))
     check("timeline 行字段齐全",
           all({"round", "seq", "seat", "is_ai", "type", "text"} <= set(r) for r in tl))
+    # ★ 2026-11-01 用户实机：timeline.jsonl 每行 text="" / type=null / round=null。
+    #   根因是这里读的是导出格式的键（text/type），而运行时时间线用 s/t。
+    check("timeline text 非空（按运行时的 `s` 键取）",
+          all(bool(r["text"]) for r in tl),
+          repr([r["text"] for r in tl[:3]]))
+    check("timeline type 有值（sys / say）",
+          all(r["type"] in ("sys", "say") for r in tl),
+          repr([r["type"] for r in tl[:5]]))
+    # 首行「游戏开始…」在第一条「第 1 夜」之前，按文档口径记 null；其余都要有轮次。
+    check("timeline round 已从「第 X 夜」推出",
+          sum(1 for r in tl if isinstance(r["round"], int)) >= len(tl) - 1,
+          repr([r["round"] for r in tl[:5]]))
 
     res = json.load(open(os.path.join(d1, "result.json"), encoding="utf-8"))
     check("result 带胜负与 metrics", "winner" in res and "metrics" in res,
           json.dumps({k: res.get(k) for k in ("winner",)}, ensure_ascii=False))
+    check("result.rounds 是真实轮次（不是 null）",
+          isinstance(res.get("rounds"), int) and res["rounds"] >= 1,
+          repr(res.get("rounds")))
+    check("result.seed 与 meta 同源（Session.seed，不是 null）",
+          res.get("seed") == 424242, repr(res.get("seed")))
     check("存档期间无错误（archive_errors 空）", res.get("archive_errors") == [],
           json.dumps(res.get("archive_errors"), ensure_ascii=False)[:200])
 
