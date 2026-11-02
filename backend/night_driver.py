@@ -367,25 +367,9 @@ def _speech_ready_mono(self, kind: str, seat: int) -> Optional[float]:
 # 时间线行数」；这里只在两处拦：入夜前、天亮结算前。
 #   · 老前端 / 无头测试不上报 ⇒ 直接放行（保持旧行为，不拖慢测试）
 #   · 客户端 3 秒没来轮询（关页 / 切走）⇒ 放行，避免整局卡死
-#   · 上报卡住（TTS 悬挂）⇒ 按最后一句时长给超时兜底
+#   · 上报卡住（TTS 悬挂）⇒ 只有**游标停在当前行不动**才超时兜底；
+#     游标每前进一行都会重新计时（遗言/AI 发言再长也先等它念完）
 GATE_POLL_FRESH = 3.0
-
-
-def _tail_line_secs(self) -> float:
-    """上一相位最后一句的合成时长（超时兜底用；口径同 `_queue_end_mono`）。"""
-    tl = self.timeline or []
-    if not tl:
-        return 0.0
-    x = tl[-1]
-    _s = x.get("s") or ""
-    if x.get("t") == "say":
-        try:
-            _seat = x.get("seat")
-            if _seat is not None and self.game.player(int(_seat)).kind == "human":
-                return 0.4
-        except Exception:                  # noqa: BLE001  （老时间线没有 seat）
-            pass
-    return 0.5 + len(_s) / 3.4
 
 
 def _phase_audio_done(self) -> bool:
@@ -396,21 +380,106 @@ def _phase_audio_done(self) -> bool:
         self._phase_gate = None
         return True                        # 页面关了 / 切走了：不能把整局卡死
     need = len(self.timeline)
-    if getattr(self, "client_played", -1) >= need:
+    cp = int(getattr(self, "client_played", -1))
+    if cp >= need:
         self._phase_gate = None
         return True
     now = time.monotonic()
     gate = getattr(self, "_phase_gate", None)
-    if not gate or gate.get("need") != need:
-        # 最后一句通常就是「天黑请闭眼」/「天亮了」/遗言；超时只在本该念完
-        # 之后还给不出回执时触发，给 TTS 悬挂留足余量。
-        gate = {"need": need, "at": now,
-                "deadline": now + min(60.0, max(15.0, _tail_line_secs(self) * 1.5 + 10.0))}
+    if not gate or gate.get("need") != need or gate.get("cp") != cp:
+        # ★ 2026-11-02（用户："遗言没结束就进黑夜"）：超时只兜**卡死**，
+        #   不兜"这一句本来就长"—— 游标每前进一行就重新计时；正在播的那一行
+        #   按它的应播时长（×2 + 15s）给上限，遗言/AI 发言再长也先等它念完。
+        tl = self.timeline or []
+        cur = tl[cp] if 0 <= cp < len(tl) else (tl[-1] if tl else None)
+        _line = _line_play_secs(self, cur) if cur else 0.0
+        gate = {"need": need, "cp": cp, "at": now,
+                "deadline": now + min(180.0, max(20.0, _line * 2.0 + 15.0))}
         self._phase_gate = gate
     if now >= gate["deadline"]:
         self._phase_gate = None
         return True
     return False
+
+
+# ★ 2026-11-02（用户实机："遗言还未结束，狼人刀人窗口就出来了"）：
+#   夜间面板的 `started` 以前是**估算**（本节点那句念完的时刻）——
+#   估算只看服务端产句时刻，不知道客户端前面还压着多长的遗言/发言；
+#   于是"狼人请睁眼"还没念到，窗口就已经弹出来。现在有回执时只认
+#   **客户端真的播完本节点的睁眼句**；只有回执卡死（或页面失联）才兜底。
+NIGHT_QUEUE_DEAD_GRACE = 60.0
+
+
+def _nn_queue_behind(self, cp: int) -> bool:
+    """回执游标是不是一直没走到本节点的「XX请睁眼」。"""
+    seen = getattr(self, "_nn_behind", None)
+    if not seen or seen[0] != cp:
+        self._nn_behind = (cp, time.monotonic())
+        return False
+    return (time.monotonic() - seen[1]
+            > night_script._scaled(NIGHT_QUEUE_DEAD_GRACE))
+
+
+def _nn_line_stalled(self, idx: int) -> bool:
+    """游标已经停在「XX请睁眼」这一行，且停得远超它应播的时长。"""
+    cp = int(getattr(self, "client_played", -1))
+    seen = getattr(self, "_nn_cursor", None)
+    if not seen or seen[0] != cp:
+        self._nn_cursor = (cp, time.monotonic())
+        return False
+    tl = self.timeline or []
+    if idx < 0 or idx >= len(tl):
+        return False
+    return (time.monotonic() - seen[1]
+            > _line_play_secs(self, tl[idx])
+            + night_script._scaled(SPEECH_CURSOR_GRACE))
+
+
+def _nn_audio_done(self, node_id: str,
+                   panel_line: Optional[int] = None) -> bool:
+    """客户端是不是**真的播完**了本节点的「XX请睁眼」这一句。
+
+    旧实现（`_nn_ready_mono`）是纯估算：它不知道客户端队列里还压着
+    上一段遗言 / AI 发言，于是常常在"狼人请睁眼"还没念到时就把 `started`
+    置真 —— 用户看到的就是"遗言还没完，狼刀窗口先出来了"。
+    现在：
+      · 有回执（新页面）：游标必须越过本节点那一行；停在那一行时按
+        「该行时长 + 宽限」判 TTS 卡死；停在**更早**的行时最多等
+        `NIGHT_QUEUE_DEAD_GRACE`（队列真死了才放行，放行后仍从满窗起算）。
+      · 页面失联 / 老前端：保持原来的估算/立即行为，绝不把局卡死。
+    """
+    if not getattr(self, "client_seen", False):
+        return True                    # 老前端 / 无头测试：沿用估算
+    if time.monotonic() - getattr(self, "client_poll_at", 0.0) > GATE_POLL_FRESH:
+        self._nn_cursor = None
+        self._nn_behind = None
+        return True                    # 页面关了 / 切走：不能锁死
+    idx = (panel_line if panel_line is not None
+           else _line_of_node(self, node_id))
+    if idx < 0:
+        return True                    # 没有睁眼句（老数据）：按立刻开始
+    cp = int(getattr(self, "client_played", -1))
+    if cp > idx:
+        self._nn_cursor = None
+        self._nn_behind = None
+        return True                    # 睁眼句已经播完
+    if cp < idx:
+        self._nn_cursor = None
+        if not _nn_queue_behind(self, cp):
+            return False
+        if getattr(self, "_nn_gate_late_node", None) != node_id:
+            self._nn_gate_late_node = node_id
+            print("[night] 队列未走到 %s 的睁眼句（client_played=%s < %s），"
+                  "按卡死放行、从满窗起算" % (node_id, cp, idx), flush=True)
+        return True
+    self._nn_behind = None
+    if not _nn_line_stalled(self, idx):
+        return False
+    if getattr(self, "_nn_gate_late_node", None) != node_id:
+        self._nn_gate_late_node = node_id
+        print("[night] 睁眼句播报卡住（client_played=%s），按已念完起算"
+              % cp, flush=True)
+    return True
 
 
 def _table_size(self) -> int:
@@ -589,6 +658,9 @@ def _nn_open(self, i: int) -> None:
     self._nn_tick15 = False                  # 每个节点重置「还剩15秒」只喊一次
     self.human_wait_since = None            # 换节点 ⇒ 换窗口：旧 arm 一律作废
     self.human_wait_pending_since = None
+    self._nn_cursor = None                  # 换节点：回执卡死探测从头计时
+    self._nn_behind = None
+    self._nn_gate_late_node = None
     if nd.get("say"):
         # ★ 2026-10-29：预言家确认的那一刻已经念过「他是这个」了 —— 这个节点
         #   再念一遍就是全场听两次。节点本身照旧留着走它的 3 秒留白。
@@ -682,6 +754,9 @@ def _night_clock(self) -> bool:
         self._nn_tick15 = False
         self.human_wait_since = None
         self.human_wait_pending_since = None
+        self._nn_cursor = None
+        self._nn_behind = None
+        self._nn_gate_late_node = None
     out = False
     for _ in range(12):                     # 一拍最多连推 12 个节点（零窗口的收尾三连）
         if self._nn_i < 0:
@@ -1181,6 +1256,7 @@ def _sp_state(self, kind: str, seat: int) -> Dict:
     st = getattr(self, "_sp_state", None)
     if not st or st.get("key") != key:
         self._sp_cursor = None          # 换人/换轮：卡死探测从头计时
+        self._sp_behind = None          # 队列还没走到「请发言」的计时也归零
         _ready = _speech_ready_mono(self, kind, seat)
         st = {"key": key, "at": _ready if _ready is not None else time.monotonic(),
               "play_at": None, "warned": False}
@@ -1261,6 +1337,24 @@ def _speech_cursor_stalled(self) -> bool:
             + night_script._scaled(SPEECH_CURSOR_GRACE))
 
 
+# ★ 2026-11-02（用户实机："AI 发言占用了真人发言时长"）：
+#   游标停在**更早的 AI 发言**上时，绝不能按"这一行停太久"放行 ——
+#   那会把 AI 还没播完的那一截算进真人的 120 秒里。只有游标已经走到
+#   「N号请发言」这一行，卡死兜底才允许启动真人时钟；之前最多等这么久
+#   （队列真的死了才放行，且放行后仍从**满窗**起算）。
+SPEECH_QUEUE_DEAD_GRACE = 60.0
+
+
+def _speech_queue_behind(self, cp: int) -> bool:
+    """回执游标是不是**一直没走到**真人那句开场白（AI/法官还在前面排队）。"""
+    seen = getattr(self, "_sp_behind", None)
+    if not seen or seen[0] != cp:
+        self._sp_behind = (cp, time.monotonic())
+        return False
+    return (time.monotonic() - seen[1]
+            > night_script._scaled(SPEECH_QUEUE_DEAD_GRACE))
+
+
 def _speech_clock(self, kind: str, seat: int) -> Optional[float]:
     """这一位发言的**真正起算时刻**（monotonic）；None = 开场白还没播完。
 
@@ -1270,16 +1364,32 @@ def _speech_clock(self, kind: str, seat: int) -> Optional[float]:
     · ★ 2026-11-01：回执链**卡住**时不能无限等（用户实机："真人无法正常发言"）——
       游标在同一行停得远超该行应播时长 ⇒ 判卡死，按已念完起算。
       真人这一回合必须能开始、也必须要能被看门狗收尾。
+    · ★ 2026-11-02（用户实机："AI 发言占用了真人发言时长"）：
+      游标还停在**更早的一行**（AI 的 say / 法官句）时**不许**放行 ——
+      先等它走到「N号请发言」；只有队列真的死了（这段时间一直没动）才兜底，
+      兜底也照样给满窗。AI 的发言时长从此不再从真人这里扣。
     """
     st = _sp_state(self, kind, seat)
     if getattr(self, "client_seen", False):
         if not _speech_audio_done(self, kind, seat):
-            if not _speech_cursor_stalled(self):
-                return None
-            if not getattr(self, "_speech_gate_late", False):
-                self._speech_gate_late = True
-                print("[speech] 播报游标卡住（client_played=%s），按已念完起算"
-                      % getattr(self, "client_played", -1), flush=True)
+            cp = int(getattr(self, "client_played", -1))
+            idx = _speech_announce_idx(self, kind, seat)
+            if idx >= 0 and cp < idx:
+                if not _speech_queue_behind(self, cp):
+                    return None
+                if not getattr(self, "_speech_gate_late", False):
+                    self._speech_gate_late = True
+                    print("[speech] 队列未走到「%d号请%s」（client_played=%s < %s），"
+                          "按卡死放行、从满窗起算"
+                          % (seat + 1, "留遗言" if kind == "lastword" else "发言",
+                             cp, idx), flush=True)
+            else:
+                if not _speech_cursor_stalled(self):
+                    return None
+                if not getattr(self, "_speech_gate_late", False):
+                    self._speech_gate_late = True
+                    print("[speech] 播报游标卡住（client_played=%s），按已念完起算"
+                          % cp, flush=True)
         if not st.get("play_at"):
             st["play_at"] = time.monotonic()
         return st["play_at"]

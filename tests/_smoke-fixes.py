@@ -2543,6 +2543,118 @@ check("★ ㉚ 服务端：宽限常量存在且被 `_speech_clock` 使用",
           (BASE / "backend" / "night_driver.py").read_text(encoding="utf-8"))
 
 print("=" * 74)
+print("㉛ 真人与 AI 发言时长独立；夜间窗口等「狼人请睁眼」播完")
+print("=" * 74)
+# ★ 2026-11-02 用户实机两条：
+#   ① "真人发言时长疑似被 AI 占用" —— 回执停在上一句 AI 发言时，
+#      ㉚ 的"当前行停太久"兜底会提前启动真人计时；现在游标没走到
+#      「N号请发言」之前一律不放行（只有队列真死了才按满窗兜底）。
+#   ② "遗言没结束，狼刀窗口先出来" —— 夜间 started 以前只按估算；
+#      现在有回执时只认"本节点睁眼句真播完"。
+from types import SimpleNamespace as _NS31  # noqa: E402
+
+_scale31 = _ns30.win_scale()
+_ns30.set_win_scale(0.02)
+try:
+    class _Game31:
+        round = 1
+        runoff_stage = 0
+        def player(self, seat):
+            return _NS31(kind=("human" if seat == 0 else "ai"),
+                         seat=seat, alive=True)
+
+    def _sess31(tl, cp):
+        return _NS31(game=_Game31(), timeline=tl, client_seen=True,
+                     client_played=cp, client_poll_at=_time.monotonic(),
+                     _night_tl0=0, _sp_state=None, _sp_cursor=None,
+                     _sp_behind=None, _nn_cursor=None, _nn_behind=None,
+                     _nn_gate_late_node=None, _phase_gate=None)
+
+    _t31 = _time.time()
+    _tl31 = [
+        {"t": "sys", "s": "天亮了。", "at": _t31, "ts": _t31},
+        {"t": "say", "s": "AI 还在发言，这一句很长。", "seat": 1,
+         "at": _t31 + 0.1, "ts": _t31 + 0.1},
+        {"t": "sys", "s": "1号请发言", "at": _t31 + 0.2, "ts": _t31 + 0.2},
+    ]
+    _s31 = _sess31(_tl31, 0)          # 游标停在 AI 的 say 上，还没到「1号请发言」
+
+    def _clk31():
+        _s31.client_poll_at = _time.monotonic()
+        return _ndrv30._speech_clock(_s31, "speak", 0)
+
+    _c31a = _clk31()
+    _time.sleep(0.5)                  # 超过旧口径「本行时长 + 宽限」，但还不到队列死亡兜底
+    _c31b = _clk31()
+    check("★ ㉛ AI 还没播完 ⇒ 真人时钟**不**起算（不再吃 AI 的时长）",
+          _c31a is None and _c31b is None,
+          f"a={_c31a} b={_c31b}")
+    _time.sleep(0.8)                  # 累计 > SPEECH_QUEUE_DEAD_GRACE（60s × 0.02）
+    _c31c = _clk31()
+    _left31 = _ndrv30._speech_left(_s31, "speak", 0)
+    check("★ ㉛ 队列真死了才放行，且从**满窗**起算（不扣 AI 的时长）",
+          _c31c is not None
+          and abs(_left31 - __import__("speech_io").speech_window()) < 0.2,
+          f"clk={_c31c} left={_left31}")
+
+    _tl31n = [
+        {"t": "say", "s": "5号的遗言还在念。", "seat": 4,
+         "at": _t31, "ts": _t31},
+        {"t": "sys", "s": "狼人请睁眼，请选择今晚你们要击杀的人",
+         "node": "wolf", "at": _t31 + 0.1, "ts": _t31 + 0.1},
+    ]
+    _n31 = _sess31(_tl31n, 0)
+
+    def _ndone31(cp=None):
+        if cp is not None:
+            _n31.client_played = cp
+        _n31.client_poll_at = _time.monotonic()
+        return _ndrv30._nn_audio_done(_n31, "wolf", 1)
+
+    _n31a = _ndone31()
+    _time.sleep(0.5)
+    _n31b = _ndone31()
+    check("★ ㉛ 前面的遗言/发言没播完 ⇒ 狼人窗口不 started",
+          _n31a is False and _n31b is False,
+          f"a={_n31a} b={_n31b}")
+    _n31.client_played = 1            # 游标走到「狼人请睁眼」，这一句正在播
+    _n31c = _ndone31(1)
+    _time.sleep(0.4)                  # 本行(≈0.12s) + 宽限(0.2s) 之后 = 卡死
+    _n31d = _ndone31(1)
+    check("★ ㉛ 必须等「狼人请睁眼」这一句真播完（或该句卡死）才放行",
+          _n31c is False and _n31d is True,
+          f"c={_n31c} d={_n31d}")
+
+    _tl31p = [
+        {"t": "sys", "s": "遗言一", "at": _t31, "ts": _t31},
+        {"t": "sys", "s": "遗言二", "at": _t31 + 0.1, "ts": _t31 + 0.1},
+        {"t": "sys", "s": "遗言三", "at": _t31 + 0.2, "ts": _t31 + 0.2},
+    ]
+    _p31 = _sess31(_tl31p, 0)
+
+    def _gate31():
+        _p31.client_poll_at = _time.monotonic()
+        return _ndrv30._phase_audio_done(_p31)
+
+    _g31a = _gate31()
+    _time.sleep(0.25)
+    _p31.client_played = 1            # 游标在动 ⇒ 必须重新计时
+    _g31b = _gate31()
+    _time.sleep(0.25)
+    _g31c = _gate31()
+    check("★ ㉛ 遗言还在逐句播 ⇒ 相位门继续等（不按固定超时进黑夜）",
+          _g31a is False and _g31b is False and _g31c is False,
+          f"a={_g31a} b={_g31b} c={_g31c}")
+    _p31.client_played = len(_tl31p)
+    check("★ ㉛ 遗言全部播完 ⇒ 相位门放行", _gate31() is True)
+
+    _gapi31 = (BASE / "backend" / "game_api.py").read_text(encoding="utf-8")
+    check("★ ㉛ 夜间 started 走真实回执（不再只按估算）",
+          "_nn_audio_done(self, cur, panel_line)" in _gapi31)
+finally:
+    _ns30.set_win_scale(_scale31)
+
+print("=" * 74)
 total = len(PASS) + len(FAIL)
 print(f"结果：{len(PASS)}/{total} 通过")
 if FAIL:

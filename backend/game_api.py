@@ -475,17 +475,18 @@ class Session:
             #    "真实播报比估算慢时延长窗口"的补充信号。
             _armed = armed
             _ready = night_driver._nn_ready_mono(self, cur)
-            # ★ 2026-11-01：窗口一旦起算就**不再翻回 false**。
-            #   `arm_window` 只是"我看到了"，但 `act()` 成功提交会清掉
-            #   `human_wait_since`（换待办重新起算的旧逻辑）—— 若 started 只看它，
-            #   玩家一点号码，面板的 `started` 就会在法官播报还没"念完"时掉回 false
-            #   （窗口明明已经在走）⇒ 前端 `_expired`/门控跟着抖，I7 也会误报。
-            #   锚点 `_nn_anchor` 在窗口第一次可见时由 `_nn_pin_window` 钉死，
-            #   它才是"起没起算"的持久事实。
+            # ★ 2026-11-02（用户实机："遗言没完、狼刀窗口先出来"）：
+            #   `started` 以前可以由**估算**置真 —— 估算不知道客户端队列里
+            #   还压着整段遗言/发言，于是"狼人请睁眼"还没念到，窗口就弹了。
+            #   现在有回执（新页面）时只认**真实播完本节点睁眼句**（+arm/锚点）；
+            #   老前端/失联页面才退回估算，保持"不锁死"。
             _anchored = (getattr(self, "_nn_anchor_node", None) == cur
                          and getattr(self, "_nn_anchor", None) is not None)
             _started = (_armed or _anchored
-                        or (_ready is not None and time.monotonic() >= _ready))
+                        or (night_driver._nn_audio_done(self, cur, panel_line)
+                            if getattr(self, "client_seen", False)
+                            else (_ready is not None
+                                  and time.monotonic() >= _ready)))
             # ★ 2026-11-01：`started` 第一次为真的这一拍才钉锚点 —— 前端正是拿
             #   这一份响应渲染面板，倒计时从满窗 W 起走（语音关时 arm 早于渲染，
             #   从 arm 起算会白扣一个轮询间隔，实测 29.1/30）。
