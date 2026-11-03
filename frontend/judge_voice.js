@@ -320,7 +320,7 @@ window.JudgeVoice = (function () {
   window.setInterval(function () {
     try {
       var w = window.PUBLIC && window.PUBLIC.winner;
-      if (w && _stoppedFor !== w) { _stoppedFor = w; stopSpeaking(); }
+      if (w && typeof audioCaughtUp === "function" && audioCaughtUp() && _stoppedFor !== w) { _stoppedFor = w; stopSpeaking(); }
       else if (!w) { _stoppedFor = null; }
     } catch (e) { /* ignore */ }
   }, 1000);

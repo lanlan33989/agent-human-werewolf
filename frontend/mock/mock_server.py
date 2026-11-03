@@ -136,6 +136,7 @@ class H(BaseHTTPRequestHandler):
             role = roles[n % len(roles)]
             return self._send({
                 "seat": n, "role": role,
+                "role_label": {"wolf": "狼人", "seer": "预言家", "guard": "守卫", "witch": "女巫", "villager": "村民"}[role],
                 "alive": True, "round": 0, "phase": "SETUP",
                 "speech": [], "timeline": [],
                 "pending": f"human_look:{n}",

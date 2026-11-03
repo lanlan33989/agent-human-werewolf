@@ -385,6 +385,10 @@ window.Rec = (function () {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) { /* ignore */ } }
 
+    const mouthAnalyser = ctx.createAnalyser();
+    mouthAnalyser.fftSize = 512;
+    mouthAnalyser.connect(ctx.destination);
+    if (opts.onAnalyser) opts.onAnalyser(mouthAnalyser);
     const ws = new WebSocket(proto + location.host + path);
     ws.binaryType = 'arraybuffer';
     const srcs = [];
@@ -418,7 +422,7 @@ window.Rec = (function () {
       for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
       const s = ctx.createBufferSource();
       s.buffer = buf;
-      s.connect(ctx.destination);
+      s.connect(mouthAnalyser);
       if (firstAt === null) {
         firstAt = performance.now() - t0;
         if (opts.onFirst) opts.onFirst(firstAt);
@@ -452,7 +456,7 @@ window.Rec = (function () {
 
     return {
       firstMs: () => firstAt,
-      promise: finished,
+      promise: finished.finally(() => { mouthAnalyser.disconnect(); if(opts.onAnalyser) opts.onAnalyser(null); }),
       error: () => failed,
       stop: function () {
         failed = failed || new Error('已跳过');

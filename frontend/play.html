@@ -19,7 +19,6 @@
   为什么不做成单文件双击打开：数据必须来自引擎，而引擎在服务端。
   起服务后打开 http://localhost:8000/play 即可（手机同局域网也能开）。
 -->
-<link rel="stylesheet" href="/table.css">
 <style>
   /* 只加 demo 里没有的两块：轮盘、发言记录。其余全部走 table.css。 */
   /* ===== 2026-10-05 大改版：黑色半透明交接卡片全部取消 =====
@@ -417,28 +416,67 @@
           font-size:11px;color:rgba(255,255,255,.62);text-align:right;
           background:transparent;border:none;padding:0;margin:0;}
 </style>
+<link rel="stylesheet" href="/table.css">
 </head>
 <body>
 
 <div id="phone">
 
   <!-- ============ 第 0 页：封面 / 开局 ============ -->
-  <section class="page on" id="p0">
+  <section class="page on" id="welcome">
+    <div class="welcome-top"><span>狼人杀 · 同桌游戏</span><button class="help-link" id="btnRules" aria-haspopup="dialog">游戏说明</button></div>
+    <div class="welcome-hero">
+      <h1>面杀高手</h1>
+      <p>一部手机，一桌玩家。<br>听发言，找出藏在你们中的狼人。</p>
+      <div class="opening-cards" aria-label="狼人杀身份牌示意">
+        <div class="opening-card back-card"><span>面杀高手</span><b>？</b><small>身份保密</small></div>
+        <div class="opening-card front-card"><span>你的身份</span><b>村民</b><small>好人阵营</small></div>
+        <div class="opening-card last-card"><span>面杀高手</span><b>？</b><small>身份保密</small></div>
+      </div>
+      <p class="welcome-prompt">人数不够？电脑玩家可以补位。</p>
+    </div>
+    <div class="welcome-actions">
+      <button class="bigbtn" id="btnStart">开始游戏 <span aria-hidden="true">→</span></button>
+      <button class="bigbtn resume-entry" id="btnResume" hidden>继续上一局</button>
+      <div class="welcome-note" id="welcomeMsg" role="status">把手机放在桌子中央，一起入局。</div>
+    </div>
+  </section>
+  <dialog id="rulesDialog" aria-labelledby="rulesTitle">
+    <div class="rules-header"><h2 id="rulesTitle">游戏说明</h2><button id="btnCloseRules" class="help-link" aria-label="关闭游戏说明">关闭</button></div>
+    <div class="rules-content">
+      <p class="rules-intro">一部手机放桌中央，真人和电脑玩家一起玩狼人杀。法官负责主持、发牌和推进回合。</p>
+      <h3>先看身份，再入局</h3>
+      <p>设置真人与电脑玩家人数，确认配置后，把手机依次交给真人玩家。点击身份牌查看自己的角色，看完交给下一位。别让其他人看到你的牌。</p>
+      <h3>夜晚，跟随法官行动</h3>
+      <p>听到自己的角色后，按屏幕提示选择号码。狼人选择击杀目标，预言家查验身份，女巫决定救人或用毒，守卫选择守护目标。只操作轮到自己的环节，完成后把手机放回中央。</p>
+      <h3>白天，发言与投票</h3>
+      <p>根据昨夜的结果和每个人的发言寻找线索。轮到你时，点击大圆开始说话，再点一次结束。投票时直接点击目标号码，也可以弃票。电脑玩家发言时，屏幕会显示他的号码与动态表情。</p>
+      <h3>什么时候有遗言</h3><p>首夜死亡，无论狼刀、毒杀还是其他原因，都有遗言。白天出局（包括投票、猎人带走）有遗言。第二夜及之后的夜间死亡没有遗言。有遗言的玩家依次发言，全部结束后再继续下一环节或宣布胜负。</p>
+      <h3>怎样获胜</h3>
+      <p>所有狼人出局，好人获胜；存活狼人数量大于或等于存活好人数量，狼人获胜。具体行动、倒计时和最终胜负以法官提示为准。</p>
+      <h3>常见角色</h3>
+      <dl class="role-guide"><dt>狼人</dt><dd>夜间与队友选择目标，白天隐藏身份。</dd><dt>村民</dt><dd>没有夜间技能，通过发言和投票找出狼人。</dd><dt>预言家</dt><dd>夜间查验一名玩家的阵营。</dd><dt>女巫</dt><dd>拥有解药与毒药，按当晚提示决定是否使用。</dd><dt>守卫</dt><dd>夜间守护一名玩家，连守、自守按开局规则执行。</dd><dt>猎人</dt><dd>符合条件的出局可开枪带走一人；被毒杀不能开枪。</dd><dt>白痴</dt><dd>首次被投出时翻牌免死，但失去投票权。</dd></dl>
+      <p class="rules-note">每局并非包含所有角色。人数、档位与高级设置会影响角色配置和规则，请查看开局设置。</p>
+    </div>
+    <form method="dialog" class="rules-footer"><button class="bigbtn">知道了，回到游戏</button></form>
+  </dialog>
+  <section class="page" id="p0">
+    <button class="settings-back" id="btnBackWelcome">← 返回首页</button>
     <div class="mid">
-      <div class="logo">面杀高手</div>
+      <div class="settings-heading"><h1>对局设置</h1><p>选好你的同桌，开始这场推理。</p></div>
     </div>
     <div class="pad">
       <div class="h2" style="margin-top:18px">定几个人</div>
       <div class="counters">
         <label>真人<input type="number" id="nHuman" min="0" max="8" value="2"></label>
-        <label>AI<input type="number" id="nAi" min="0" max="9" value="2"></label>
+        <label>电脑玩家<input type="number" id="nAi" min="0" max="9" value="2"></label>
         <!-- 座次编排（2026-10-01）：默认 = 真人 1 号先发言 + 真人之间均匀隔 AI；
              拖动（电脑）或点两下交换（手机）可任意调。开局时随 /new 发给后端。 -->
         <div id="planWrap" style="margin-top:8px">
           <div id="planRow" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
           <div style="margin-top:4px">
             <button id="planDefault" class="bigbtn" style="padding:6px 10px;font-size:12px">恢复推荐排位</button>
-            <span class="tip" style="font-size:11px">推荐 = 真人先发言、真人之间均匀隔 AI</span>
+            <span class="tip" style="font-size:11px">推荐排位：真人先发言，电脑玩家穿插入座</span>
           </div>
         </div>
       </div>
@@ -448,23 +486,14 @@
       <div id="levelRow" class="levels"></div>
       <!-- AI 性格（H2）：从 /api/game/rules 的表生成（含"不配/随机"两个特殊值）。
            人格**与身份无关**（按座位分配、不看角色）⇒ 它不构成身份信号。 -->
-      <div class="h2" style="margin-top:16px">AI 性格</div>
+      <div class="h2" style="margin-top:16px">电脑玩家性格</div>
       <div id="personaRow" class="levels"></div>
+      <div id="rulesLine">—</div>
+      <details class="advanced-settings"><summary>高级设置 <span>规则 · 模型与语音 Key</span></summary><div class="advanced-body">
       <!-- 规则开关**由 /api/game/settings 的表生成**（见 renderSwitches）。
            和档位按钮同一个理由：不写死键名与选项，后端加开关前端自动多一个。 -->
       <div class="h2" style="margin-top:16px">规则开关</div>
       <div id="switchRow" class="switches"></div>
-      <div id="rulesLine">—</div>
-      <button class="bigbtn" id="btnNew">开始一局</button>
-      <!-- 2026-10-01（用户要求）：刷新/重开之后**一定停在封面**，不再自动进桌面。
-           上一局如果还活着，这个按钮会自己冒出来 —— 接不接回由人决定。
-           （不是删掉"断线恢复"，而是**不再替用户做决定**：锁屏/误刷新仍不会丢局。） -->
-      <button class="bigbtn" id="btnResume" hidden>继续上一局</button>
-      <div class="warn" id="bootMsg"></div>
-      <!-- 榜单与战报（2026-10-12 用户：从局末出口挪到设置页底部） -->
-      <a class="bigbtn" id="lnkBoard" href="/board" target="_blank" rel="noopener"
-         style="display:block;text-align:center;margin-top:10px;text-decoration:none">榜单与战报</a>
-
       <!-- 模型与语音 key（2026-10-26 用户要求）：默认回填服务端当前配置；
            填好点应用 → 写进服务端并热替换，下一局生效。 -->
       <div class="h2" style="margin-top:18px">模型与语音 Key</div>
@@ -494,6 +523,18 @@
         <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key / 通道</button>
         <span id="keysMsg" style="font-size:12px;color:rgba(255,255,255,.66)"></span>
       </div>
+</div></details>
+      <button class="bigbtn" id="btnNew">确认配置，开始对局</button>
+      <!-- 2026-10-01（用户要求）：刷新/重开之后**一定停在封面**，不再自动进桌面。
+           上一局如果还活着，这个按钮会自己冒出来 —— 接不接回由人决定。
+           （不是删掉"断线恢复"，而是**不再替用户做决定**：锁屏/误刷新仍不会丢局。） -->
+
+      <div class="warn" id="bootMsg"></div>
+      <!-- 榜单与战报（2026-10-12 用户：从局末出口挪到设置页底部） -->
+      <a class="bigbtn" id="lnkBoard" href="/board" target="_blank" rel="noopener"
+         style="display:block;text-align:center;margin-top:10px;text-decoration:none">榜单与战报</a>
+
+
     </div>
   </section>
 
@@ -524,7 +565,22 @@
           号码刻度上，随轮盘一起转。
        ③ 所有黑色半透明交接卡片（.sheet）取消。 -->
   <section class="page" id="p4">
+    <div class="table-brand"><span>面杀高手<small>天黑闭眼，天亮推理</small></span></div>
     <div class="tablewrap" id="tablewrap">
+      <section id="seerResult" aria-label="私人验人结果" hidden>
+        <p>仅预言家查看</p><h2 id="seerTarget"></h2>
+        <strong id="seerVerdict"></strong><span id="seerSymbol" aria-hidden="true"></span>
+        <button id="btnHideSeer" class="bigbtn" type="button">收起结果，闭眼</button>
+      </section>
+      <section id="hostPanel" class="host-panel" aria-label="法官主持">
+        <div id="hostPhase" class="host-phase"></div>
+        <div class="host-portrait" aria-hidden="true"><span class="judge-wig"></span><span class="judge-robe"></span><span class="judge-collar"></span><span class="judge-face"><i class="judge-brow left"></i><i class="judge-brow right"></i><i class="judge-eye left"></i><i class="judge-eye right"></i><i class="judge-mouth"></i></span><span class="judge-badge">⚖</span><span class="host-halo"></span></div>
+        <div class="host-name">AI 法官 · 主持席</div>
+        <h2 id="hostTitle"></h2>
+        <p id="hostLine"></p>
+        <div class="host-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <div id="hostHint" class="host-hint"></div>
+      </section>
       <div class="table" id="table">
         <div class="tcenter" id="bigCircle">
           <div id="wheelRot"><div class="acts" id="hoActs"></div></div>
@@ -656,6 +712,7 @@ function show(id){
   var ps = document.querySelectorAll('.page');
   for (var i = 0; i < ps.length; i++) ps[i].classList.remove('on');
   $(id).classList.add('on');
+  $('phone').classList.toggle('in-game', id === 'p4');
 }
 /* 顶部字幕条已删（2026-10-05 用户定：公有信息只进日志区）——
    setLine 保留为空操作：speakQueue / btnSkip 还在调它。
@@ -1177,6 +1234,9 @@ function nextCard(){
     }
     try {
       var v = await api('/api/game/' + GID + '/seat/' + seatNo);
+      var roleNames = {wolf:'狼人', villager:'村民', seer:'预言家', witch:'女巫', guard:'守卫', hunter:'猎人', idiot:'白痴'};
+      var roleName = v.role_label || roleNames[v.role];
+      if (!roleName) throw new Error('身份数据不完整，请重新点击身份牌');
       var priv = [];
       if (v.team_mates && v.team_mates.length)
         priv.push('你的狼队友：' + v.team_mates.map(function(x){ return (x + 1) + ' 号'; }).join('、'));
@@ -1191,8 +1251,13 @@ function nextCard(){
                               '，毒药' + (v.potions.poison ? '可用' : '已用'));
       var cls = v.role === 'wolf' ? 'wolf' : (v.role === 'seer' ? 'seer' : 'good');
       $('bigback').className = 'face back ' + cls;
-      $('bigback').innerHTML = '<div class="r">' + v.role_label + '</div>' +
-        '<div class="k">' + (priv.length ? priv.join('<br>') : '没有额外信息') + '</div>';
+      $('bigback').replaceChildren();
+      var roleTitle = document.createElement('div');
+      roleTitle.className = 'r'; roleTitle.textContent = roleName;
+      var roleInfo = document.createElement('div');
+      roleInfo.className = 'k'; roleInfo.textContent = priv.length ? priv.join('\n') : '没有额外信息';
+      roleInfo.style.whiteSpace = 'pre-line';
+      $('bigback').append(roleTitle, roleInfo);
       c.classList.add('flip');
       CARD_FLIPPED = true;
       $('cardHint').textContent = '记住自己的身份，然后点下面的按钮交给下一位';
@@ -1400,7 +1465,7 @@ function backToCover(){
        + (PUBLIC && PUBLIC.phase === 'ended' ? '已结束' : '进行中') + '）')
     : '', GID);
   try { closeHandoff(); } catch (e) { /* 不在交接屏上就算了 */ }
-  show('p0');
+  show('welcome');
   foot('回到开始界面。想接着上一局，就点「继续上一局」。');
 }
 
@@ -1419,6 +1484,7 @@ function showResumeButton(text, gid){
     } catch (e) {
       localStorage.removeItem('tt.gid');       /* 服务端重启过 / 局被挤掉了 */
       showResumeButton('');
+      $('welcomeMsg').textContent = '上一局已失效，请开始新的对局。';
       foot('那一局在服务端已经不在了：' + e.message);
     }
   };
@@ -1501,7 +1567,7 @@ function loadScript(src){
       localStorage.setItem('tt.gid', 'MOCKGID');
       await boot();
       await tryResume();
-      show('p0');
+      show(dm[1] === 'settings' ? 'p0' : 'welcome');
       foot('');
       return;
     }
@@ -1545,7 +1611,28 @@ function loadScript(src){
   show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */
 })();
 
+$('btnRules').onclick = function(){ $('rulesDialog').showModal(); };
+$('btnCloseRules').onclick = function(){ $('rulesDialog').close(); };
+$('rulesDialog').addEventListener('click', function(e){ if(e.target === this){ var r=this.getBoundingClientRect(); if(e.clientX<r.left || e.clientX>r.right || e.clientY<r.top || e.clientY>r.bottom) this.close(); } });
+$('btnStart').onclick = function(){ show('p0'); $('p0').scrollTop = 0; };
+$('btnBackWelcome').onclick = function(){ show('welcome'); };
 $('btnNew').onclick = newGame;
+$('btnHideSeer').onclick = function(){ resetSeerBig(); closeHandoff(); };
+/* 按压反馈在请求前触发；不依赖服务器响应速度。 */
+document.addEventListener('pointerdown', function(e){
+  var target = e.target.closest('button, #bigCircle.pickable');
+  if (!target || target.disabled) return;
+  target.classList.remove('press-feedback');
+  void target.offsetWidth;
+  target.classList.add('press-feedback');
+  setTimeout(function(){ target.classList.remove('press-feedback'); }, 450);
+});
+/* 大圆与触屏使用同一入口，键盘也可以操作。 */
+$('bigCircle').addEventListener('keydown', function(e){
+  if ((e.key === 'Enter' || e.key === ' ') && e.currentTarget.tabIndex === 0){
+    e.preventDefault(); e.currentTarget.click();
+  }
+});
 $('btnKeys').onclick = applyKeys;
 loadKeys();
 

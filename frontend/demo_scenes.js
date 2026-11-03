@@ -69,12 +69,37 @@ function _pub(mod) {
 }
 
 var DEMO_SCENES = {
+  judge_speaking: {
+    title: '法官主持 · 阶段播报',
+    note: '主持席展示当前阶段和系统台词，光环与声波循环；真实对局由播报队列驱动。',
+    public: _pub(function(p){
+      p._previewJudge = {t:'sys', s:'第 1 夜，天黑请闭眼。'};
+      p._ps = {seats:[]};
+    })
+  },
+  settings: {
+    kind: 'cover',
+    title: '对局设置（高级设置可展开）',
+    note: '人数、档位和 AI 性格；规则与 Key 默认收起。',
+    roles: DEMO_ROLES
+  },
+  ai_speaking: {
+    title: "AI 发言 · 动态表情",
+    note: "静音展示：眨眼、嘴部变化、轻微摇摆和声波循环；真实对局跟随播报开始与结束。",
+    public: _pub(function(p){
+      p.phase = 'discuss'; p.night_node = null; p.night_plan = [];
+      p.current_speaker = 1;
+      p._previewSpeech = { t: 'say', seat: 1 };
+      p.now = { kind: 'none', need: null, started: false };
+      p._ps = { seats: [] };
+    })
+  },
 
   /* 封面（开局前唯一那扇门）：人数 / 座次 / 档位 / 性格 / 规则开关 / key
      + 继续上一局 + 榜单入口。kind=cover 特殊分支：不进牌桌，走真实 boot()。 */
   cover: {
     kind: "cover",
-    title: "封面（开局配置 + 继续上一局）",
+    title: "开场页（开始游戏 + 继续上一局）",
     note: "真实 boot()：rules/settings/keys 全由 mock 提供；并伪造一个活着的局号，让「继续上一局」也出现在画面里。",
     roles: DEMO_ROLES
   },

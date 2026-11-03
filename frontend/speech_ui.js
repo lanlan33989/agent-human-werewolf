@@ -261,7 +261,7 @@ async function speakQueue(){
       if (!_loc && VOICE_STREAM){
         try {
           sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent(txt)
-                               + (voice ? ('&voice=' + encodeURIComponent(voice)) : ''));
+                               + (voice ? ('&voice=' + encodeURIComponent(voice)) : ''), {onAnalyser:function(a){ PORTRAIT_ANALYSER = a; }});
           SPEAK_STREAM = sp;
           await sp.promise;
           SPEAK_STREAM = null;
@@ -442,3 +442,9 @@ function nightReady(need){
   if (j < 0) return voicedUp();       /* 老局没有 stage 标 ⇒ 整队门兜底 */
   return SPOKEN > j;
 }
+
+function playedCount(){
+  if (!VOICE_ON || PAUSED) return (PUBLIC && PUBLIC.timeline || []).length;
+  return SPOKE_DONE ? Math.max(0, SPOKE_DONE.idx + (SPOKE_DONE.at > 0 ? 1 : 0)) : 0;
+}
+function audioCaughtUp(){ return !VOICE_ON || PAUSED || (!SPEAKING && playedCount() >= (PUBLIC && PUBLIC.timeline || []).length); }

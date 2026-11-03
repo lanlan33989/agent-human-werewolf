@@ -32,6 +32,13 @@ function paintBig(){
      当场清空。用户看到的就是"结果窗口在、字没了"（或干脆以为没弹）。
      结果只由 showPrivateResult / 点圆心收回，播报不许覆盖。 */
   if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') return;
+  var host = $('hostPanel');
+  if (host) host.classList.remove('on', 'broadcasting', 'thinking');
+  $('tablewrap').classList.remove('host-mode');
+  bc.classList.remove('ai-speaking');
+  bc.removeAttribute('data-persona');
+  bc.setAttribute('role', 'button');
+  bc.tabIndex = SPK_MODE || (typeof WHEEL !== 'undefined' && WHEEL.mode) ? 0 : -1;
   if (SPK_MODE){
     bc.classList.remove('talking');
     /* ★ 2026-10-29：**这里不再写「N（人）」**。那句话原来每播一句就被
@@ -43,7 +50,7 @@ function paintBig(){
     paintNumberGlow();
     return;
   }
-  var l = CUR_LINE;
+  var l = CUR_LINE || (typeof DEMO !== 'undefined' && DEMO && PUBLIC && PUBLIC._previewSpeech);
   /* 说话的人从两处取：正在播的那条 say（最准，含遗言），以及服务端的
      `current_speaker` / `lastword_seat`。后者是兜底 —— AI 那句话播完之后
      CUR_LINE 会清空，可这一回合还没结束，大圆不该退回"法官"。 */
@@ -58,16 +65,29 @@ function paintBig(){
        之间跳 —— 那两条都是**发言屏**（人类自己的麦）的文案，AI 回合本不该出现。
        现在统一成一句人话：谁在说就写谁。`.talking` 负责把"法官"标题藏掉、
        把字号收到圆盘里（详见 play.html 那段 CSS）。 */
+    var isAI = kindOf(sp) === 'ai';
     bc.classList.add('talking');
+    bc.classList.toggle('ai-speaking', isAI);
+    if (isAI) bc.setAttribute('data-persona', String(sp % 6));
     who.textContent = (sp + 1) + '号正在发言中';
-    icon.textContent = '💬';
+    /* ★ 前端交付物（黄子凡）：AI 发言时大圆换人物立绘+声波动效；
+       轮询会反复 paintBig，复用人物节点避免每 200ms 重置嘴型动画。 */
+    if (isAI){
+      if (!icon.querySelector('.portrait-art')){
+        icon.innerHTML = '<span class="portrait-art" aria-hidden="true"></span><span class="voice-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>';
+      }
+    } else {
+      icon.textContent = '💬';
+    }
     moveDotCursor();
     paintNumberGlow(sp);          /* 用「大圆正在演的那个人」高亮，别再去问引擎当前轮到谁 */
     return;
   }
   bc.classList.remove('talking');
   who.textContent = '';                       /* 法官说话时大圆就是法官本尊 */
+  $('bigTitle').textContent = '法官';
   icon.textContent = '⚖️';
+  renderHost(l);
   moveDotCursor();
   paintNumberGlow();
 }
@@ -120,6 +140,27 @@ function paintNumberGlow(who){
     if (who === null) bs[i].classList.remove('speaking');
     else bs[i].classList.toggle('speaking', no === who + 1);
   }
+}
+
+/* 主持席只展示系统播报与公开阶段，不读取座位私有视图。 */
+function renderHost(line){
+  var host = $('hostPanel'), p = typeof PUBLIC !== 'undefined' && PUBLIC;
+  if (!host || !p || SPK_MODE || (typeof WHEEL !== 'undefined' && WHEEL.mode)) return;
+  var preview = typeof DEMO !== 'undefined' && DEMO && p._previewJudge;
+  var sys = line && line.t === 'sys' ? line : preview;
+  var ended = p.phase === 'ended' && audioCaughtUp();
+  var thinking = !sys && !ended && p.phase !== 'night' && p.pending === 'working';
+  var phases = {night:'夜晚',discuss:'白天 · 发言',lastword:'出局 · 遗言',day:'白天',vote:'白天 · 投票',shoot:'猎人行动',ended:'本局结束'};
+  $('hostPhase').textContent = (p.phase === 'night' ? '第 ' + p.round + ' 夜' : '第 ' + p.round + ' 轮') + ' / ' + (p.phase === 'ended' && !ended ? '收尾播报' : (phases[p.phase] || '对局进行中'));
+  $('hostTitle').textContent = ended ? (p.winner === 'wolf' ? '狼人胜利' : '好人胜利') : sys ? 'AI 法官正在说话' : thinking ? '玩家正在思考' : '等待下一环节';
+  $('hostLine').textContent = ended ? '真相揭晓，感谢每一位同桌玩家。' : sys ? sys.s : thinking ? '有人还在琢磨线索，稍等片刻。' : p.phase === 'night' ? '夜间流程进行中，请跟随法官指引。' : '正在衔接下一环节，请稍候。';
+  $('hostHint').textContent = ended ? '可在下方查看本局战报' : thinking ? '轮到你时，操作按钮会自动出现' : '请将手机放在桌子中央';
+  host.classList.add('on');
+  host.classList.toggle('broadcasting', !!sys && !ended);
+  host.classList.toggle('thinking', thinking);
+  $('tablewrap').classList.add('host-mode');
+  $('bigCircle').setAttribute('role', 'presentation');
+  $('bigCircle').tabIndex = -1;
 }
 
 /* ---------------------------------------------------------- 座位小圆（2026-10-02 用户追加） */
@@ -355,6 +396,8 @@ async function tick(){
   renderLog();           /* 顶部标题栏已删（2026-10-05）：板子构成等公有信息由 renderLog 画进日志区 */
   speakQueue();
   if (PUBLIC.phase === 'ended'){
+    closeSpeakerMode(); closeHandoff();
+    if (!audioCaughtUp()){ foot('请听完最后的播报…'); setTimeout(tick, 250); return; }
     foot('本局结束：' + (PUBLIC.winner === 'wolf' ? '狼人胜利' : '好人胜利'));
     /* ★ 2026-10-28（用户定）：法官念完「游戏结束，狼人/好人胜利」后弹终局框。
        显隐与时机全在 renderEndPop()（play.html）里，这里只负责每拍喂一次 ——
@@ -598,7 +641,7 @@ async function tick(){
           && isSpeakOnly(top)){
         /* 2026-10-02 用户定：发言回合**不走交接卡片**（取消半透明黑屏）——
            大圆显示「N号玩家（人类）」，点一下开始、再点一下结束。 */
-        if (SPK_MODE !== top.seat + 1){ closeSpeakerMode(); enterSpeakerMode(top); }
+        if (!BUSY && SPK_MODE !== top.seat + 1){ closeSpeakerMode(); enterSpeakerMode(top); }
       } else {
         closeSpeakerMode();
         /* 狼刀共屏（2026-10-06 晚用户定）：夜里有多个人类狼都有 kill 待办时，
@@ -632,7 +675,7 @@ async function tick(){
             foot('夜间流程进行中：' + (NIGHT_NAME[PUBLIC.night_node] || PUBLIC.night_node)
                  + _prog + '（读秒不可跳过）');
           } else {
-            foot('AI 正在想…（人多的时候要等一会儿）');
+            foot('请稍候，下一位玩家马上就来');
           }
         }
       }
@@ -699,6 +742,8 @@ async function tick(){
 
 /* 这一局在服务端没了：别静默冻住，明确告诉玩家并给一条出路 */
 function lostGame(){
+  if ($('hostPanel')) $('hostPanel').classList.remove('on');
+  $('tablewrap').classList.remove('host-mode');
   /* 这一局在服务端已经没了（404）：锚点先清掉，否则封面会挂一个"接不回"的按钮。
      （2026-10-01：接回按钮是新增的出口，这条路径必须跟着一起收拾干净。） */
   localStorage.removeItem('tt.gid');
@@ -1161,6 +1206,8 @@ function paintDialKnives(v){
 }
 
 function renderNightDial(seatNo, v, acts){
+  if ($('hostPanel')) $('hostPanel').classList.remove('on');
+  $('tablewrap').classList.remove('host-mode');
   var d = $('nightDial'), head = $('dialHead');
   d.innerHTML = '';
   var players = v.players || [];
@@ -1984,9 +2031,6 @@ function wheelModeIdle(){
   WHEEL.mode = null; WHEEL.act = null; WHEEL.pick = null;
   var bc = $('bigCircle');
   if (bc) bc.classList.remove('acting');
-  $('bigTitle').textContent = '法官';
-  $('bigIcon').textContent = '⚖️';
-  $('bigWho').textContent = '';
   renderWheelBase();
   /* ★ 2026-10-29：收完面板要**交还给"谁在说话"** —— 否则每个 tick 的
      closeHandoff() 都会把大圆清成空的（AI 发言那一段大圆就一直空着，
@@ -2078,6 +2122,8 @@ function showSeerResultScreen(){
 var SEER_LAST = null;          /* {seatNo, targetNo, wolf} */
 var SEER_BIG_TIMER = null;
 function resetSeerBig(){
+  if ($('seerResult')) $('seerResult').hidden = true;
+  $('tablewrap').classList.remove('seer-result-mode');
   /* 🔴 2026-10-12：拨号盘上的 👍/👎 也要还原成号码 —— 由「预言家请闭眼」
      播报（bug3 的 seer_close 挂钩）触发，与用户"闭眼就大拇指消失"对齐。 */
   if (SEER_LAST && SEER_LAST.targetNo != null){
@@ -2094,6 +2140,7 @@ function resetSeerBig(){
   if (el){ el.className = ''; el.textContent = ''; }
 }
 function showSeerBig(){
+  if (SEER_LAST){ renderSeerResult(); return; }
   var el = $('seerBig');
   if (!el || !SEER_LAST) return;
   el.textContent = SEER_LAST.wolf ? '坏' : '好';
@@ -2104,14 +2151,27 @@ function showSeerBig(){
   }, 3000);
 }
 
+function renderSeerResult(){
+  if (!SEER_LAST) return;
+  $('seerTarget').textContent = SEER_LAST.targetNo + ' 号玩家';
+  $('seerVerdict').textContent = SEER_LAST.wolf ? '狼人' : '好人';
+  $('seerSymbol').textContent = SEER_LAST.wolf ? '👎' : '👍';
+  $('seerResult').dataset.verdict = SEER_LAST.wolf ? 'wolf' : 'good';
+  $('seerResult').hidden = false;
+  $('tablewrap').classList.add('seer-result-mode');
+  WHEEL.act = 'done';
+}
+
 /* 提交期间把浮层里所有按钮按死。
    为什么必须有：真模型一句要 2~3 秒（慢的模型十几秒），
    玩家会忍不住再点一次「说这句」—— 那一次发言就被提交了两遍。
    2026-09-15 用真模型走查时抓到（mock 下请求瞬间返回，露不出来）。 */
 function setBusy(on){
   BUSY = on;
+  $('tablewrap').classList.toggle('submitting', on);
+  $('tablewrap').setAttribute('aria-busy', String(on));
   /* 轮盘元素分散在四块：兜底条 / 号码刻度 / ✓✕ / 补充入口 —— 全部要按死 */
-  var sels = ['#handoff button', '#hoActs button', '#wheelBtns button', '#wheelExtra button'];
+  var sels = ['#handoff button', '#hoActs button', '#wheelBtns button', '#wheelExtra button', '#nightDial button'];
   for (var k = 0; k < sels.length; k++){
     var bs = document.querySelectorAll(sels[k]);
     for (var i = 0; i < bs.length; i++) bs[i].disabled = on;
@@ -2121,6 +2181,7 @@ function setBusy(on){
 async function submit(seatNo, action, target, text){
   if (BUSY) return;
   setBusy(true);
+  if (action === 'speak') closeSpeakerMode();
   var body = { seat: seatNo - 1, action: action };
   /* ⚠️ target 的 1 基 → 0 基换算。**-1 必须原样通过**（2026-10-05 修）：
      -1 是「空刀」这类特殊值（data-target="-1"），减 1 就成了 -2 ⇒
@@ -2131,7 +2192,7 @@ async function submit(seatNo, action, target, text){
   try {
     /* 引擎要在这一请求里把 AI 的回合跑完（真模型可能要几十秒），
        所以先把话说明白 —— 否则界面看着像卡死了。 */
-    handoffMsg('AI 正在想…（真模型一句可能要几十秒）');
+    handoffMsg('已收到，正在等待下一步…');
     var d = await api('/api/game/' + GID + '/act', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2227,7 +2288,16 @@ async function submit(seatNo, action, target, text){
       setTimeout(tick, 300);
       return;
     }
-    closeHandoff();
+    if (action === 'decline_heal'){
+      closeHandoff();
+      foot('已选择不救，等待毒药环节');
+    } else if (action === 'kill' && PUBLIC.phase === 'night'){
+      MYVIEW = await api('/api/game/' + GID + '/seat/' + (seatNo-1));
+      renderNightDial(seatNo, MYVIEW, MYVIEW.can_act || ['kill']);
+      WHEEL.pick = target;
+      var chosen = $('nightDial').querySelector('button[data-no="'+target+'"]');
+      if(chosen){chosen.classList.add('sel');chosen.textContent='🔪 '+target;}
+    } else closeHandoff();
     setTimeout(tick, 300);
   } catch (e) {
     handoffMsg('这一步没被接受：' + e.message, true);
@@ -2503,3 +2573,37 @@ $('bigCircle').onclick = function(){
   };
   typeBtn.oncontextmenu = function(e){ e.preventDefault(); return false; };
 })();
+
+/* Continuous audio envelope: the head stays still; only local lip layers blend. */
+var PORTRAIT_ANALYSER = null, LIP_RAF = null;
+function startLipMotion(){
+  if (LIP_RAF) return;
+  var envelope = 0, samples = new Float32Array(512), bins = new Uint8Array(256);
+  function draw(t){
+    var el = document.querySelector('#bigIcon .portrait-art');
+    if (!el){ LIP_RAF = null; return; }
+    var rms = 0, brightness = 0;
+    if (PORTRAIT_ANALYSER){
+      PORTRAIT_ANALYSER.getFloatTimeDomainData(samples);
+      for(var i=0;i<samples.length;i++) rms += samples[i]*samples[i];
+      rms = Math.sqrt(rms/samples.length);
+      PORTRAIT_ANALYSER.getByteFrequencyData(bins);
+      var low=0,high=0;
+      for(var j=0;j<bins.length;j++){ if(j<30) low+=bins[j]; else high+=bins[j]; }
+      brightness = high/(low+high+1);
+    } else if (typeof DEMO !== 'undefined' && DEMO && PUBLIC._previewSpeech){
+      /* Silent preview only. Real games stay closed until audio is available. */
+      rms = Math.max(0,Math.sin(t/173)*Math.sin(t/71))*.12;
+      brightness = (Math.sin(t/431)+1)*.3;
+    }
+    var target = Math.min(.85, Math.max(0,(rms-.009)*8));
+    envelope += (target-envelope)*(target>envelope?.38:.18);
+    var round = Math.max(0,Math.min(1,(.45-brightness)*3));
+    var contact = brightness>.58 ? .35 : 0;
+    el.style.setProperty('--lip-open', (envelope*(1-round)*(1-contact)).toFixed(3));
+    el.style.setProperty('--lip-round', (envelope*round).toFixed(3));
+    el.style.setProperty('--lip-contact', (envelope*contact).toFixed(3));
+    LIP_RAF = requestAnimationFrame(draw);
+  }
+  LIP_RAF = requestAnimationFrame(draw);
+}
