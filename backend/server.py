@@ -451,6 +451,33 @@ def _asset(name: str, media: str) -> Response:
                     media_type=media, headers=NO_STORE)
 
 
+def _asset_bytes(name: str, media: str) -> Response:
+    """二进制资源（图片等）。_asset 只收 UTF-8 文本，图片必须走这里。"""
+    return Response((FRONTEND / name).read_bytes(),
+                    media_type=media, headers=NO_STORE)
+
+
+# ---- AI 座位人物立绘（前端交付 2026-11-02 的三张雪碧图；不补路由就是 404，
+#      表现为大圆在 AI 发言时看不到形象 —— 即「铁律 3：一文件一路由」） ----
+
+@app.get("/player-portraits-v2.png")
+def player_portraits_v2() -> Response:
+    """AI 座位人物立绘雪碧图（六人 × 基础表情网格）。"""
+    return _asset_bytes("player-portraits-v2.png", "image/png")
+
+
+@app.get("/player-portraits-speaking-v2.png")
+def player_portraits_speaking_v2() -> Response:
+    """AI 座位人物立绘·开口说话帧（portraitSpeech 动画用）。"""
+    return _asset_bytes("player-portraits-speaking-v2.png", "image/png")
+
+
+@app.get("/player-visemes-v3.png")
+def player_visemes_v3() -> Response:
+    """AI 座位人物立绘·口型帧（portraitArticulate 唇形合成雪碧图）。"""
+    return _asset_bytes("player-visemes-v3.png", "image/png")
+
+
 @app.get("/", include_in_schema=False)
 def index() -> Response:
     # 🔴 2026-10-23（用户："这几个页面全删了吧，非游戏画面，好几次拉起你就拉起这个"）：

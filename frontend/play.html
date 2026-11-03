@@ -1608,7 +1608,7 @@ function loadScript(src){
       return;
     } catch (e) { /* 那一局没了 ⇒ 老老实实留在封面 */ }
   }
-  show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */
+  show('welcome');        /* **永远从封面开始**（★ 合并修正 2026-11-03：后端版误写 show('p0')，刷新后直接落到对局设置页）；要接着上一局，就按上面的「继续上一局」 */
 })();
 
 $('btnRules').onclick = function(){ $('rulesDialog').showModal(); };

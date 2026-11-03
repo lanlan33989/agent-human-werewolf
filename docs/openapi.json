@@ -1142,6 +1142,57 @@
         }
       }
     },
+    "/player-portraits-v2.png": {
+      "get": {
+        "summary": "Player Portraits V2",
+        "description": "AI 座位人物立绘雪碧图（六人 × 基础表情网格）。",
+        "operationId": "player_portraits_v2_player_portraits_v2_png_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/player-portraits-speaking-v2.png": {
+      "get": {
+        "summary": "Player Portraits Speaking V2",
+        "description": "AI 座位人物立绘·开口说话帧（portraitSpeech 动画用）。",
+        "operationId": "player_portraits_speaking_v2_player_portraits_speaking_v2_png_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/player-visemes-v3.png": {
+      "get": {
+        "summary": "Player Visemes V3",
+        "description": "AI 座位人物立绘·口型帧（portraitArticulate 唇形合成雪碧图）。",
+        "operationId": "player_visemes_v3_player_visemes_v3_png_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/rec.js": {
       "get": {
         "summary": "Rec Js",

@@ -1346,13 +1346,24 @@ SPEECH_QUEUE_DEAD_GRACE = 60.0
 
 
 def _speech_queue_behind(self, cp: int) -> bool:
-    """回执游标是不是**一直没走到**真人那句开场白（AI/法官还在前面排队）。"""
+    """回执游标是不是**一直没走到**真人那句开场白（AI/法官还在前面排队）。
+
+    ★ 2026-11-03（用户实机：加时发言里 AI 说完，轮到真人时倒计时只剩不到 10 秒）：
+      游标停着的行可能是一段**很长的 AI 发言**——TTS 真实播放时常超过估算，
+      游标在它上面停 60 秒是**正常**的。宽限必须 ≥「当前这一行按估算播完的
+      时长 × 1.5」，否则长 AI 发言播到一半就被判"队列死了"，真人的 120 秒
+      从 AI 还在说话时就开始扣——AI 说得越久扣得越多，轮到真人只剩个位数。
+      队列真死了（这一行远超估算时长还没播完）仍会兜底放行，不会锁死对局。
+    """
     seen = getattr(self, "_sp_behind", None)
     if not seen or seen[0] != cp:
         self._sp_behind = (cp, time.monotonic())
         return False
-    return (time.monotonic() - seen[1]
-            > night_script._scaled(SPEECH_QUEUE_DEAD_GRACE))
+    _grace = night_script._scaled(SPEECH_QUEUE_DEAD_GRACE)
+    tl = self.timeline or []
+    if 0 <= cp < len(tl):
+        _grace = max(_grace, 1.5 * _line_play_secs(self, tl[cp]))
+    return (time.monotonic() - seen[1] > _grace)
 
 
 def _speech_clock(self, kind: str, seat: int) -> Optional[float]:

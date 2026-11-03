@@ -592,7 +592,8 @@ body{background:#080808;color:var(--ink);}
 #p0 .sw{color:var(--ink);font-size:14px;min-height:48px;}
 #p0 .sw input[type=checkbox]{accent-color:#bbb;}
 .planChip,.planChip.ph{background:var(--raised);border:1px solid #5b5650;color:var(--ink);border-radius:6px;}
-.planChip.ph::after{content:'·人';font-size:11px;}
+/* ★ 2026-11-03（用户）：去掉「·人」尾巴；AI 座位签字体改白（原 var(--ink) 深色看不清） */
+.planChip.pa{color:#fff;}
 .advanced-settings{border-color:#44403b;background:var(--surface);border-radius:8px;}
 .advanced-settings summary{color:var(--ink);}.advanced-settings summary span{font-size:12px;color:var(--muted);}
 #rulesLine,.leveldesc,.settings-back{color:var(--muted);}
