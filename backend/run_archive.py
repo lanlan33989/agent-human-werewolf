@@ -250,7 +250,12 @@ class Archive:
             rnd = None
             seq = 0
             for it in (getattr(sess, "timeline", None) or []):
-                t = str(it.get("text") or "")
+                # ★ 2026-11-01（用户实机：timeline.jsonl 每行全是空串/null）：
+                #   运行时时间线的键是 `t`（类型）/ `s`（文本），而这里过去读的是
+                #   `type` / `text`（给**导出格式**用的名字）⇒ 每行都取空。
+                #   两边命名不同没关系，读存档这一侧必须按运行时口径取，另留旧键兜底。
+                t = str(it.get("s") if it.get("s") is not None
+                        else (it.get("text") or ""))
                 m = re.search(r"第\s*(\d+)\s*夜", t)
                 if m:
                     rnd = int(m.group(1))
@@ -264,7 +269,7 @@ class Archive:
                     "round": rnd, "seq": seq,
                     "seat": seat,
                     "is_ai": kinds.get(seat) == "ai" if seat is not None else None,
-                    "type": it.get("type"),
+                    "type": it.get("t") if it.get("t") is not None else it.get("type"),
                     "text": t,
                     "target": it.get("target"),
                     "claimed_role": None,   # 发言里自称什么身份属人工判读口径
@@ -277,8 +282,10 @@ class Archive:
             result = {
                 "gid": self.gid, "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "winner": getattr(g, "winner", None),
-                "rounds": getattr(g, "day", None),
-                "seed": getattr(g, "seed", None),
+                # ★ 2026-11-01：Game 的轮次属性叫 `round`（`g.day` 不存在 ⇒ 恒 null）。
+                "rounds": getattr(g, "round", None),
+                # 种子在 Session 上（Game 没有 seed 属性 ⇒ 以前恒 null）；与 meta 同源。
+                "seed": getattr(sess, "seed", None),
                 "version": version_tag(),
                 "deaths": replay.get("deaths"),
                 "votes": replay.get("votes"),

@@ -30,6 +30,10 @@ def check(name, ok, detail=""):
 
 
 def play_to_end(sess, max_steps: int = 500) -> bool:
+    # ★ 2026-10-29（用户定：夜间点完**窗口不退出**、按时间结束时的选择为准）：
+    #   同一（座位, 节点）最多出手两次，第二次只允许「确认」—— 否则机器人会在
+    #   一个窗里反复点同一个号码，把 max_steps 烧光（窗口是按墙上时间走的）。
+    _done: dict = {}
     for _ in range(max_steps):
         g = sess.game
         if g.phase is Phase.ENDED:
@@ -48,10 +52,20 @@ def play_to_end(sess, max_steps: int = 500) -> bool:
             others = [q["seat"] for q in v["players"] if q["alive"] and q["seat"] != seat]
             pts = v.get("wolf_points") or {}
             pointed = pts.get(seat) is not None
+            _key = (seat, g.night.get("stage") if g.phase is Phase.NIGHT
+                    else g.phase.value)
+            _n = _done.get(_key, 0)
+            if _n >= 2 or (_n >= 1 and "confirm" not in acts):
+                sess.drive(0.05)
+                continue
+            _done[_key] = _n + 1
             if "speak" in acts:
                 sess.act(seat, "speak", None, "我先过。")
             elif "confirm" in acts and pointed:
                 sess.act(seat, "confirm", None, None)
+            elif "confirm" in acts and "investigate" in acts:
+                # ★ 2026-10-29：预言家点完人还要点「确认」，确认这一刻才报结果
+                sess.act(seat, "seer_confirm", None, None)
             elif "vote" in acts and others:
                 sess.act(seat, "vote", others[0], None)
             elif "kill" in acts and others:

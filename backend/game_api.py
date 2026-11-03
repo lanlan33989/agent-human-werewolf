@@ -30,7 +30,7 @@ import uuid
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -343,12 +343,31 @@ class Session:
         # AI 决策后台预跑池（2026-10-07 第二期，见 night_pre.PrePool）：
         #   _pre            当前相位的池（每夜 / 每轮投票各换一个新池）
         #   _pre_round      夜池属于哪一夜（换夜即换池）
-        #   _pre_vote_round 投票池属于哪一轮
+        #   _pre_vote_key   投票池属于哪一次投票 —— `(轮次, 加时阶段)`。
+        #                   2026-10-28 从 `_pre_vote_round` 改过来：平票加时是
+        #                   **同一天里的第二次投票**，只按轮次做键会收割到第一轮的票。
         #   _vote_grace_at  「所有该投的人类都投完了」的时刻（5s 弃票兜底计时）
         self._pre = None
         self._pre_round = None
-        self._pre_vote_round = None
+        self._pre_vote_key = None
         self._vote_grace_at = None
+        # 昼夜交替门（2026-10-31）：前端每次 /public 用 X-Played 上报
+        # 已播完的时间线行数；翻相位（入夜 / 天亮）前必须追平。
+        self.client_seen = False
+        self.client_played = -1
+        self.client_poll_at = 0.0
+        self._phase_gate = None
+
+    def note_client_played(self, n: int) -> None:
+        """前端上报已播完的行数（X-Played）；昼夜交替门读它。"""
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return
+        self.client_seen = True
+        self.client_poll_at = time.monotonic()
+        if n > self.client_played:
+            self.client_played = min(n, len(self.timeline))
 
     def _harvest(self):        return night_driver._harvest(self)
     def drive(self, budget=1.5):
@@ -361,6 +380,7 @@ class Session:
             pass
         return r
     def _announce_speaker(self, seat):        return speech_io._announce_speaker(self, seat)
+    def _announce_lastword(self, seat):       return speech_io._announce_lastword(self, seat)
     def _flush_log(self):        return speech_io._flush_log(self)
     def _round_speech(self, g):        return speech_io._round_speech(self, g)
     def _say(self, text, seat=None, spoken=None, card=None):        return speech_io._say(self, text, seat, spoken, card)
@@ -416,6 +436,10 @@ class Session:
                 # 在外部（harness / 排查）就观察不到。见 `_smoke-night-live.py` 的 I9。
                 return {"kind": "none", "seat": None, "node": cur, "until": None,
                         "need": None, "why": "这一节没有人类要点",
+                        # ★ 2026-10-29：`closing` = 这个节点的**闭眼句还在念**
+                        #   （窗口已关、节点还没推进）。前端据此把面板留到那句话
+                        #   念完再收 —— 用户要的是"喊完『守卫请闭眼』才退出窗口"。
+                        "closing": (getattr(self, "_nn_closing", None) or {}).get("node"),
                         "started": getattr(self, "human_wait_since", None) is not None}
             # 🔴 2026-10-07 第四起（用户实机："倒计时节点开始过早，没按我一开始约定的来"）：
             #    **定稿口径 = 倒计时从"法官念完该角色那句 + 2 秒"起算**
@@ -426,7 +450,6 @@ class Session:
             #    ⚠️ 这一条**不会**再把窗口憋死：面板已经不依赖音频了（上一轮修的），
             #    所以前端一定会把 arm 送来（语音关掉 / 队列卡住时它也会兜底 arm）。
             armed = getattr(self, "human_wait_since", None) is not None
-            left = max(0.0, night_driver._nn_deadline(self, cur) - time.monotonic())
             # 🔴 2026-10-07 第十期（兑现"四时钟"账的音频半边）：
             #    `panel_line` = **时间线里本段那句的下标**（服务端算好下发）——
             #    前端"面板在该句念完之后开"就不再需要 nightNodeIdx/nightStageIdx
@@ -434,12 +457,17 @@ class Session:
             #    `lines_due` = 本段的播报行 + 各自 `not_before`（= at + delay，
             #    即"这句最早什么时候该开口"）—— 音频按它播，落后太多的直接跳过。
             tl = self.timeline or []
-            panel_line = next((i for i, x in enumerate(tl)
-                               if x.get("node") == cur), -1)
+            # 🔴 2026-10-31：只认**本夜**的那一条 —— 原来从头找第一条同名节点，
+            #   第二夜起命中的是第一夜的句子（`panel_line` 于是永远指向上半夜）。
+            #   前端的 arm 兜底/`_stalled` 拿它判"这句是不是正在播"，指错就会
+            #   在错误时点放行（面板抢跑或等不到），与 `_nn_ready_mono` 同源修复。
+            panel_line = night_driver._line_of_node(self, cur)
+            _tl0 = int(getattr(self, "_night_tl0", 0) or 0)
             lines_due = [{"i": i, "s": (x.get("s") or "")[:60],
                           "not_before": round((x.get("at") or 0)
                                               + (x.get("delay") or 0), 2)}
-                         for i, x in enumerate(tl) if x.get("node") == cur]
+                         for i, x in enumerate(tl) if i >= _tl0
+                         and x.get("node") == cur]
             # 🔴 v4（2026-10-22，参考队友局域网版架构）：
             #    `started` 不再只认客户端 arm —— 服务端按台词表**自己估算**
             #    "本节点那句播完 + 2s"（`_nn_ready_mono`），到点自动置真。
@@ -447,8 +475,24 @@ class Session:
             #    "真实播报比估算慢时延长窗口"的补充信号。
             _armed = armed
             _ready = night_driver._nn_ready_mono(self, cur)
-            _started = _armed or (_ready is not None
-                                  and time.monotonic() >= _ready)
+            # ★ 2026-11-02（用户实机："遗言没完、狼刀窗口先出来"）：
+            #   `started` 以前可以由**估算**置真 —— 估算不知道客户端队列里
+            #   还压着整段遗言/发言，于是"狼人请睁眼"还没念到，窗口就弹了。
+            #   现在有回执（新页面）时只认**真实播完本节点睁眼句**（+arm/锚点）；
+            #   老前端/失联页面才退回估算，保持"不锁死"。
+            _anchored = (getattr(self, "_nn_anchor_node", None) == cur
+                         and getattr(self, "_nn_anchor", None) is not None)
+            _started = (_armed or _anchored
+                        or (night_driver._nn_audio_done(self, cur, panel_line)
+                            if getattr(self, "client_seen", False)
+                            else (_ready is not None
+                                  and time.monotonic() >= _ready)))
+            # ★ 2026-11-01：`started` 第一次为真的这一拍才钉锚点 —— 前端正是拿
+            #   这一份响应渲染面板，倒计时从满窗 W 起走（语音关时 arm 早于渲染，
+            #   从 arm 起算会白扣一个轮询间隔，实测 29.1/30）。
+            if _started:
+                night_driver._nn_pin_window(self, cur)
+            left = max(0.0, night_driver._nn_deadline(self, cur) - time.monotonic())
             return {"kind": "wheel", "seat": pick["seat"], "node": cur,
                     "until": (time.time() + left) if left is not None else None,
                     # `until` 是**服务器墙钟**，前端拿它减本地 Date.now() —— 设备
@@ -458,15 +502,34 @@ class Session:
                     "started": _started, "need": pick, "why": "",
                     "panel_line": panel_line, "lines_due": lines_due}
 
-        if g.phase is Phase.DISCUSS:
-            sp = g.current_speaker()
+        if g.phase in (Phase.DISCUSS, Phase.LASTWORD):
+            # ★ 遗言（2026-10-28）：与发言**同一套界面**（kind 一样是 speak）——
+            #   前端的大圆发言屏本来就按 actions 里的 `speak` 渲染，
+            #   唯一的差别是"谁在说"（死人）以及提醒文案由后端播报承担。
+            _lw = g.phase is Phase.LASTWORD
+            sp = g.current_lastword() if _lw else g.current_speaker()
             pick = next((x for x in seats if x["seat"] == sp
                          and "speak" in (x.get("actions") or [])), None)
             if pick is None:
                 return {"kind": "none", "seat": None, "node": None, "until": None,
-                        "need": None, "why": "AI 发言中 / 等切换"}
-            return {"kind": "speak", "seat": sp, "node": None, "until": None,
-                    "need": pick, "why": ""}
+                        "need": None, "why": "AI 遗言中 / 等切换" if _lw
+                                            else "AI 发言中 / 等切换"}
+            # ★ 2026-10-28（用户定）：发言 120 秒上限 —— 剩余秒数照夜间那套口径下发
+            #   （`until_left` 免疫设备时钟差），前端只做减法显示。
+            #   到点由服务端替他把话结束（`_speech_guard`），前端不做裁决。
+            # ★ 2026-10-30（用户实机：「夜间还没结束就显示 4 号正在发言、倒计时在减」）：
+            #   新增 `started` —— 语义与夜间 wheel 的 `started` 完全一样：
+            #   **「N 号请发言」那句念完了没有**。服务端推进不等播报，
+            #   相位到了 DISCUSS 时法官可能还在念「天亮了」「昨夜 X 出局」。
+            #   前端拿到 started=false 就该继续显示法官、不画"X号正在发言中"、
+            #   不显示读秒 —— 否则视觉比听觉提前了十几秒。
+            _kind = "lastword" if _lw else "speak"
+            _started = night_driver._speech_started(self, _kind, sp)
+            _left = max(0.0, night_driver._speech_left(self, _kind, sp))
+            return {"kind": "speak", "seat": sp, "node": None,
+                    "until": time.time() + _left,
+                    "until_left": round(_left, 2), "started": _started,
+                    "need": pick, "why": "出局遗言（点大圆开始/结束）" if _lw else ""}
 
         if g.phase is Phase.VOTE:
             pick = next((x for x in seats if "vote" in (x.get("actions") or [])), None)
@@ -494,8 +557,13 @@ class Session:
         key = (g.round, tuple(sorted(roles)))
         if getattr(self, "_plan_key", None) != key:
             self._plan_key = key
+            _size = len(g.players)
+            # ★ 2026-10-30：`win` 必须走 `window_of`（狼刀按人数 30/60/90），
+            #   不能直接抄表里的兜底值 —— 表里狼刀写的是 20，前端若按它渲染
+            #   读秒就和真实窗口对不上（6 人局差 10 秒）。
             self._plan_cache = [
-                {"id": nd["id"], "say": nd["say"], "win": nd.get("win") or 0,
+                {"id": nd["id"], "say": nd["say"],
+                 "win": night_script.window_of(nd["id"], _size),
                  "gap": nd.get("gap") or 0, "close": nd.get("close"),
                  "close_gap": nd.get("close_gap") or 0}
                 for nd in night_script.build(roles, g.round)]
@@ -546,6 +614,21 @@ class Session:
             "public_log": list(g.public_log),
             "speech": list(self.speech),
             "timeline": list(self.timeline),
+            # ★ 2026-10-29（用户报「法官全部音效没了」的根因之一）：timeline 条目的
+            #   `at` 是**服务端**时间戳（time.time()），前端却拿本机 Date.now() 去减。
+            #   手机与电脑的时钟差一分钟以上时，前端会把每句法官台词判成"迟到 >60s"
+            #   而逐句丢弃 ⇒ 整局一句不念且无任何报错。下发服务端当前时刻，让前端
+            #   算出偏置（_SRV_SKEW）再比较。不是业务字段，纯时钟基准。
+            #   ⚠️ 字段名**不能**叫 `now` —— 上面那个 `now` 是"当前面板状态机"
+            #   （now_state()），同名会把整个界面打崩（dict 后者覆盖前者）。
+            "server_now": time.time(),
+            # ★ 2026-10-30（用户实机：第二夜起预言家验完人，结果屏一闪就没了）：
+            #   **本夜**「预言家请闭眼」那句在时间线里的下标（-1 = 本夜还没播到）。
+            #   前端原来用 nightNodeIdx 从头找第一条 —— 第二夜起命中的是第一夜的
+            #   下标，于是"已经念完"恒成立，结果屏刚摊开就被收掉。
+            #   时间线是全局长度，只有服务端知道哪一条属于**这一夜**。
+            "seer_close_line": (night_driver._line_of_node(self, "seer_close")
+                                if g.phase is Phase.NIGHT else -1),
             "players": [
                 {"seat": p.seat, "display": p.display, "lives": p.lives,
                  "alive": p.alive, "kind": p.kind}
@@ -553,6 +636,11 @@ class Session:
             ],
             "speaking_order": list(g.speaking_order),
             "current_speaker": g.current_speaker(),
+            # ★ 遗言（2026-10-28）：正在留遗言的人（不在遗言相位时是 None）。
+            # `pending` 在遗言里也是 "human_speak"（前端发言屏不用改），
+            # 但那一刻 `current_speaker` 是 None —— 消费方（harness / 排查）
+            # 必须能从这儿拿到人，否则会对着 None 去提交。
+            "lastword_seat": g.current_lastword(),
             # 投票时序（单机形态的关键）：手机是「交接」给投票人的，
             # 所以投票**进行中**绝不能给出票型 —— 递过去的一瞬间就破坏了投票独立性
             # （看得到别人的票就能跟随或反制）。
@@ -565,6 +653,11 @@ class Session:
             # 下一轮 open_vote() 会清空 g.votes，所以「进行中」天然拿不到上一轮的票。
             "voted_seats": sorted(g.votes.keys()) if g.phase is Phase.VOTE else [],
             "votes": {} if g.phase is Phase.VOTE else dict(g.votes),
+            # ★ 2026-10-28（用户定）：界面底部「票型框」的数据源。
+            #   2026-10-31：法官恢复口语版票型播报，票型框同步显示紧凑版（两者并存）。
+            #   `lines` 就是直接显示的行，形如 "2，3→5"；加时结算后换成加时那一轮。
+            #   可见性纪律由 engine.vote_board() 保证 —— 投票进行中它拿不到本轮票型。
+            "vote_board": g.vote_board(),
             "pending": self.pending,
             # 这一局是哪一档（娱乐/认真/硬核/地狱）。界面显示用；将来的战报和
             # 六维指标也必须按档分组 —— 不分档的胜率没有意义（不同档的 AI 不是一回事）。
@@ -636,9 +729,11 @@ class Session:
         v["timeline"] = list(self.timeline)
         v["pending"] = self.pending
         v["is_my_turn_to_speak"] = (self.game.current_speaker() == seat)
+        # ⚠️ 用 can_vote 而不是 alive（2026-10-28 修）：平票加时里**平票的人不投票**，
+        #    翻牌的白痴也不投票 —— 只看 alive 会给这两类人亮出"轮到你投票"。
         v["is_my_turn_to_vote"] = (
             self.game.phase is Phase.VOTE and seat not in self.game.votes
-            and self.game.player(seat).alive
+            and self.game.can_vote(seat)
         )
         return v
     def auto_advance(self, max_steps=300, deadline=None):        return night_driver.auto_advance(self, max_steps, deadline)
@@ -648,6 +743,7 @@ class Session:
     def _advance_exile(self):        return night_driver._advance_exile(self)
     def _advance_dawn(self):        return night_driver._advance_dawn(self)
     def _advance_discuss(self):        return night_driver._advance_discuss(self)
+    def _advance_lastword(self):        return night_driver._advance_lastword(self)
     def _advance_vote(self):        return night_driver._advance_vote(self)
     def _night_done(self):        return night_driver._night_done(self)
     def _run_one_ai_night(self):        return night_driver._run_one_ai_night(self)
@@ -659,7 +755,8 @@ class Session:
     def _ai_wolf_maybe_follow(self, seat):        return ai_behaviors._ai_wolf_maybe_follow(self, seat)
     def _ai_guard_act(self, seat):        return ai_behaviors._ai_guard_act(self, seat)
     def _ai_witch_act(self, seat):        return ai_behaviors._ai_witch_act(self, seat)
-    def _ai_speak(self, seat):        return ai_behaviors._ai_speak(self, seat)
+    def _ai_witch_poison(self, seat):        return ai_behaviors._ai_witch_poison(self, seat)
+    def _ai_speak(self, seat, lastword=False):        return ai_behaviors._ai_speak(self, seat, lastword)
     def _all_voted(self):        return night_driver._all_voted(self)
     def _run_one_ai_shoot(self):        return ai_behaviors._run_one_ai_shoot(self)
     def _pick_ai_target(self, seat, kind):        return ai_behaviors._pick_ai_target(self, seat, kind)
@@ -706,11 +803,20 @@ class Session:
             raise ValueError(f"{p.display} 是 AI，不能手动操作")
 
         if action == "speak":
-            if g.current_speaker() != seat:
-                raise ValueError("还没轮到你发言")
-            body = (text or "").strip() or "（过）"
-            self._say(f"{p.display}：{body}", seat, body)
-            g.end_speech()
+            # ★ 遗言（2026-10-28）：与发言**同一个动作名**（前端发言屏不用改），
+            #   只是发言人和"说完轮到谁"换成了遗言队列。
+            if g.phase is Phase.LASTWORD:
+                if g.current_lastword() != seat:
+                    raise ValueError("还没轮到你留遗言")
+                body = (text or "").strip() or "（过）"
+                self._say(f"{p.display}：{body}", seat, body)
+                g.end_lastword()
+            else:
+                if g.current_speaker() != seat:
+                    raise ValueError("还没轮到你发言")
+                body = (text or "").strip() or "（过）"
+                self._say(f"{p.display}：{body}", seat, body)
+                g.end_speech()
 
         elif action == "vote":
             if target is None:
@@ -721,18 +827,39 @@ class Session:
             if target is None:
                 raise ValueError("刀人需要 target")
             # 多狼局里这是「点一个人」（提议），不是定案；单狼局点即定案。
-            # target = -1 表示空刀提议，target == seat 表示自刀 —— 两者都合法（面杀本来就有）。
+            # target = -1 表示空刀提议；target == seat 表示自刀 —— 两者都合法。
             g.night_kill(seat, target)
-
-        elif action == "confirm":
-            # 狼队协商的第二步：确认自己当前的点。全员（含人类狼）都确认后由引擎定案。
-            # 它必须是一个**显式动作**：不确认就等于没表态，刀口定不下来、夜晚结束不了。
-            g.night_confirm(seat)
 
         elif action == "investigate":
             if target is None:
                 raise ValueError("验人需要 target")
+            # ★ 2026-10-29（用户定）：这一步只是"我看的是谁"，**先不报结果** ——
+            #   窗口内还能改点数。报结果发生在确认那一刻（`confirm`/`seer_confirm`）。
             g.night_investigate(seat, target)
+
+        elif action in ("confirm", "seer_confirm"):
+            # ⚠️ 动作名要**按角色分派**（2026-10-29）：`_actions_available` 对狼和
+            #   预言家发的都是同一个 "confirm"（界面上是同一个"确认键"的两种文案），
+            #   所以接口必须认这一个名字、再看是谁按的 —— 否则人类预言家一点确认
+            #   就撞 `PermissionError: 不是狼人，不能确认刀口`。
+            #   `seer_confirm` 这个显式写法也收（前端与脚本都可以用），意思一样。
+            _p_seat = self.game.player(seat)
+            if action == "seer_confirm" or _p_seat.role is Role.SEER:
+                g.night_seer_confirm(seat)
+                if not g.night.get("seer_result_spoken"):
+                    g.night["seer_result_spoken"] = True
+                    # ⚠️ 带 node="seer_result"：前端的结果屏就是靠这个 node 的门放行的，
+                    #   而真正的 `seer_result` 节点稍后开时看到这个旗子就不再念第二遍
+                    #   （否则全场会听见两次"他是这个"）。
+                    self.timeline.append({"t": "sys", "s": "他是这个",
+                                          "voice": JUDGE_VOICE,
+                                          "delay": speech_io.NIGHT_GAP,
+                                          "stage": "seer_result", "node": "seer_result",
+                                          "at": time.time()})
+            else:
+                # 狼队协商的第二步：确认自己当前的点。全员（含人类狼）都确认后由引擎定案。
+                # 它必须是一个**显式动作**：不确认就等于没表态，刀口定不下来、夜晚结束不了。
+                g.night_confirm(seat)
 
         elif action == "heal":
             if target is None:
@@ -1080,7 +1207,9 @@ def _pending_seats_of(s) -> Dict[str, Any]:
             continue
         # ⚠️ 不能一律跳过死人：**要开枪的猎人刚刚死了**（SHOOT 相位里他还有一个动作要做）。
         #    一律跳过 ⇒ 前端永远收不到"该把手机交给 X 号" ⇒ 卡死在 human_shoot。
-        if not p.alive and g.phase is not Phase.SHOOT:
+        #    ★ 2026-10-28 同理再补一处：**遗言是死人在说话**（LASTWORD 相位）——
+        #    跳过死人会让"人类出局者的遗言"永远轮不到他，整局卡在遗言相位。
+        if not p.alive and g.phase not in (Phase.SHOOT, Phase.LASTWORD):
             continue
         acts = g.actions_for(p.seat)
         # 2026-10-07 剧本节拍：女巫的窗口不因"药已用"消失（防泄露）——
@@ -1128,7 +1257,8 @@ def pending_seats(gid: str) -> Dict[str, Any]:
 
 
 @router.get("/{gid}/public")
-def public(gid: str) -> Dict[str, Any]:
+def public(gid: str,
+           x_played: Optional[int] = Header(None, alias="X-Played")) -> Dict[str, Any]:
     """
     ⚠️ 这是**唯一会推进状态机的 GET** —— 它会替 AI 干活（最多 POLL_BUDGET 秒）。
 
@@ -1136,8 +1266,16 @@ def public(gid: str) -> Dict[str, Any]:
     如果只有 POST /act 才推进，那 13 人局会有几十秒完全没反应。
     让它在这里推，开局就能立刻返回、桌面自己长出来。
     （`pending == "working"` 就表示"还在推进"，前端照常继续轮询即可。）
+
+    `X-Played`（2026-10-31）：前端已播完的时间线行数。昼夜交替门用它确认
+    上一相位的最后一句真的念完了，才允许翻到下一相位；没有这个头（老前端/
+    无头测试）时门直接放行，行为与以前一致。
     """
     s = _get(gid)
+    # 直接调用（进程内评测 / 测试）时默认值仍是 Header 对象，不是 int ⇒ 用类型判定，
+    # 别让“没有 HTTP 头”变成一次 TypeError。
+    if isinstance(x_played, int) and x_played >= 0:
+        s.note_client_played(x_played)
     s.drive(POLL_BUDGET)
     return s.public_state()
 

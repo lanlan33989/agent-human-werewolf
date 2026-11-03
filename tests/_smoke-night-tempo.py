@@ -16,6 +16,11 @@
 用法（在 h5 目录下）：
     ./.venv/Scripts/python.exe tests/_smoke-night-tempo.py
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import os
 import sys
 import time
@@ -80,8 +85,14 @@ def first_night(tl):
     return out
 
 
-def until_dawn(sess, cap_s: float = 150.0) -> None:
-    """推到「天亮了」那句出现（= 第一夜走完）。"""
+def until_dawn(sess, cap_s: float = 240.0) -> None:
+    """推到「天亮了」那句出现（= 第一夜走完）。
+
+    ⚠️ 2026-10-30：上限从 150s 抬到 240s —— **12 人局的狼刀窗口是 90 秒**
+    （`WOLF_WIN_BY_SIZE`：6 人 30s / 9 人 60s / 12 人 90s，2026-10-28 用户定），
+    整夜理论时长 = 守卫 15 + 狼刀 90 + 女巫 2×15 + 预言家 15+15 ≈ 165s，
+    原来那个 150s 的上限**必然**在预言家段之前就把循环掐断 ⇒
+    「他是这个 / 预言家请闭眼 / 天亮了」三条全是 None。不是被测行为变了。"""
     t0 = time.monotonic()
     while time.monotonic() - t0 < cap_s:
         if any(str(x.get("s", "")).startswith("天亮了") for x in sess.timeline):
@@ -95,8 +106,9 @@ print("=" * 74)
 print("① 窗口秒数只有一个来源（夜间剧本表）")
 print("=" * 74)
 
+# 2026-10-26 仓库拆成 backend/ + frontend/：驱动在 backend/ 下（判据不变）
 _src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                         "night_driver.py"), encoding="utf-8").read()
+                         "backend", "night_driver.py"), encoding="utf-8").read()
 check("★ 驱动器里**没有**第二份窗口表（NIGHT_ACT_WINDOW 已删；两份必然漂移）",
       "NIGHT_ACT_WINDOW =" not in _src)
 check("★ 窗口表就是定稿的数字（守卫 15 / 狼刀 20 / 神职 15）",

@@ -6,6 +6,11 @@
 理由很硬：下一局座位会重排，"3 号是狼"下周可能 3 号是好人，
 直接注入等于教 AI 记住一个错误事实 —— 比不注入更糟。
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import sys as _s, os as _o
 _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
 _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
@@ -30,6 +35,10 @@ def check(name, ok, detail=""):
 
 
 def play_to_end(sess, max_steps: int = 500) -> bool:
+    # ★ 2026-10-29（用户定：夜间点完**窗口不退出**、按时间结束时的选择为准）：
+    #   同一（座位, 节点）最多出手两次，第二次只允许「确认」—— 否则机器人会在
+    #   一个窗里反复点同一个号码，把 max_steps 烧光（窗口是按墙上时间走的）。
+    _done: dict = {}
     for _ in range(max_steps):
         g = sess.game
         if g.phase is Phase.ENDED:
@@ -48,10 +57,20 @@ def play_to_end(sess, max_steps: int = 500) -> bool:
             others = [q["seat"] for q in v["players"] if q["alive"] and q["seat"] != seat]
             pts = v.get("wolf_points") or {}
             pointed = pts.get(seat) is not None
+            _key = (seat, g.night.get("stage") if g.phase is Phase.NIGHT
+                    else g.phase.value)
+            _n = _done.get(_key, 0)
+            if _n >= 2 or (_n >= 1 and "confirm" not in acts):
+                sess.drive(0.05)
+                continue
+            _done[_key] = _n + 1
             if "speak" in acts:
                 sess.act(seat, "speak", None, "我先过。")
             elif "confirm" in acts and pointed:
                 sess.act(seat, "confirm", None, None)
+            elif "confirm" in acts and "investigate" in acts:
+                # ★ 2026-10-29：预言家点完人还要点「确认」，确认这一刻才报结果
+                sess.act(seat, "seer_confirm", None, None)
             elif "vote" in acts and others:
                 sess.act(seat, "vote", others[0], None)
             elif "kill" in acts and others:

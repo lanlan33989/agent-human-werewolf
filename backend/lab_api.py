@@ -449,7 +449,7 @@ def rewind(i: int) -> Dict[str, Any]:
         try:
             sess._pre = None
             sess._pre_round = None
-            sess._pre_vote_round = None
+            sess._pre_vote_key = None
             sess._vote_grace_at = None
             sess._adv_deadline = None
         except Exception:

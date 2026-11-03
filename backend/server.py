@@ -109,9 +109,18 @@ def _real_asr() -> Asr:
     return DoubaoAsr()
 
 
+def _tts_kind() -> str:
+    """把 TTS 配置归一成实际实现：auto = 有云端 key 就走 qwen，否则本地 SAPI。"""
+    kind = (os.environ.get("TTS", "sapi") or "sapi").strip().lower()
+    if kind == "auto":
+        return "qwen" if (os.environ.get("DASHSCOPE_TTS_API_KEY")
+                          or os.environ.get("DASHSCOPE_API_KEY")) else "sapi"
+    return kind
+
+
 def _real_tts() -> Tts:
     """TTS 选择：sapi（本地，Windows）| qwen（阿里云百炼，**多音色**）| doubao（骨架）。"""
-    kind = os.environ.get("TTS", "sapi").lower()
+    kind = _tts_kind()
     if kind in ("qwen", "dashscope", "bailian", "aliyun"):
         return QwenTts()
     if kind in ("sapi", "local", "windows"):
@@ -145,6 +154,18 @@ ADMIN_STATE = admin_api.STATE_PATH       # 面板与测试共用这一个状态�
 
 
 ASR, LLM, TTS = build_pipeline()
+
+
+def tts_stream_ready() -> bool:
+    """当前装配出来的 TTS 能不能服务 `/ws/tts`（只有云端 Qwen 系可以）。
+
+    前端据此决定 AI 发言走流式还是直接 `/api/tts` —— 本地 SAPI 走 WS 只会
+    每句先吃一个 error 再回落，既慢又会在诊断面板留下"TTS 出错"的假警报。
+    """
+    return isinstance(TTS, QwenTts) and bool(
+        os.environ.get("DASHSCOPE_TTS_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY"))
+
 
 # 预热去重（见 lifespan 里的说明）：start.py 会起两个 uvicorn 实例，
 # 每个都会跑一遍 lifespan，而预热**可能花钱**（云端 ASR），所以进程级只做一次。
@@ -492,6 +513,19 @@ def dev_panels() -> Response:
     return _page("dev_panels.html")
 
 
+@app.get("/demo_scenes.js")
+def demo_scenes_js() -> Response:
+    """演示场景表（2026-10-27 新增，本条路由 2026-10-28 补）。
+
+    ⚠️ 这就是「一个文件一条路由」那条规矩的现场：`dev_panels.html` 用
+    `<script src="/demo_scenes.js">`、`play.html?demo=xxx` 用 `loadScript('/demo_scenes.js')`
+    加载它，而 server.py 里**一直没有这条路由** ⇒ 两个入口都拿到 404：
+    画廊一片空白、`play.html?demo=vote_result` 直接跳出「演示场景脚本加载失败」。
+    表现是"前端同学打不开面板画廊"，而原因只是一个缺掉的路由。
+    """
+    return _asset("demo_scenes.js", "application/javascript")
+
+
 @app.get("/tableui.js")
 def tableui_js() -> Response:
     """大屏 UI 状态机（2026-10-02 从 play.html 抽出）：
@@ -771,12 +805,13 @@ async def ws_tts(browser: WebSocket, text: str = "", voice: str = "") -> None:
     #      （那条**确实**用的是配置里的实现，见 §10.3 的 `/api/tts` 那条契约）。
     #    ⚠️ 代价：`_smoke-tts-stream.py`(7 条) 因此**只能在 `TTS=qwen` 下跑** ——
     #       它测的就是这条云端通道，配置成非流式实现时它必然红，这不是 bug。
-    if os.environ.get("TTS", "sapi").strip().lower() not in (
-            "qwen", "dashscope", "bailian", "aliyun"):
+    if not tts_stream_ready():
+        _why = ("未配置 DASHSCOPE_TTS_API_KEY / DASHSCOPE_API_KEY（TTS=QwenTts）"
+                if isinstance(TTS, QwenTts)
+                else f"当前 TTS 不是流式实现（{type(TTS).__name__}，TTS="
+                     + os.environ.get("TTS", "sapi") + "）")
         await browser.send_json({"type": "error", "message":
-                                 "当前 TTS 不是流式实现（TTS="
-                                 + os.environ.get("TTS", "sapi")
-                                 + "），本通道不可用，请回落 /api/tts"})
+                                 _why + "，本通道不可用，请回落 /api/tts"})
         await browser.close()
         return
     text = (text or "").strip()
@@ -886,7 +921,13 @@ async def tts(text: str, rate: int = 0, volume: int = 100, voice: str = "") -> R
     if not text:
         return Response(content=b"", media_type="audio/wav")
     try:
-        out = await run_in_threadpool(TTS.synth, text, rate, volume,
+        # 下面这行的关键字传参不是风格问题：MockTts.synth 的签名是 (text, **kw)，
+        # 只吃关键字 —— 2026-10-28 之前这里传位置参数，于是 **MOCK 模式下 /api/tts
+        # 必 500**（TypeError: takes 2 positional arguments but 4 were given）。
+        # 表现就是"整局一点声音都没有"，而所有冒烟测试都跑在 MOCK=1 下，
+        # 却没有一条打过这个接口，所以一直没被发现。改关键字后各实现
+        # （QwenTts / SapiTts / MockTts / DoubaoHttpTts）都能收。
+        out = await run_in_threadpool(TTS.synth, text, rate=rate, volume=volume,
                                       voice=(voice or None))
     except NotImplementedError as e:
         return JSONResponse({"error": str(e), "kind": "not_implemented"}, status_code=501)
@@ -908,6 +949,7 @@ def health() -> JSONResponse:
         "asr": type(ASR).__name__,
         "llm": type(LLM).__name__,
         "tts": type(TTS).__name__,
+        "tts_stream": tts_stream_ready(),
     })
 
 
@@ -1045,7 +1087,8 @@ def _admin_snapshot() -> dict:
     return {"asr": type(ASR).__name__, "llm": type(LLM).__name__, "tts": type(TTS).__name__,
             "asr_mocked": isinstance(ASR, MockAsr),
             "llm_mocked": isinstance(LLM, MockLlm),
-            "tts_mocked": isinstance(TTS, MockTts)}
+            "tts_mocked": isinstance(TTS, MockTts),
+            "tts_stream": tts_stream_ready()}
 
 
 def reload_pipeline() -> dict:

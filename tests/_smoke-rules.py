@@ -26,6 +26,11 @@
 """
 from __future__ import annotations
 
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import pathlib
 import sys
 
@@ -48,6 +53,13 @@ SPEC = [
      "engine._open_shoot_if_hunter"),
     ("H4", "猎人", "④ 开枪结算完成后才判胜负",
      "engine.night_shoot（damage → 记死因 → 再 check_winner）"),
+    # ★ 2026-10-29 用户定：屠边 + 猎人最后一神不能开枪。
+    #   这两条不在 05b 里（05b 是"标准局判例"，屠边是**本项目的局规则**），
+    #   补进来的理由和 T2/T4 一样：只写在注释里的规则等于没有规则。
+    ("W1", "全局", "屠边：9 人及以上局，神职全灭 或 平民全灭 ⇒ 狼人胜（2026-10-29 用户定）",
+     "engine.check_winner + side_wipe_on（SIDE_WIPE_MIN_TOTAL=9）"),
+    ("W2", "猎人", "⑤ 猎人作为**最后一神**出局 ⇒ 无法开枪，直接判狼人胜（2026-10-29 用户定）",
+     "engine._open_shoot_if_hunter"),
     ("G1", "守卫", "① 每夜守一人，可守自己（开关 guard_can_self_guard）",
      "engine.night_guard"),
     ("G2", "守卫", "② 不可连续两晚守同一人（开关 guard_can_repeat）",
@@ -62,8 +74,11 @@ SPEC = [
      "engine._actions_available（DISCUSS 分支在 can_vote 之前）"),
     ("I3", "白痴", "③ 已翻牌的白痴不能再被投票出局（多数版本）",
      "engine.resolve_vote"),
-    ("T1", "全局", "平票默认无人出局（开关 tie_vote_rule）",
-     "engine.resolve_vote"),
+    # 🔴 2026-10-28 用户改判例：平票**不再直接平安日** —— 先让平票者再发一轮言、
+    #    其余人重投（只能投平票者或弃票）；**再平票**才无人出局、进黑夜。
+    ("T1", "全局", "平票先加时（平票者再发言、其余人重投，2026-10-28 用户定）；"
+     "加时再平票才算无人出局",
+     "engine.resolve_vote → _open_runoff / open_vote / cast_vote"),
     # ⚠️ T2 不在 05b 那张表里：它是 2026-09-17 用户定的（引擎里写在 cast_vote 的 docstring）。
     #    补进来的理由：**只写在注释里的规则等于没有规则** —— 前端目标列表、引擎校验、
     #    测试三处要一致，而"投自己算不算合法"正是那种三处会各说各话的地方
@@ -105,6 +120,18 @@ _B_IDIOT = Board(key="t-rules-idiot", label="规则表：狼/白痴/2 民",
 # 判胜顺序专用：1 狼 + 猎人 + 1 民 —— 这样猎人那一枪**能翻转胜负**（见 H4）
 _B_HUNT = Board(key="t-rules-hunt", label="规则表：1 狼/猎人/1 民",
                 roles=[Role.WOLF, Role.HUNTER, Role.VILLAGER], lives=1)
+# 屠边专用（2026-10-29）：9 人 3 狼 / 3 神 / 3 民 —— 和 make_board(9) 同构。
+# 对照组用 8 人（2 狼 / 2 神 / 4 民）：骨架一样，但**不启用屠边** ⇒
+# 神全灭时 w(2) < g(4)，必须还是"继续打"。这一对才能证明门槛真的在 9。
+_B_WIPE9 = Board(key="t-rules-wipe9", label="规则表：9 人 3 狼 3 神 3 民",
+                 roles=[Role.WOLF] * 3
+                       + [Role.WITCH, Role.SEER, Role.HUNTER]
+                       + [Role.VILLAGER] * 3, lives=1)
+_B_WIPE8 = Board(key="t-rules-wipe8", label="规则表：8 人 2 狼 2 神 4 民",
+                 roles=[Role.WOLF] * 2 + [Role.WITCH, Role.SEER]
+                       + [Role.VILLAGER] * 4, lives=1)
+_K9 = ["human"] * 9
+_K8 = ["human"] * 8
 _K5 = ["human"] * 5
 _K4 = ["human"] * 4
 
@@ -212,6 +239,54 @@ record("H4", _deferred_winner is None and _deferred_phase is not Phase.ENDED
        f"夜里结算后 winner={_deferred_winner} phase={_deferred_phase.value}"
        f"（必须是 None/未结束，否则就是「先宣布狼胜、枪还在手上」）；"
        f"开枪后 winner={_g.winner} shot={_shot_ok} {_err}")
+
+# ---------------------------------------------------------------- 屠边（W1）
+# 判的是**尽头**：神职全灭、平民全灭都算狼胜；而同一副骨架缩到 8 人就不算。
+_g = Game(_B_WIPE9, kinds=_K9, seed=70)
+_g.start()
+_gods = [p.seat for p in _g.players if p.role.is_god]
+_vils = [p.seat for p in _g.players if p.role is Role.VILLAGER]
+for _s in _gods[:-1]:
+    _g.player(_s).alive = False
+_almost = _g.check_winner()                       # 还剩一神 ⇒ 不许结束
+_g.player(_gods[-1]).alive = False
+_god_wipe = _g.check_winner()                     # 神全灭 ⇒ 狼胜
+
+_g2 = Game(_B_WIPE9, kinds=_K9, seed=71)
+_g2.start()
+_vils2 = [p.seat for p in _g2.players if p.role is Role.VILLAGER]
+for _s in _vils2[:-1]:
+    _g2.player(_s).alive = False
+_almost2 = _g2.check_winner()
+_g2.player(_vils2[-1]).alive = False
+_vil_wipe = _g2.check_winner()                    # 民全灭 ⇒ 狼胜
+
+_g3 = Game(_B_WIPE8, kinds=_K8, seed=72)          # 对照组：8 人，同骨架
+_g3.start()
+for _p in [p for p in _g3.players if p.role.is_god]:
+    _p.alive = False
+_small = _g3.check_winner()                       # 2 狼 vs 4 民 ⇒ 继续打
+record("W1", _almost is None and _god_wipe == "wolf"
+       and _almost2 is None and _vil_wipe == "wolf" and _small is None,
+       f"9 人局：神灭前={_almost}、神全灭={_god_wipe}；"
+       f"民灭前={_almost2}、民全灭={_vil_wipe}；8 人局神全灭={_small}（必须 None）")
+
+# ---------------------------------------------------------------- 猎人最后一神（W2）
+# 用户原话：「若猎人作为最后一神出局，则无法开枪，直接判定狼人胜利」。
+# 反例（**必须仍然能开枪**）是 H4 的最小板：那里"狼数已够"≠"结局已定"，
+# 猎人那一枪能把最后一只狼打死、好人翻盘 —— 两条一起才钉住这个边界。
+_g = Game(_B_WIPE9, kinds=_K9, seed=73)
+_g.start()
+_h = seat_of(_g, Role.HUNTER)
+for _p in [p for p in _g.players if p.role.is_god and p.role is not Role.HUNTER]:
+    _p.alive = False                              # 猎人成了最后一神
+_g.wolf_agree_kill(_h)
+_g.resolve_night()
+_noshoot = (_g.shooter is None and _g.phase is Phase.ENDED and _g.winner == "wolf")
+_said = any("无法开枪" in s for s in _g.public_log)
+record("W2", _noshoot and _said,
+       f"shooter={_g.shooter} phase={_g.phase.value} winner={_g.winner} "
+       f"播报里有「无法开枪」={_said}")
 
 # ---------------------------------------------------------------- 守卫
 # G1 可守自己；开关关掉就必须拒
@@ -327,20 +402,41 @@ record("I2", _g.current_speaker() == _id and _speaks,
        f"轮到白痴发言时 current={_g.current_speaker()} actions={_g.actions_for(_id)}")
 
 # ---------------------------------------------------------------- 全局
-# T1 平票默认无人出局
+# T1 平票：先加时（平票者再发言 + 其余人重投），**再平票**才无人出局（2026-10-28 用户定）
 _g = Game(_B_IDIOT, kinds=_K4, seed=70)
 _g.start()
 peaceful_night(_g)
 _g.open_discuss()
 _g.open_vote()
 _alive = [p.seat for p in _g.alive]
-_g.cast_vote(_alive[0], _alive[1])       # 2 票投 A
-_g.cast_vote(_alive[2], _alive[1])
-_g.cast_vote(_alive[1], _alive[3])       # 2 票投 B
-_g.cast_vote(_alive[3], _alive[3])
+_a, _b = _alive[1], _alive[3]
+_g.cast_vote(_alive[0], _a)              # 2 票投 A
+_g.cast_vote(_alive[2], _a)
+_g.cast_vote(_alive[1], _b)              # 2 票投 B
+_g.cast_vote(_alive[3], _b)
 _exiled3 = _g.resolve_vote()
-record("T1", _exiled3 is None and _g.tie_count == 1 and all(p.alive for p in _g.players),
-       f"exiled={_exiled3} tie_count={_g.tie_count} votes={_g.vote_history[-1] if _g.vote_history else {}}")
+# 第一轮：不判平安日，转入加时发言；候选人 = 平票的那两位；这一轮**不算**"无人出局"
+_round1 = (_exiled3 is None
+           and _g.phase is Phase.DISCUSS
+           and _g.runoff_stage == 1
+           and set(_g.runoff_candidates) == {_a, _b}
+           and _g.tie_count == 0
+           and all(p.alive for p in _g.players))
+# 平票者各说一句，然后加时投票**再平票** ⇒ 这才记"无人出局"
+_g.end_speech()
+_g.end_speech()
+_g.open_vote()
+_voters = [s for s in _alive if _g.can_vote(s)]
+if len(_voters) >= 2:
+    _g.cast_vote(_voters[0], _a)
+    _g.cast_vote(_voters[1], _b)
+_round2 = (_g.resolve_vote() is None
+           and _g.tie_count == 1
+           and all(p.alive for p in _g.players))
+record("T1", _round1 and _round2,
+       f"首轮平票→加时：{_round1}（cand={_g.runoff_candidates}）；"
+       f"加时再平票→平安日：{_round2}（tie_count={_g.tie_count}）；"
+       f"vote_history={_g.vote_history}")
 
 # T2 允许投自己（自投 ≈ 弃权的一种表达）
 _g = Game(_B_IDIOT, kinds=_K4, seed=71)

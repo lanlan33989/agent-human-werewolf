@@ -9,6 +9,11 @@
 用法（在 h5 目录下）：
     ./.venv/Scripts/python.exe tests/_smoke-game-api.py
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import os
 import sys
 
@@ -83,8 +88,12 @@ check("★ 拖拽编排：layout 照单全收（human_seats 0 基 = [1,2]，即 
 r = client.post("/api/game/new",
                 json={"humans": 2, "ais": 2,
                       "layout": ["human", "human", "human", "ai"]})
-check("★ layout 的人类数与 humans 对不上 ⇒ 400（不许静默改排法）",
-      r.status_code == 400, str(r.status_code))
+# 🔴 2026-10-26 宽容化：人类数对不上是前端残留旧座次（上局 2 真人这局 0 真人）的
+#    典型症状 —— 直接忽略编排、退回默认座次，比 400 更符合直觉。
+#    长度/取值仍然是强校验（下面另有一条）。
+check("★ layout 的人类数与 humans 对不上 ⇒ 忽略编排、退回默认座次（不 400）",
+      r.status_code == 200 and r.json()["human_seats"] == [0, 2],
+      f"{r.status_code} {r.json().get('human_seats')}")
 
 # ================================================================ 开局
 
@@ -137,6 +146,14 @@ check("不能手动操作 AI 座位（返回 400）", r.status_code == 400, str(
 
 def auto_play(gid: str, human_seats, max_rounds: int = 120):
     """一个"机器人真人"：每次看到自己能做什么就做什么。"""
+    import time as _t                          # 本地导入：本函数在文件顶部就被调用
+    # ★ 2026-10-29（用户定：夜间窗口点完**不退出**，时间结束才定案）：
+    #   以前"点一下就从这个窗口的待办里消失"，机器人一回合就够；
+    #   现在人在整个窗口里都还是 pending，机器人每回合都会重复点同一个节点，
+    #   几次就把 max_rounds 烧光（实测 classic6 seed=3 卡在白天）。
+    #   ⇒ 每个夜间窗口最多动 3 次（狼：点+确认；预言家：点+确认；其余 1 次），
+    #     之后就按墙上时间等这个窗口走完。
+    _nd = {"node": None, "n": 0}
     for _ in range(max_rounds):
         pub = client.get(f"/api/game/{gid}/public").json()
         if pub["phase"] == "ended":
@@ -145,7 +162,9 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
         pending = pub["pending"]
 
         if pending == "human_speak":
-            spk = pub["current_speaker"]
+            # ★ 2026-10-28 遗言：遗言那一拍的 pending 也是 human_speak，
+            #   但发言人是 lastword_seat（current_speaker 是 None）。
+            spk = pub.get("lastword_seat") if pub["phase"] == "lastword" else pub["current_speaker"]
             r = client.post(f"/api/game/{gid}/act",
                             json={"seat": spk, "action": "speak", "text": "我先过。"})
             if r.status_code != 200:
@@ -165,6 +184,13 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
             continue
 
         if pending == "human_night":
+            _node = pub.get("night_node")
+            if _nd["node"] != _node:
+                _nd["node"] = _node
+                _nd["n"] = 0
+            if _nd["n"] >= 3:
+                _t.sleep(0.25)                 # 这一窗已经动过 —— 等墙钟走完，别再重复点
+                continue
             acted = False
             for seat in human_seats:
                 v = client.get(f"/api/game/{gid}/seat/{seat}").json()
@@ -184,6 +210,15 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
                     acted = True
                     break
                 if "confirm" in acts and _pointed:
+                    client.post(f"/api/game/{gid}/act",
+                                json={"seat": seat, "action": "confirm"})
+                    acted = True
+                    break
+                # ★ 2026-10-29（用户定）：预言家点完人还要**确认**才报结果
+                #   （can_act 里同时有 investigate + confirm 就说明"点过、等确认"）。
+                #   少了这一步，机器人会一直重复"点人"，窗口永远等不到结果。
+                if ("confirm" in acts and "investigate" in acts
+                        and "kill" not in acts):
                     client.post(f"/api/game/{gid}/act",
                                 json={"seat": seat, "action": "confirm"})
                     acted = True
@@ -209,6 +244,8 @@ def auto_play(gid: str, human_seats, max_rounds: int = 120):
                                 json={"seat": seat, "action": "pass"})
                     acted = True
                     break
+            if acted:
+                _nd["n"] += 1
             if not acted:
                 # 人类没有夜间动作可做（例如村民），推一下让 AI 继续
                 for seat in human_seats:
@@ -242,15 +279,19 @@ for seed in range(1, 11):
 check("mini4 连跑 10 局全部正常结束", ok_runs == 10, f"{ok_runs}/10")
 
 ok_runs6 = 0
+_bad6 = []
 for seed in range(1, 11):
     r = client.post("/api/game/new", json={"humans": 3, "ais": 3, "seed": seed})
     if r.status_code != 200:
+        _bad6.append((seed, f"new={r.status_code}"))
         continue
     d = r.json()
     f = auto_play(d["gid"], d["human_seats"])
     if f.get("phase") == "ended":
         ok_runs6 += 1
-check("classic6 连跑 10 局全部正常结束", ok_runs6 == 10, f"{ok_runs6}/10")
+    else:
+        _bad6.append((seed, f"phase={f.get('phase')} pending={f.get('pending')}"))
+check("classic6 连跑 10 局全部正常结束", ok_runs6 == 10, f"{ok_runs6}/10 {_bad6}")
 
 # ================================================================ 404
 
@@ -492,7 +533,13 @@ try:
         if _pend in ("ended", "human_vote"):
             break                       # 到投票就等于 AI 已经投过了
         if _pend == "human_speak":
-            _spy.act(_gsp.current_speaker(), "speak", None, "我先过")
+            # ★ 2026-10-28 遗言：`human_speak` 现在也覆盖"出局者留遗言"
+            #   （那一拍 `current_speaker()` 是 None，发言人在 `current_lastword()`）。
+            _spk = (_gsp.current_lastword() if _gsp.phase.value == "lastword"
+                    else _gsp.current_speaker())
+            if _spk is None:
+                break
+            _spy.act(_spk, "speak", None, "我先过")
         elif _pend == "human_night":
             _actor = next((q for q in _gsp.players if q.kind == "human" and q.alive
                            and _gsp.actions_for(q.seat)), None)
@@ -565,6 +612,26 @@ _r_badlv = client.post("/api/game/new",
                        json={"humans": 2, "ais": 2, "level": "地狱模式"})
 check("★ 未知档位返回 400（不静默退回默认档）",
       _r_badlv.status_code == 400, _r_badlv.text[:120])
+
+# ================================================================ 昼夜交替门（2026-10-31）
+# 前端在 /public 的 X-Played 头里报「已播完的行数」；服务端据此决定能不能翻相位。
+_r_gate = client.post("/api/game/new", json={"humans": 0, "ais": 4, "seed": 7})
+_gid_gate = _r_gate.json()["gid"]
+_s_gate = _ga.SESSIONS[_gid_gate]
+_r_gate1 = client.get(f"/api/game/{_gid_gate}/public",
+                      headers={"X-Played": "0"})
+check("★ /public 接收 X-Played（昼夜交替门的客户端回执）",
+      _r_gate1.status_code == 200 and _s_gate.client_seen
+      and _s_gate.client_played == 0,
+      f"seen={_s_gate.client_seen} played={_s_gate.client_played}")
+_len_gate_before = len(_s_gate.timeline)
+_r_gate2 = client.get(f"/api/game/{_gid_gate}/public",
+                      headers={"X-Played": "99999"})
+check("★ X-Played 夹在**上报那一刻**的时间线长度内（前端算错也不会越界）",
+      _s_gate.client_played == _len_gate_before
+      and _s_gate.client_played <= len(_s_gate.timeline),
+      f"played={_s_gate.client_played} 上报时={_len_gate_before} "
+      f"现在={len(_s_gate.timeline)}")
 
 # ================================================================ 测量层接口（批四）
 # ⚠️ 不能用文件开头那个 gid：上面的"会话淘汰"测试清过 SESSIONS，它已经 404 了。
@@ -689,29 +756,31 @@ check("★ 榜单页可访问（纯展示页，不碰对局状态）",
 check("★ 榜单页里引用了两个数据源（stats + games）",
       "/api/game/stats" in _bd6.text and "/api/game/games" in _bd6.text, "")
 
-# ================================================================ 发言方式的开关（2026-09-18）
-# 挑战式发言顺序（被点名的人先回应）走的是**既有那条规则开关通路** ——
-# 加一条表项，前端下拉自动就有了（前端不写死键名，见 play.html 的 renderSwitches）。
+# ================================================================ 已删除的两个开关（2026-10-12）
+# 🔴 用户当日定：平票处理（tie_vote_rule）/ 发言方式（speech_mode）两个选项**彻底删除**。
+#    行为固定为 no_exile + rotation。这里验的是"删干净了"：
+#    开关表里没有、设置通路明确拒绝、公开状态仍是固定值 ——
+#    最怕的是"前端还在传、后端静默忽略"，玩家以为选上了实际没生效。
 _r_set = client.get("/api/game/settings")
 _sw = {s["key"]: s for s in _r_set.json().get("switches", [])}
-check("★ 规则开关表里有「发言方式」，是二选一（前端自动渲染成下拉，不用改前端）",
-      "speech_mode" in _sw and _sw["speech_mode"]["type"] == "choice"
-      and [o["value"] for o in _sw["speech_mode"]["options"]] == ["rotation", "challenge"],
-      str(_sw.get("speech_mode"))[:140])
+check("★ 开关表里已没有发言方式/平票处理两项（前端不会再渲染它们）",
+      "speech_mode" not in _sw and "tie_vote_rule" not in _sw,
+      str(sorted(_sw)))
 
-_r_bad_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "随便"}})
-check("★ 非法的发言方式被拒（不静默退回默认 —— 静默的话玩家选了小讨论却拿到普通局）",
+_r_bad_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "challenge"}})
+check("★ 再传已删除的 speech_mode ⇒ 400（不静默忽略）",
       _r_bad_mode.status_code == 400, _r_bad_mode.text[:120])
+_r_bad_tie = client.post("/api/game/settings", json={"settings": {"tie_vote_rule": "random"}})
+check("★ 再传已删除的 tie_vote_rule ⇒ 400（不静默忽略）",
+      _r_bad_tie.status_code == 400, _r_bad_tie.text[:120])
 
-_r_ok_mode = client.post("/api/game/settings", json={"settings": {"speech_mode": "challenge"}})
-check("★ 能设置成「被点名的人先回应」", _r_ok_mode.status_code == 200, _r_ok_mode.text[:120])
 _r_sp = client.post("/api/game/new", json={"humans": 2, "ais": 2})
 _gid_sp = _r_sp.json()["gid"] if _r_sp.status_code == 200 else None
 if _gid_sp:
-    check("★ 新开的局真的带着这个发言方式（不是设置存了、开局没用上）",
-          client.get(f"/api/game/{_gid_sp}/public").json().get("speech_mode") == "challenge",
-          str(client.get(f"/api/game/{_gid_sp}/public").json().get("speech_mode")))
-client.post("/api/game/settings", json={"settings": {"speech_mode": "rotation"}})   # 复原
+    _pub_sp = client.get(f"/api/game/{_gid_sp}/public").json()
+    check("★ 新开的局固定 rotation（行为不随设置漂移）",
+          _pub_sp.get("speech_mode") == "rotation",
+          str(_pub_sp.get("speech_mode")))
 
 # ================================================================ 手机入口（2026-09-19）
 # 手机上要用**局域网 https** 打开：`http://<局域网IP>` 不是安全上下文，
@@ -763,10 +832,12 @@ check("★ 「请发言」**不进 public_log**（那是喂 AI 的，进去就�
 _ok_order = True
 _last_ann = None
 for x in _sann.timeline:
-    if x["t"] == "sys" and x["s"].endswith("请发言"):
+    # ★ 2026-10-28 遗言：出局者的遗言由「N号请留遗言」开场（同一条纪律、同一套播报）。
+    if x["t"] == "sys" and (x["s"].endswith("请发言") or x["s"].endswith("请留遗言")):
         _last_ann = x["s"]
     if x["t"] == "say":
-        if _last_ann != str(x["seat"] + 1) + "号请发言":
+        if _last_ann not in (str(x["seat"] + 1) + "号请发言",
+                             str(x["seat"] + 1) + "号请留遗言"):
             _ok_order = False
             break
 check("★ 每条发言紧挨着的前一条就是该座位的「N号请发言」（顺序不能倒）",
@@ -985,7 +1056,10 @@ try:
     _s_pre = _ga.Session(humans=0, ais=9, seed=7)
     check("★ 第二期：天黑即预跑 —— 决策在后台跑，驱动器**不等满**（先报 working）",
           _s_pre.pending == "working", str(_s_pre.pending))
-    _t_h = _tm.monotonic() + 15
+    # ★ 2026-10-28（用户定「以窗口结束时的选择为准」）：刀口**只在窗口闭眼那一刻**
+    #   才结算，不再"狼都点完就立刻定案"。所以等待上限必须是**整窗 + 余量** ——
+    #   原来写死的 15 秒够不到 9 人局的 60 秒窗口，会在刀口落地前就放弃。
+    _t_h = _tm.monotonic() + night_script.window_of("wolf", 9) + 10
     while _tm.monotonic() < _t_h:
         _s_pre.drive(0.3)
         if _s_pre.game.night.get("kill") is not None:
@@ -1002,13 +1076,21 @@ check("★ 第二期：预跑结果被收割 —— 决策在**预跑线程**里
 
 # ⑥ AI 投票 5 秒弃票兜底（定稿：最后一个人类投完后等 5s，还没投 = 弃票）
 _sg = _ga.Session(humans=1, ais=3, seed=11)
-for _ in range(200):
+# ★ 2026-10-28：狼刀窗口改成"按人数定死、到点才结算"之后，一夜最短也是 30 秒
+#   （4 人桌按最近档 6 人局算），**固定 200 次循环**不够用了 —— 换成墙上时间上限。
+_t6 = _tm.monotonic() + 90
+while _tm.monotonic() < _t6:
     _g_sg = _sg.game
     if _g_sg.phase is _ga.Phase.VOTE and (_sg.pending == "human_vote"
                                           or _sg._all_voted()):
         break
     _need = [(p.seat, _g_sg.actions_for(p.seat)) for p in _g_sg.players
-             if p.kind == "human" and p.alive and _g_sg.actions_for(p.seat)]
+             if p.kind == "human" and p.alive and _g_sg.actions_for(p.seat)
+             # ★ 2026-10-28：人狼点过刀之后 `kill` 仍整窗挂着（可随时改刀）。
+             #   不跳过的话机器人会一直重复提交同一点子 ⇒ 时间不流逝 ⇒
+             #   永远走不到投票相位。
+             and not (p.seat in (_g_sg.night.get("wolf_points") or {})
+                      and set(_g_sg.actions_for(p.seat)) <= {"kill", "confirm"})]
     if not _need:
         if _sg.drive(0.3) == "ended":
             break
@@ -1039,8 +1121,13 @@ if _sg.game.phase is _ga.Phase.VOTE:
         _sg._vote_grace_at = _tm.monotonic() - 6     # 5s 兜底已过期
         _sg.drive(0.3)
         _vh = _sg.game.vote_history[-1] if _sg.game.vote_history else {}
+        # ★ 2026-10-28 平票加时：第一轮如果平票，这一轮的票型**不进 vote_history**
+        #   （那张表是"每天一条"的口径，战报/my_votes 都按轮次索引），而是暂存在
+        #   `runoff_first_votes` 里。断言要看的是"这一票被补成了弃票"，两个位置都算。
+        if not _vh and _sg.game.runoff_first_votes:
+            _vh = dict(_sg.game.runoff_first_votes)
         _graced = _vh.get(_aiv.seat) == -1
-        _gdetail = f"seat={_aiv.seat} votes={_vh}"
+        _gdetail = f"seat={_aiv.seat} votes={_vh} phase={_sg.game.phase.value}"
 check("★ 第二期：AI 投票 5s 兜底 —— 超时未决策直接记弃票（-1）", _graced, _gdetail)
 
 # ⑦ 狼**空刀**：人类女巫照常走「解药问 + 毒药问」，只是解药**用不了**
@@ -1059,11 +1146,20 @@ for _sd in range(1, 16):
         break
 check("（前提）造出「人类是女巫」的局（否则下面几条测不到东西）", _sw is not None)
 if _sw is not None:
+    # ★ 2026-10-29（用户定：执行顺序与播报一致 + 每个窗口独立）：女巫**只在她的窗口**
+    #   拿到待办 —— 以前 `actions_for` 不分窗口，狼刀还没定案就先把 heal/poison 发给她。
+    #   所以这里先把她推到解药那一屏，再伪造"狼空刀"。
+    _t7a = _tm.monotonic()
+    while _tm.monotonic() - _t7a < 30:
+        if _ga.night_driver._nn_cur(_sw) == "witch_heal":
+            break
+        _sw.drive(0.1)
+        _tm.sleep(0.05)
     _sw.game.night["kill"] = -1                 # 伪造"狼空刀"：刀已定案、但没有刀口
     _sw.game.night["kill_settled"] = True
     _acts7 = _sw.game.actions_for(_h7.seat)
     check("★ 空刀：女巫**照常**拿到解药问（面板照旧，只是按钮该置灰）",
-          "heal" in _acts7 and "poison" in _acts7, str(_acts7))
+          "heal" in _acts7, f"node={_ga.night_driver._nn_cur(_sw)} acts={_acts7}")
     _rej7 = ""
     try:
         _sw.game.night_heal(_h7.seat, _h7.seat)
@@ -1111,17 +1207,26 @@ _ok8 = (bool(_ok8)
         and (_sc8.game.night.get("wolf_points") or {}).get(_w8.seat) is None
         and not _sc8.game.night.get("kill_settled"))
 # 女巫：撤回 = **药还回来**（撤回 ≠ 用掉）
+# ★ 2026-10-29（用户定：窗口内可改、关窗才结算）：这条现在分两半验 ——
+#   ① 窗口内点毒：只记"选了谁"，药还在；这一拍撤回必须清干净、药仍是满的；
+#   ② 关窗（settle_witch_poison）：这才是真的用掉。
 _wt8 = next((p for p in _sc8.game.players if p.role.value == "witch"), None)
 if _wt8 is not None:
     _sc8.game.night["kill"] = _t8
     _sc8.game.night["kill_settled"] = True
+    _sc8.game.night["stage"] = "witch_poison"     # 摆到毒药那一屏
     _sc8.game.night_poison(_wt8.seat, _t8)
-    _used8 = not _sc8.game.private[_wt8.seat].potions["poison"]
+    _picked8 = _sc8.game.night.get("poison") == _t8
     _sc8.game.night_clear(_wt8.seat)
-    _ok8 = (bool(_ok8) and bool(_used8)
+    _ok8 = (bool(_ok8) and bool(_picked8)
             and _sc8.game.private[_wt8.seat].potions["poison"]
             and _sc8.game.night.get("poison") is None
             and not _sc8.game.night.get("witch_asked"))
+    _sc8.game.night_poison(_wt8.seat, _t8)
+    _sc8.game.settle_witch_poison()               # 关窗 → 这一下才真的扣药
+    _ok8 = (bool(_ok8)
+            and _sc8.game.private[_wt8.seat].potions["poison"] is False
+            and _sc8.game.night.get("poison") == _t8)
 # 顺带把 **API 那一层** 也走一遍：`action=clear` 要认得（否则前端一取消就撞「未知动作」）。
 # 真人可能是村民（撤无可撤 ⇒ 引擎报的是权限错，不是"未知动作"）——两种情况都算通过。
 _s9 = _ga.Session(humans=1, ais=3, board=_BW4, seed=3)

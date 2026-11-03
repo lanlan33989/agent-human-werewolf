@@ -16,11 +16,35 @@
 
 /* ---------------------------------------------------------- 播报 */
 
-async function playBlob(blob){
+/* ★ 2026-11-01（用户实机："真人无法正常发言"）：
+   `Audio.onended` 不是承诺 —— 音频元素卡住 / 被系统接管 / 解码器挂起时它永远不来，
+   整条播报队列就冻在那一句上：后面的「N号请发言」不播、回执（X-Played）不前进，
+   服务端于是把发言窗口一直挂在"还没念完"（这条链的兜底见 night_driver
+   `SPEECH_CURSOR_GRACE`）。这里给每次播放一个按文本长度估的硬上限：
+   到点就**当作念完**收尾，宁可少播半句，也绝不冻住整局。 */
+async function playBlob(blob, text){
   var url = URL.createObjectURL(blob);
+  var cap = Math.min(60000, Math.max(8000, 5000 + String(text || '').length * 400));
   try {
     var a = new Audio(url);
-    await new Promise(function(res, rej){ a.onended = res; a.onerror = rej; a.play().catch(rej); });
+    await new Promise(function(res, rej){
+      var done = false;
+      var timer = setTimeout(function(){
+        if (done) return;
+        done = true;
+        try { a.pause(); } catch (e) { /* ignore */ }
+        res();                       /* 超时按"念完"处理：队列必须继续 */
+      }, cap);
+      function fin(ok, err){
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (ok) res(); else rej(err);
+      }
+      a.onended = function(){ fin(true); };
+      a.onerror = function(e){ fin(false, e); };
+      a.play().catch(function(e){ fin(false, e); });
+    });
   } finally { URL.revokeObjectURL(url); }
 }
 
@@ -31,9 +55,31 @@ var LAST_TTS = null;
    队列停摆（切后台节流 / TTS 悬挂）恢复时，最老的残句跳、当前段的句子照播 ——
    夜听起来完整（用户实机：狼人睁眼整段消失、直接听到闭眼）。 */
 var _catchupSkip = false;
+/* 2026-10-29：服务端时钟 − 本机时钟（秒）。手机与电脑差一分钟就足以让
+   "过期跳过"把整局法官台词吃掉（见 speakQueue 里的说明）。public_state.now 喂它。 */
+var _SRV_SKEW = 0;
+/* 本页打开的时刻（本机时基）。用来判"这句话是不是在我打开页面之前就该播了"。 */
+var PAGE_AT = Date.now() / 1000;
 function time_ms(){
   return (window.performance && performance.now) ? performance.now() : Date.now();
 }
+
+/* ★ 2026-10-31（用户定：白天与夜间交替，不能并行）：
+   给 /public 的 X-Played 头 —— **已播完**的时间线行数。
+   `SPOKE_DONE.at === 0` 表示这条刚开始念（还没念完），不计入；
+   无声模式（VOICE_ON=false）不占播报时间，直接视为整队播完。 */
+function playedCount(){
+  var tl = (PUBLIC && PUBLIC.timeline) || [];
+  if (!VOICE_ON) return tl.length;
+  if (!SPOKE_DONE) return 0;
+  var n = (SPOKE_DONE.idx | 0) + (SPOKE_DONE.at > 0 ? 1 : 0);
+  return Math.max(0, Math.min(n, tl.length));
+}
+
+/* 本地提示行（合规提醒等）的独立游标：**不推进 SPOKEN** ——
+   SPOKEN 是服务端时间线的下标（夜间门控/arm 都按它算），把本地行塞进同一个
+   下标里会让"提醒念完"把后面新到的法官台词顶掉。 */
+var LOCAL_SPOKEN = 0;
 
 async function speakQueue(){
   if (SPEAKING || !VOICE_ON || !PUBLIC) return;
@@ -43,8 +89,14 @@ async function speakQueue(){
   try {
     for (;;){
       if (PAUSED){ await sleep(250); continue; }
+      /* 本地提示行（合规提醒等，2026-10-12 起不在服务端时间线里）。
+         只在服务端队列**念完之后**补播，用独立游标、不动 SPOKEN ——
+         丢了这一步的话，提醒只会弹面板、永远不会被念出来。 */
       var tl = PUBLIC.timeline || [];
-      if (SPOKEN >= tl.length) break;
+      var _ll = (typeof LOCAL_LINES !== 'undefined' && LOCAL_LINES) || [];
+      if (LOCAL_SPOKEN > _ll.length) LOCAL_SPOKEN = 0;   /* 换局时 LOCAL_LINES 被清空 */
+      var _local = SPOKEN >= tl.length;
+      if (_local && LOCAL_SPOKEN >= _ll.length) break;
       /* 2026-10-04 用户定：**最后一条播完立刻就绪** —— 间隔从"播完之后睡"
          挪到"下一条之前睡"。原来播完公告还要白等 0.7~1.6s 才算"念完了"，
          「N号请发言」→ 麦可点的延迟凭空多出这一截。 */
@@ -57,18 +109,35 @@ async function speakQueue(){
      · 落后 >60s（整页刷新级别）⇒ 真·跳过（半夜刷新不该重播整夜）；
      · 落后 10~60s ⇒ **不扔句子，只压掉留白**（"播报快"指的是节奏被压，
        从来不是"句子该消失"）—— 播报完整，只是追进度。 */
-      var _due = tl[SPOKEN];
+      var _due = _local ? _ll[LOCAL_SPOKEN] : tl[SPOKEN];
+      /* 🔴 2026-10-29（用户报「法官全部音效又没了」之二）：
+         `at` 是**服务端**时间戳，`Date.now()` 是**本机**时钟。手机与电脑差一分钟
+         以上（没开自动对时、或电脑漂了），每一句刚进队列就被判"迟到 >60 秒" ⇒
+         整局 sys 句子被逐句扔掉，一句都不念，而且**没有任何报错**。
+         现在：服务端在 public_state 里下发 `now`，用它算出时钟偏置；
+         老服务端没有这个字段就按 0 处理（退化为旧行为，不会更糟）。 */
+      if (PUBLIC.server_now) _SRV_SKEW = Number(PUBLIC.server_now) - Date.now() / 1000;
+      var _srvNow = Date.now() / 1000 + (_SRV_SKEW || 0);
       var _late = (_due && _due.at)
-        ? (Date.now() / 1000 - (_due.at + (_due.delay || 0))) : 0;
+        ? (_srvNow - (_due.at + (_due.delay || 0))) : 0;
       /* 🔴 2026-10-12（用户实机：狼人睁眼播报+面板整段消失，直接听到"狼人请闭眼、
          女巫请睁眼"）：队列停摆一次（切后台被浏览器节流 / 某句 TTS 悬挂）⇒ 恢复时
          "过期跳过"把最老的狼人睁眼句吃掉、较新的照播 ⇒ 夜不连贯，且停摆期间
          arm 也发不出（面板随窗口一起消失）。
-         改成**追线制**：只在追上第一条"还新鲜"（≤60s）的句子之前允许跳过；
+         改成**追线制**：只在追上第一条"还新鲜"的句子之前允许跳过；
          追上之后这一局不再跳过 —— 停摆恢复时当前段的句子照播（晚是晚，但完整）。 */
-      if (_due && _due.t === 'sys' && _late > 60 && !_catchupSkip){
-        SPOKEN++;
-        SPOKE_DONE = { idx: SPOKEN - 1, at: Date.now() };
+      /* 🔴 2026-10-29：跳过的判据从"迟到多少秒"改成**"这句话在我打开页面之前
+         就已经该播了"**。这才是"中途刷新不要重播整夜"的本意 ——
+         原来用秒数，运行中任何一次卡顿（TTS 悬挂、切后台、一句念得慢）
+         都会把后面积压的法官台词当"过期的"扔掉。推迟 ≠ 过期。 */
+      var _beforePage = !!(_due && _due.at
+        && (_due.at + (_due.delay || 0)) < (PAGE_AT + (_SRV_SKEW || 0) - 2));
+      if (_due && _due.t === 'sys' && _beforePage && !_catchupSkip){
+        if (_local){ LOCAL_SPOKEN++; }
+        else {
+          SPOKEN++;
+          SPOKE_DONE = { idx: SPOKEN - 1, at: Date.now() };
+        }
         prevType = _due.t; prevLine = _due;
         continue;
       }
@@ -85,7 +154,7 @@ async function speakQueue(){
          ⚠️ `node --check` 只查语法不查未定义变量，所以当时没拦住 —— 这也说明
          播报队列需要一个"哨兵"：任何一句抛出都要能在诊断面板看见（LAST_TTS.how
          = 'queue'），见下面的外层 try。 */
-      var line = tl[SPOKEN++];
+      var line = _local ? _ll[LOCAL_SPOKEN++] : tl[SPOKEN++];
       var _t1 = 0;                     /* 本条合成耗时（填进 LAST_TTS） */
       /* 哨兵（2026-10-11 事故的直接教训）：try 块**之前**的这几行也绝不允许
          无声弄死整个队列 —— 这次的 ReferenceError 就抛在这里、页面毫无提示。
@@ -95,7 +164,7 @@ async function speakQueue(){
       /* 倒计时 arm 的依据（2026-10-06 晚用户定：播报最后一个字后 2 秒起算）——
          每条**真正念完**的时刻记在这里（idx + 时刻），nightReady 的那句被覆盖
          且满 2s，前端才向服务端 arm 起算。 */ 
-      SPOKE_DONE = { idx: SPOKEN - 1, at: 0 };   /* at 在播放完成后填 */
+      if (!_local) SPOKE_DONE = { idx: SPOKEN - 1, at: 0 };   /* at 在播放完成后填 */
       /* 播报进度条已随顶部标题栏一起删除（2026-10-05 用户定：公有信息只进日志区） */
 
       /* 🔴 2026-10-05 用户报「AI 不发声」：
@@ -110,7 +179,7 @@ async function speakQueue(){
         setLine('');
         await sleep(400);
         prevType = line.t; prevLine = line;
-      if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+      if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
         continue;
       }
 
@@ -121,7 +190,12 @@ async function speakQueue(){
 
       /* 2026-10-07 第二期（用户定稿）：播报「他是这个」的**同时**，圆盘上给出
          大大的好（绿）/坏（红）标识，3 秒后消失（与「预言家请闭眼」同时）。 */
-      if (line.stage === 'seer_result') showSeerBig();
+      if (line.stage === 'seer_result'){
+        showSeerBig();
+        /* ★ 2026-11-01：没点确认（窗口到点收口）也要把「X 号是 好人/狼人」摊开。
+           选人时已把结果记进 SEER_LAST（tableui.js）；已经摊过就自动跳过。 */
+        if (typeof showSeerResultScreen === 'function') showSeerResultScreen();
+      }
 
       /* 2026-10-02 用户定：报名字归法官（服务端已在每条发言前插「N号请发言」），
          所以正文里那个「N号：」前缀在播报时剥掉 —— 否则同一个名字响两遍。 */
@@ -152,20 +226,33 @@ async function speakQueue(){
          现有云端通道，一个字都不会少念。
          打断规则：相位切换类（天黑/天亮）interrupt=true 立即打断旧播报；
          其余法官台词排队不打断。 */
-      var _loc = false;
+      var _loc = false, _fbLocal = false;
       if (line.t === 'sys' && typeof JudgeVoice !== 'undefined' && JudgeVoice.usable()){
         try {
           var _lv0 = time_ms();
-          await JudgeVoice.speakAwait(txt, JudgeVoice.isPhaseSwitch(txt));
-          _loc = true;
+          /* 🔴 2026-10-29（用户报「法官全部音效又没了」）：
+             speakAwait 现在会明确回答"到底出没出声"（true/false）。
+             以前它只承诺"结束了"，于是**被静默拒绝**的合成也算成功 ⇒ `_loc` 被
+             设成 true ⇒ 云端兜底被跳过 ⇒ 这一句彻底消失，且队列被看门狗白等
+             5 秒拖后。
+             老版本返回 undefined，`!== false` 保持旧行为。 */
+          var _lok = await JudgeVoice.speakAwait(txt, JudgeVoice.isPhaseSwitch(txt));
+          _loc = (_lok !== false);
+          if (!_loc){
+            _fbLocal = true;
+            LAST_TTS = { ok: false, how: 'local', err: '本地合成未出声，回落云端',
+                         text: txt.slice(0, 40) };
+          } else {
           /* at_lag_ms = 服务端时间戳 → 本地出声的全程延迟（验收指标 <300ms 的观测值；
              跨设备时含本机与服务端的时钟差，桌面同机测量最准）。 */
           LAST_TTS = { ok: true, how: 'local', ms: time_ms() - _lv0,
                        at_lag_ms: Math.max(0, Math.round(
                          (Date.now() / 1000 - (line.at || Date.now() / 1000)) * 1000)),
                        text: txt.slice(0, 40) };
+          }
         } catch (e) {
           /* 本地任何异常都按"不可用"处理：记诊断、_loc 保持 false ⇒ 照走云端 */
+          _fbLocal = true;
           LAST_TTS = { ok: false, how: 'local', err: String(e).slice(0, 80),
                        text: txt.slice(0, 40) };
         }
@@ -179,7 +266,7 @@ async function speakQueue(){
           await sp.promise;
           SPEAK_STREAM = null;
           spoke = (sp.firstMs() !== null);
-          if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+          if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       /* 出过声就算成功（被跳过时 firstMs 可能为 null） */
         } catch (e) {
           SPEAK_STREAM = null;
@@ -206,41 +293,59 @@ async function speakQueue(){
             voiceHint('这一句没合成出来（HTTP ' + res.status + '）');
           } else {
             var _blob = await res.blob();
-            LAST_TTS = { ok: true, how: spoke ? 'stream' : 'api/tts',
+            /* 走到这里就是 /api/tts 出的声；`spoke` 必为 false（否则根本不会进来），
+               以前写成三元表达式只会把来源标错。 */
+            LAST_TTS = { ok: true, how: 'api/tts',
                          bytes: _blob.size, ms: _t1 ? (time_ms() - _t1) : null,
                          text: txt.slice(0, 40) };
-            await playBlob(_blob);
+            if (_fbLocal) LAST_TTS.fb = 'local';   /* 本地没出声 ⇒ 云端兜住的 */
+            await playBlob(_blob, txt);
           }
         } catch (e) {
           LAST_TTS = { ok: false, how: 'api/tts', err: String(e).slice(0, 80),
                        text: txt.slice(0, 40) };
         }
-      } else {
+      } else if (!_loc) {
+        /* ★ 2026-10-31：法官走浏览器本地合成（_loc=true）时**不要**覆盖上面记下的
+           how:'local' —— 原来这里无条件写 how:'stream'，诊断面板于是把本地法官
+           成功报成流式成功，排查"到底哪条通道哑了"时完全是误导。 */
         LAST_TTS = { ok: true, how: 'stream', text: txt.slice(0, 40) };
       }
 
       /* 2026-10-04 用户报：报完「N号请发言」，麦要**立刻**可点 —— 原来要等
          tick 下一轮（最慢 1.2s）。公告一播完、且服务端确实在等这位人类发言
          ⇒ 直接拉起大圆发言模式，不等轮询。（AI 发言轮 pending 是 working，
-         这个守卫保证它只在人类发言回合触发。） */
-      var _mAnn = (line.t === 'sys') ? line.s.match(/^(\d+)号请发言$/) : null;
+         这个守卫保证它只在人类发言回合触发。）
+         ★ 2026-10-29：遗言（「N号请留遗言」）走同一条速通 —— 原来只认"请发言"，
+           人类出局后要留遗言时得等下一次轮询才拿到麦，中间那 1 秒多的空档
+           正好落在"刚被投出去、全场等他说最后一句"的时刻，很显眼。 */
+      var _mAnn = (line.t === 'sys') ? line.s.match(/^(\d+)号请(发言|留遗言)$/) : null;
+      var _annSeat = _mAnn ? Number(_mAnn[1]) - 1 : -1;
+      var _annIsLw = !!(_mAnn && _mAnn[2] === '留遗言');
       if (_mAnn && PUBLIC.pending === 'human_speak'
-          && PUBLIC.current_speaker === Number(_mAnn[1]) - 1
+          && (_annIsLw ? PUBLIC.lastword_seat : PUBLIC.current_speaker) === _annSeat
           && SPK_MODE !== Number(_mAnn[1])){
-        enterSpeakerMode({ seat: Number(_mAnn[1]) - 1, actions: ['speak'] });
+        enterSpeakerMode({ seat: _annSeat, actions: ['speak'] });
       }
       prevType = line.t; prevLine = line;
-      if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+      if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       } catch (e) {                     /* ← 上面 try 的收口：单条失败不拖死队列 */
         LAST_TTS = { ok: false, how: 'line', err: String(e).slice(0, 100),
                      text: (line && line.s ? line.s : '').slice(0, 40) };
         voiceHint('这一句播报失败（已跳过，后面的照常念）：' + String(e).slice(0, 60));
         prevType = (line && line.t) || prevType; prevLine = line || prevLine;
-        if (SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
+        if (!_local && SPOKE_DONE && SPOKE_DONE.idx === SPOKEN - 1) SPOKE_DONE.at = Date.now();
       }
     }
   } finally {
     SPEAKING = false; CUR_LINE = null; paintBig();
+    /* ★ 2026-10-29（用户："法官语音播报游戏结束后才显示弹框"）：
+       队列刚放完最后一句就是**最准的那一刻** —— 比等下一次 tick 更贴近"念完才弹"。
+       局末之外这个调用是空转（renderEndPop 自己会看 phase）。 */
+    try {
+      if (typeof renderEndPop === 'function' && PUBLIC && PUBLIC.phase === 'ended')
+        renderEndPop();
+    } catch (e) { /* 老页面没有这个函数：不影响播报 */ }
     /* 诊断面板开着的话刷一下：刚发生的播报结果（含失败）立即可见 */
     try {
       if ($('diagPanel') && $('diagPanel').classList.contains('on')) diagRefresh();
@@ -267,11 +372,13 @@ function voicedUp(){
    stage === need.role 的句子。改播报文案不会再弄坏门控；
    老局 timeline 没有 stage 时回退整队播报门（保守，不会更糟）。 */
 function nightStageIdx(need){
-  /* 该座位的「请睁眼」句（stage === role）在时间线里的下标（-1 = 老局/非夜间）。 */
+  /* 该座位的「请睁眼」句（stage === role）在时间线里的下标（-1 = 老局/非夜间）。
+     ★ 2026-10-30：与 `nightNodeIdx` 同一个坑 —— 时间线是**整局**的，同名 stage
+     每夜都再出现一次，从头找会拿到**第一夜**那句（早已播过 ⇒ 门控永远放行）。 */
   var role = need && need.role;
   if (!role) return -1;
   var tl = (PUBLIC && PUBLIC.timeline) || [];
-  for (var j = 0; j < tl.length; j++){
+  for (var j = tl.length - 1; j >= 0; j--){
     if (tl[j].stage === role) return j;
   }
   return -1;
@@ -281,7 +388,13 @@ function nightStageIdx(need){
 function nightNodeIdx(nid){
   if (!nid) return -1;
   var tl = (PUBLIC && PUBLIC.timeline) || [];
-  for (var j = 0; j < tl.length; j++){
+  /* 🔴 2026-10-30（用户实机：第二夜起狼人面板在法官喊「天黑请闭眼」之前就弹、
+     预言家窗口整窗不出现）：这里原来**从头**找第一条 —— 第二夜起永远命中
+     第一夜的同名句（"狼人请睁眼…"），算出来的下标早已播过。
+     两头都坏了：门控立刻放行（面板抢跑），而"预言家请闭眼之后才收结果屏"
+     那条清理在每个 tick 都成立（结果屏一摊出来就被收掉）。
+     ⇒ 改从**后往前**取最近一条：当前节点的句子总是最新产生的那条。 */
+  for (var j = tl.length - 1; j >= 0; j--){
     if (tl[j].node === nid) return j;
   }
   return -1;

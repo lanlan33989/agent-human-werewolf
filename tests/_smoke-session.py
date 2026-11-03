@@ -17,6 +17,12 @@ D6 回归：真人局前夜的可用性收尾
 """
 from __future__ import annotations
 
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
+
 import time as _time  # noqa: E402  （夜间节拍是墙上时间，测试要等它）
 
 import sys
@@ -53,9 +59,16 @@ def play(sess, max_steps: int = 80) -> None:
         if sess.game.phase.value == "ended":
             return
         need = []
+        # ★ 2026-10-28：狼刀窗口内 kill 会一直挂在待办里（用户可以随时改刀，
+        #   见 engine.settle_wolf_window）。机器人若反复提交同一个刀口只会**空转**
+        #   —— 墙上时间不流逝，窗口永远走不完。点过就当这一步交完了。
+        _wpt = sess.game.night.get("wolf_points") or {}
         for p in sess.game.players:
-            if p.kind == "human" and p.alive:
+            # ⚠️ 死了的人类也有待办（遗言）—— 判据不能只看 alive。
+            if p.kind == "human":
                 a = sess.game.actions_for(p.seat)
+                if a and p.seat in _wpt and set(a) <= {"kill", "confirm"}:
+                    continue
                 if a:
                     need.append((p.seat, a))
         if not need:
@@ -83,6 +96,10 @@ def play(sess, max_steps: int = 80) -> None:
             sess.act(seat, "pass", None, None)
         else:
             return
+        # ★ 2026-10-29：窗口类待办（女巫两问、狼刀）**动作交上去后窗口还在走**，
+        #   人一直有动作 ⇒ 上面的循环会原地空转、墙上时间不流逝、窗口永远不关。
+        #   这里让出一拍，读秒才有机会走完（和真机上"点完等播报"同形）。
+        _time.sleep(0.02)
 
 
 print("=" * 74)
@@ -161,10 +178,10 @@ print("③ 前端：真人局可用性（静态检查）")
 #     nightops 夜间暗屏 4 条（2026-10-05 用户定取消所有半透明遮罩，机制整体移除）、
 #     「再来一局」直接同板子重开（2026-10-01 用户定改为回封面再按开始）、
 #     LOCAL_LINES 换局清零（新局走整页重建，形态不同）。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = ((BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 
 check("① 一场统计：显示开始时间/时长（renderSeries，跨局累计）",
       'id="series"' in p2 and "本场 " in p2 and "function seriesSince" in p2)
@@ -182,7 +199,8 @@ check("⑤ 超 2 小时主动提醒（合规要求）",
       "mins >= 120" in p2 and "checkLongUse" in p2)
 check("⑤ 提醒写进日志（LOCAL_LINES）+ 常驻提示面板",
       "LOCAL_LINES.push" in p2 and 'id="longUse"' in p2)
-check("⑤ 本地提醒台词会进日志", "concat(LOCAL_LINES)" in p2)
+check("⑤ 本地提醒台词会进播报队列（在服务端时间线念完后补播，不推进 SPOKEN）",
+      "LOCAL_LINES" in p2 and "LOCAL_SPOKEN" in p2)
 check("⑤ 说明依据的法规名", "人工智能拟人化互动服务管理暂行办法" in p2)
 check("⑤ 每小时最多提醒一次（不刷屏）", "mins - WREMINDED >= 60" in p2)
 
@@ -234,11 +252,13 @@ check("② 构造成功：票已齐，但 pending 还停在过期的 human_vote"
       s1._all_voted() and s1.pending == "human_vote",
       f"all_voted={s1._all_voted()} pending={s1.pending}")
 
-before = len([x for x in s1.game.public_log if x.startswith("投票结果")])
+# 判据是"票型已结算"（vote_history 增长）—— 2026-10-31 起法官恢复了票型播报，
+# 但这里**不该**依赖播报文本（措辞一改测试就红）：结算事实由 vote_history 表达。
+before = len(s1.game.vote_history)
 s1.drive(0.5)
-after = len([x for x in s1.game.public_log if x.startswith("投票结果")])
+after = len(s1.game.vote_history)
 check("★ 轮询一次就归票（旧实现会永远卡在 human_vote 上）", after > before,
-      f"「投票结果」{before}→{after}，pending={s1.pending}")
+      f"vote_history {before}→{after}，pending={s1.pending}")
 
 # 反向断言：放宽闸门之后，drive() 仍然**不能**替人类出手
 # 🔴 2026-10-05：不再写死 seed=3 —— 4 人局人类可能第一夜就被刀死、局直接 ended，
@@ -289,16 +309,16 @@ check("④ 读取失败后仍要排下一次轮询（旧实现一次网络抖动
 # 2026-10-02：play.html 拆出了 tableui.js（大屏 UI 状态机 + 对局驱动：
 # sigOf/voicedUp/tick/openHandoff/renderHandoff/startSay… 都搬了过去）。
 # 这些检查是**源码扫描**，所以把两个文件拼起来扫 —— 拆分不该让防线失明。
-p2 = ((BASE / "play.html").read_text(encoding="utf-8")
-      + (BASE / "tableui.js").read_text(encoding="utf-8")
+p2 = ((BASE / "frontend" / "play.html").read_text(encoding="utf-8")
+      + (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
       # 2026-10-07：播报队列 + 夜间门控拆去了 speech_ui.js ⇒ 清单跟着走（判据未改）
-      + (BASE / "speech_ui.js").read_text(encoding="utf-8"))
+      + (BASE / "frontend" / "speech_ui.js").read_text(encoding="utf-8"))
 # ⚠️ 2026-10-07：交接层（交接认领 / 轮盘操作屏）全部在 tableui.js 里；
 #    play.html 里的「请把手机交给 N 号」是**身份牌**那一页的文案，是另一回事。
 #    下面那条"认领步骤已删"的断言原来扫的是 p2（两文件拼接）⇒ 被身份牌文案
 #    误伤，**基线就是红的**（`_smoke-map.py` 只比对"通过数"、不查退出码，所以一直没报）。
 #    断言写错了，不是实现错了 ⇒ 改成只扫 tableui.js（判据强度不变）。
-pui = (BASE / "tableui.js").read_text(encoding="utf-8")
+pui = (BASE / "frontend" / "tableui.js").read_text(encoding="utf-8")
 check("★ play.html：手上这屏的判据包含「动作」而不只是座位",
       "function sigOf" in p2 and "sigOf(mine) === HANDOFF_SIG" in p2
       # sigOf 本身必须仍然把「动作」算进签名
@@ -359,7 +379,7 @@ check("★ tableui：狼**空刀**时解药那一屏照常出、按钮**置灰�
       "（2026-10-07 用户定：照常走解药播报和面板流程，只是解药按钮置灰）",
       "无人被刀" in pui and "_yesBtn.disabled = true" in pui
       and "healBlocked" in pui and "healBlocked" in p2
-      and "#wheelYes.off" in (BASE / "play.html").read_text(encoding="utf-8"))
+      and "#wheelYes.off" in (BASE / "frontend" / "play.html").read_text(encoding="utf-8"))
 check("★ play.html：狼夜里也要加密轮询（实时盘子要看队友的点/锁定，700ms 一轮）",
       "PUBLIC.phase === 'night') ? 700 : 1200" in p2)
 # 2026-10-06：以下三条原守 game.html（voicedUp 同款 / 2.5s 快档 / 动作变换屏），
@@ -394,57 +414,48 @@ print("★ 规则开关（G9）：设置要真的打进新开的局，且**不�
 
 _old_set = dict(game_api.SETTINGS)
 try:
-    game_api.SETTINGS.update({"tie_vote_rule": "random",
-                              "guard_can_repeat": True,
+    # 🔴 2026-10-12（用户定）：平票处理 / 发言方式两个开关已从公开开关表删除
+    #    （行为固定 no_exile + rotation）。所以 G9 只验剩下的三个真开关；
+    #    被删的两个改成验「接口拒绝」，见本段末尾。
+    game_api.SETTINGS.update({"guard_can_repeat": True,
+                              "guard_can_self_guard": False,
                               "hunter_can_shoot_on_witch_poison": True})
     _s6 = game_api.Session(humans=3, ais=3, seed=11)
     check("★ 新开的局拿到设置的规则（三个开关全生效）",
-          _s6.game.rules.tie_vote_rule == "random"
-          and _s6.game.rules.guard_can_repeat is True
+          _s6.game.rules.guard_can_repeat is True
+          and _s6.game.rules.guard_can_self_guard is False
           and _s6.game.rules.hunter_can_shoot_on_witch_poison is True,
           str(_s6.game.rules))
-    game_api.SETTINGS.update({"tie_vote_rule": "no_exile"})
+    game_api.SETTINGS.update({"guard_can_repeat": False,
+                              "guard_can_self_guard": True,
+                              "hunter_can_shoot_on_witch_poison": False})
     check("★ 不追溯改已在打的那一局（中途改规则 = 让全桌的判断作废）",
-          _s6.game.rules.tie_vote_rule == "random", _s6.game.rules.tie_vote_rule)
+          _s6.game.rules.guard_can_repeat is True
+          and _s6.game.rules.guard_can_self_guard is False
+          and _s6.game.rules.hunter_can_shoot_on_witch_poison is True,
+          str(_s6.game.rules))
     _s7 = game_api.Session(humans=3, ais=3, seed=11)
     check("★ 改完设置后**新开**的那一局才拿到新值",
-          _s7.game.rules.tie_vote_rule == "no_exile", _s7.game.rules.tie_vote_rule)
+          _s7.game.rules.guard_can_repeat is False
+          and _s7.game.rules.guard_can_self_guard is True
+          and _s7.game.rules.hunter_can_shoot_on_witch_poison is False,
+          str(_s7.game.rules))
     # （Rules 是每局一个 —— Board 上没有 rules 字段，所以这里查的是"两局不是同一个对象"，
     #   这比"板子有没有被污染"更贴近真正会出事的形态：万一以后有人把 rules 提成共享单例，
     #   一次设置就会串味到所有局、包含别人的对局。）
     check("★ 每局拿到的 Rules 是独立对象（不是共享单例）—— 否则开关会串到别的局",
           _s7.game.rules is not _s6.game.rules, "")
 
-    # 真机对照：**同一手牌、只改规则 ⇒ 结果必须不同**。
-    # 只断言"存进去了"是不够的 —— 那证明不了引擎真的读了它（读漏了照样能存）。
-    def _tie_result(sess):
-        """造一个必平票的局面：前两人互投、其余人弃票 ⇒ 看规则怎么判。"""
-        g = sess.game
-        g.resolve_night()              # 第一夜不刀人 ⇒ 平安夜 ⇒ 进白天
-        g.open_discuss()
-        while g.current_speaker() is not None:
-            g.end_speech()
-        g.open_vote()
-        a, b = [p.seat for p in g.alive][:2]
-        g.cast_vote(a, b)
-        g.cast_vote(b, a)
-        for p in g.alive:
-            if p.seat not in (a, b):
-                g.cast_vote(p.seat, -1)    # 其他人弃票 ⇒ 只剩这两票，必平
-        return g.resolve_vote()
-
-    _old6 = dict(game_api.SETTINGS)
-    try:
-        game_api.SETTINGS.update({"tie_vote_rule": "no_exile"})
-        _r_std = _tie_result(game_api.Session(humans=3, ais=3, seed=21))
-        game_api.SETTINGS.update({"tie_vote_rule": "random"})
-        _r_rnd = _tie_result(game_api.Session(humans=3, ais=3, seed=21))
-    finally:
-        game_api.SETTINGS.clear()
-        game_api.SETTINGS.update(_old6)
-    check("★ 规则真的改变结果：平票时 no_exile 无人出局 / random 出一个",
-          _r_std is None and _r_rnd is not None,
-          f"标准={_r_std} 随机={_r_rnd}")
+    # 🔴 删掉的两个键必须**明确报错**，不能静默退回默认 ——
+    #    否则调用方以为设上了"随机出人/挑战发言"，实际拿到的是标准局。
+    _removed_rejected = 0
+    for _k, _v in (("tie_vote_rule", "random"), ("speech_mode", "challenge")):
+        try:
+            game_api._valid_settings({_k: _v})
+        except ValueError:
+            _removed_rejected += 1
+    check("★ 已删除的两个开关走设置通路会被拒（不静默忽略）",
+          _removed_rejected == 2, str(_removed_rejected))
 finally:
     game_api.SETTINGS.clear()
     game_api.SETTINGS.update(_old_set)
@@ -454,14 +465,18 @@ print("★ 挑战式发言顺序（speech_mode）：端到端 + 整局跑不跑�
 # 这个机制最大的风险不是"顺序对不对"，而是**一轮永远说不完**（插队失控）。
 # 所以两件事一起验：① 真的插了队、手机真的递给了被点名的人 ② 整局能自己走到结束。
 _keep = dict(game_api.SETTINGS)
-game_api.SETTINGS = {**_keep, "speech_mode": "challenge"}
 try:
+    # 🔴 2026-10-12：speech_mode 已从公开设置删除（固定 rotation），但挑战式机制仍留在
+    #    引擎里（以后恢复只需加回 RULE_SWITCHES）。所以这里直接给这一局换 Rules，
+    #    继续验收"插队不会让一局永远说不完"——走设置通路会被拒，已在上方验过。
+    from dataclasses import replace as _replace_rules
     # ⚠️ 批八之后 Session 收的是 **Board 对象**（不是板子键字符串）：
     #    不传 board 就按人数现算（界面走的就是这条）。
     # ⚠️ 用 **3 真人 + 1 AI**：这样"第一天发言时还有另一个活人"是**确定**的
     #    （一夜最多死一个），那条"被点名的人下一个开口"才敢写成硬断言 ——
     #    否则它有一半的种子会因为"另一个人昨晚被刀了"而随机变红（测试自己的毛病）。
     _s_sp = game_api.Session(humans=3, ais=1, seed=23)
+    _s_sp.game.rules = _replace_rules(_s_sp.game.rules, speech_mode="challenge")
     _g = _s_sp.game
     check("★ 规则开关落到了这一局的 Rules 上（不是只在接口层记了一笔）",
           _g.rules.speech_mode == "challenge", _g.rules.speech_mode)
@@ -475,23 +490,41 @@ try:
     _queue_ok = None
     _chain_ok = None
     _end_ok = False
-    for _ in range(800):      # 2026-10-07：没 arm 的夜是 1.5× 窗口 ⇒ 步数预算同步放大
+    _idle_from = None
+    for _ in range(800):
         if _g.phase.value == "ended":
             _end_ok = True
             break
-        _need = [p for p in _g.players
-                 if p.kind == "human" and p.alive and _g.actions_for(p.seat)]
+        # ⚠️ 死了的人类也有待办（遗言），判据不能只看 alive。
+        # ⚠️ 狼刀窗口里 kill/confirm 会一直挂着（窗口内可改刀），反复提交只会空转、
+        #    墙上时间不流逝 ⇒ 窗口永远走不完。点过就当作这一步交完了（同 play()）。
+        _wpt = _g.night.get("wolf_points") or {}
+        _need = []
+        for _p in _g.players:
+            if _p.kind != "human":
+                continue
+            _a = _g.actions_for(_p.seat)
+            if _a and _p.seat in _wpt and set(_a) <= {"kill", "confirm"}:
+                continue
+            if _a:
+                _need.append(_p)
         if not _need:
-            # ⚠️ 没有人类待办**不等于**结束：可能轮到 AI、也可能人类都出局了。
-            #    我第一版在这里直接 return，把"该 AI 干活"当成"打完了"，
-            #    于是误报成产品卡住（是**测试自己的毛病**，不是插队失控）。
-            _s_sp.drive(0.05)
+            # ⚠️ 没有人类待办**不等于**结束：可能轮到 AI、也可能在走夜间窗口。
+            #    连续 3 秒推不出新东西才算真的到头（照抄 play() 的判据）。
+            _idle_from = _idle_from or _time.monotonic()
+            _s_sp.drive(0.3)
+            if _time.monotonic() - _idle_from > 3.0:
+                break
             continue
+        _idle_from = None
         _p = _need[0]
         _acts = _g.actions_for(_p.seat)
         _v = _g.get_view_for(_p.seat)
         _others = [q["seat"] for q in _v["players"] if q["alive"] and q["seat"] != _p.seat]
-        if "speak" in _acts and not _did_accuse and _others:
+        # 只在**正常白天讨论**（不是遗言、不是平票加时）里做那次点名 ——
+        # 加时轮不让插队（见 engine.end_speech 的 runoff_stage 判断）。
+        if ("speak" in _acts and not _did_accuse and _others
+                and _p.alive and _g.phase.value == "discuss" and _g.runoff_stage == 0):
             _did_accuse = True
             _y = _others[0]
             _s_sp.act(_p.seat, "speak", None, f"我怀疑 {_y + 1} 号，他像狼。")
@@ -500,25 +533,24 @@ try:
             # 被点名的是**人类** ⇒ 驱动器必须停在他那里（这就是"手机递给谁"）
             if _g.player(_y).kind == "human":
                 _chain_ok = (_g.current_speaker() == _y)
+            _s_sp.drive(0.05)
             continue
-        # ⚠️ 狼队协商是**两步**（先点人、再确定）：没点过就 confirm 会直接抛错。
-        #    判"点过没有"要看视图里的 wolf_points —— can_act 里 kill 一直挂着，
-        #    只看它就会一直点下去（批二踩过的同一个坑）。
-        _pointed = (_v.get("wolf_points") or {}).get(_p.seat) is not None
         if "speak" in _acts:
             _s_sp.act(_p.seat, "speak", None, f"{_p.seat + 1} 号过")
-        elif "kill" in _acts and not _pointed and _others:
+        elif "kill" in _acts and _others:
             _s_sp.act(_p.seat, "kill", _others[0], None)
-        elif "confirm" in _acts and _pointed:
+        elif "confirm" in _acts and _p.seat in _wpt:
             _s_sp.act(_p.seat, "confirm", None, None)
         elif "vote" in _acts:
             _s_sp.act(_p.seat, "vote", _others[0] if _others else -1, None)
-        elif "kill" in _acts:
-            _s_sp.act(_p.seat, "kill", _others[0], None)
         elif "investigate" in _acts:
             _s_sp.act(_p.seat, "investigate", _others[0], None)
         else:
             _s_sp.act(_p.seat, "pass", None, None)
+        # 窗口类待办（女巫两问、狼刀）交上去后窗口还在走 —— drive() 遇到人类待办会
+        # 立刻返回，所以这里显式让出一拍，否则原地空转、读秒永远走不完。
+        _s_sp.drive(0.05)
+        _time.sleep(0.02)
 
     check("★ 人类玩家点名后**真的插了队**（act → 记发言 → 插队，整条链）",
           _did_accuse and _queue_ok is True,
@@ -536,27 +568,9 @@ print("★ 音色（人格的听觉那一半）：时间线必须带上该由谁
 # 为什么要在会话层验：前端只是把 time.voice 原样转给 /api/tts，
 # 所以"哪个座位该用什么音色"这件事**只能在服务端验**（前端没法测对错）。
 _s_v = game_api.Session(humans=2, ais=2, seed=31, personality="random")
-for _ in range(120):                     # 打几步，攒出法官播报 + AI 发言（2026-10-07：夜 1.5× ⇒ 预算放大）
-    if _s_v.game.phase.value == "ended":
-        break
-    _need = [(p.seat, _s_v.game.actions_for(p.seat)) for p in _s_v.game.players
-             if p.kind == "human" and p.alive and _s_v.game.actions_for(p.seat)]
-    if not _need:
-        _s_v.drive(0.05)
-        continue
-    _se, _ac = _need[0]
-    _vv = _s_v.game.get_view_for(_se)
-    _oth = [q["seat"] for q in _vv["players"] if q["alive"] and q["seat"] != _se]
-    if "speak" in _ac:
-        _s_v.act(_se, "speak", None, f"{_se + 1} 号过")
-    elif "vote" in _ac:
-        _s_v.act(_se, "vote", _oth[0] if _oth else -1, None)
-    elif "kill" in _ac:
-        _s_v.act(_se, "kill", _oth[0], None)
-    elif set(_ac) & {"heal", "poison"}:
-        _s_v.act(_se, "pass", None, None)
-    else:
-        break
+# 打几步，攒出法官播报 + AI 发言。用 play()：它会按墙上时间推夜窗、
+# 也会替死掉的人类念遗言（老循环只看 alive，遇到首夜死亡就卡在遗言上）。
+play(_s_v, max_steps=400)
 _tl = _s_v.public_state()["timeline"]
 _sys_lines = [x for x in _tl if x["t"] == "sys"]
 _say_lines = [x for x in _tl if x["t"] == "say"]

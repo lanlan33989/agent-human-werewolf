@@ -6,6 +6,11 @@
 它的正确性只有靠"给定输入 → 给定数字"这种白盒断言来钉，
 而不是靠"跑一局没崩"。
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import sys as _s, os as _o
 _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
 _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
@@ -111,6 +116,11 @@ check("发言质量标明了'待接 LLM 打分'，不用字数冒充",
 
 def play_to_end(sess, max_steps: int = 500) -> bool:
     """把一局走完（人类座位按最简单的策略出手）。"""
+    # ★ 2026-10-29（用户定：夜间点完**窗口不退出**、按时间结束时的选择为准）：
+    #   老机器人"看到能做什么就做什么"会**在同一个窗里反复出手**（回回点同一个
+    #   号码），而窗口要按**墙上时间**才走完 ⇒ 500 步转眼烧光、一局都打不完
+    #   （实测 0/6）。现在同一（座位, 节点）最多出手两次，且第二次只允许「确认」。
+    _done: dict = {}
     for _ in range(max_steps):
         g = sess.game
         if g.phase is Phase.ENDED:
@@ -135,9 +145,19 @@ def play_to_end(sess, max_steps: int = 500) -> bool:
                       if q["alive"] and q["seat"] != seat]
             pts = v.get("wolf_points") or {}
             pointed = pts.get(seat) is not None
+            _key = (seat, g.night.get("stage") if g.phase is Phase.NIGHT
+                    else g.phase.value)
+            _n = _done.get(_key, 0)
+            if _n >= 2 or (_n >= 1 and "confirm" not in acts):
+                sess.drive(0.05)               # 这一窗已经出过手 —— 让墙上时间走
+                continue
+            _done[_key] = _n + 1
             if "speak" in acts:
                 sess.act(seat, "speak", None, "我先过。")
             elif "confirm" in acts and pointed:
+                sess.act(seat, "confirm", None, None)
+            elif "confirm" in acts and "investigate" in acts:
+                # ★ 2026-10-29：预言家点完人还要点「确认」，确认这一刻才报结果
                 sess.act(seat, "confirm", None, None)
             elif "vote" in acts and others:
                 sess.act(seat, "vote", others[0], None)

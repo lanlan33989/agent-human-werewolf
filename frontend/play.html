@@ -70,6 +70,24 @@
   .wnum.human{border-color:#4da3ff;}
   .wnum.ai{border-color:#ff5252;}
   .wnum.dead{opacity:.3;}
+  /* ★ 2026-10-29（用户：当前发言玩家高亮 = **玩家序号所在的小圆圈**）：
+     手机上真正看得见的就是轮盘这一圈号码（.seat 在 #p4 是 display:none，
+     大圆里的文字又每句都在变）。所以高亮落在这里：金环 + 呼吸光晕 + 号码提亮，
+     一眼能看出"现在是谁在说"。 */
+  .wnum.speaking{
+    border-color:var(--yellow);
+    background:rgba(255,213,61,.30);
+    color:#FFF7D0;text-shadow:0 0 10px rgba(255,213,61,.9);
+    box-shadow:0 0 0 4px rgba(255,213,61,.40), 0 0 20px rgba(255,213,61,.80);
+    animation:numGlow 1.4s ease-in-out infinite;
+    z-index:3;
+  }
+  /* 出局者留遗言时他的号码已经 .dead（opacity .3）—— 正在说话就抬回来 */
+  .wnum.dead.speaking{opacity:.9;}
+  @keyframes numGlow{
+    0%,100%{box-shadow:0 0 0 3px rgba(255,213,61,.30), 0 0 12px rgba(255,213,61,.55)}
+    50%{box-shadow:0 0 0 8px rgba(255,213,61,.50), 0 0 26px rgba(255,213,61,.95)}
+  }
   .wnum.pick{cursor:pointer;animation:pickBreathe 1.5s ease-in-out infinite;}
   .wnum.sel{background:var(--yellow);color:var(--purple-d);border-color:var(--yellow);}
   .wnum.victim{border-color:#ff5a5a;background:rgba(255,90,90,.3);color:#ffd9d9;}
@@ -249,16 +267,54 @@
 #p4 .tcenter .who{ font-size:calc(min(58vw,300px) * .14); font-weight:800;
   color:#fff; margin-top:8px; text-align:center; line-height:1.35; padding:0 10px;
   white-space:nowrap; }
+/* ★ 2026-10-29（用户：AI 发言时大圆要写「×号正在发言中」）：
+   原来那句 .who 是 14% ≈ 35px 且 nowrap，七个字直接顶穿圆盘、压在号码上；
+   同时上面还挂着「法官」两个字 —— 说话的明明是 2 号。发言态一律：
+   藏掉"法官"标题，字号降到 10.5%，长号码也放得下。 */
+#p4 .tcenter.talking .t{ display:none; }
+#p4 .tcenter.talking .g{ font-size:calc(min(58vw,300px) * .16); margin-bottom:2px; }
+#p4 .tcenter.talking .who{ font-size:calc(min(58vw,300px) * .105); margin-top:2px;
+  padding:0 6px; letter-spacing:1px; color:#FFF7D0;
+  text-shadow:0 0 14px rgba(255,213,61,.55); }
 #p4 .tcenter.pickable{ cursor:pointer;
   border-color:var(--yellow);
   animation:pickBreathe 1.5s ease-in-out infinite; }
 #p4 .tcenter.rec{ border-color:#ff5a5a;
   box-shadow:0 0 0 8px rgba(255,90,90,.25); }
-/* 票型大字：贴在大圆下方，投票结算后一直显示到下一次投票 */
-#voteBig{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
-  max-width:94%; text-align:center; font-size:27px; font-weight:800;
-  color:#FFE08A; text-shadow:0 2px 12px rgba(0,0,0,.65);
-  pointer-events:none; z-index:5; line-height:1.4; display:none; }
+/* 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报票型后仍保留）：
+   法官用嘴念票型（"3 号 2 票（1 号、4 号投的）…"），底部窄条同步显示紧凑票型，
+   首轮/加时轮分别显示（加时结算后再换成加时那一轮）。
+   · 宽度约竖屏的 15%（锚在 #phone 上，所以 15% 就是手机宽度的 15%）
+   · 内容多时**可上下滚动**（overflow-y:auto + 触摸惯性）
+   · 每行一条："2，3→5"（2 号、3 号投给 5 号）；弃票单列一行 */
+#voteBox{ position:absolute; left:8px; bottom:16px; width:15%; min-width:52px; max-width:104px;
+  max-height:38%; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+  background:rgba(8,4,20,.72); border:1px solid rgba(255,224,138,.45); border-radius:10px;
+  padding:5px 3px; z-index:9; display:none; touch-action:pan-y;
+  box-shadow:0 2px 12px rgba(0,0,0,.45); }
+/* 新票型落定的一次性高亮（3 秒）——手机上这块地方很小，不闪一下很容易被忽略 */
+#voteBox.vb-pop{ animation:vbPop 1.1s ease-out 2; }
+@keyframes vbPop{
+  0%{ box-shadow:0 0 0 0 rgba(255,224,138,.85); }
+  100%{ box-shadow:0 0 0 10px rgba(255,224,138,0); }
+}
+#voteBox .vb-t{ font-size:10px; line-height:1.3; color:rgba(255,224,138,.8);
+  text-align:center; margin-bottom:2px; letter-spacing:1px; }
+#voteBox .vb-l{ font-size:13px; font-weight:800; color:#FFE08A; text-align:center;
+  line-height:1.5; word-break:break-all; text-shadow:0 1px 6px rgba(0,0,0,.75); }
+/* 终局弹框（2026-10-28 用户定）：法官念完「游戏结束，狼人/好人胜利」之后再弹。
+   它只盖住手机框内部（#phone 是定位容器），不影响右上角的 ⏭ / ↻。 */
+#endPop{ position:absolute; left:0; right:0; top:0; bottom:0; z-index:40; display:none;
+  align-items:center; justify-content:center; background:rgba(0,0,0,.55); padding:26px; }
+#endPop.on{ display:flex; }
+#endPop .eb{ width:100%; max-width:330px; background:#1b1530;
+  border:1px solid rgba(255,224,138,.45); border-radius:18px; padding:26px 20px 20px;
+  text-align:center; box-shadow:0 18px 48px rgba(0,0,0,.65); }
+#endPop .eb-who{ font-size:30px; font-weight:800; color:#FFE08A; letter-spacing:2px; }
+#endPop .eb-sub{ margin-top:10px; font-size:13px; color:rgba(255,255,255,.68); line-height:1.6; }
+#endPop .eb-btn{ margin-top:18px; width:100%; padding:12px 0; border-radius:12px;
+  font-size:16px; font-weight:700; border:1px solid rgba(255,255,255,.28);
+  background:rgba(255,255,255,.10); color:#fff; font-family:inherit; }
 /* 大圆发言模式下的提示行与按钮（2026-10-02）：
    提示行 = 录音状态唯一可见处（● 红 = 正在录音）；按钮 = 过 / 打字 */
 #spkTip{ position:absolute; left:50%; bottom:calc(14px + 44px + 54px); transform:translateX(-50%);
@@ -332,6 +388,9 @@
   #nightDial button.dead{opacity:.3;pointer-events:none;}
   #nightDial button.victim{border-color:#ff5a5a;background:rgba(255,90,90,.3);color:#ffd9d9;
     animation:pickBreathe 1.5s ease-in-out infinite;}
+  /* 已选中（女巫点了救人 / 「不救」撤回键可用）：黄色描边，一眼看出选中态 */
+  #nightDial button.sel{border-color:var(--yellow);box-shadow:0 0 0 4px rgba(255,213,61,.35);}
+  #nightDial button.victim.sel{background:rgba(255,213,61,.28);color:#fff;animation:none;}
   #nightDial button.act{border-color:var(--yellow);color:var(--yellow);
     background:rgba(255,213,61,.12);font-size:15px;}
   #dialHead{display:none;position:absolute;left:50%;top:10px;transform:translateX(-50%);
@@ -416,12 +475,23 @@
         <label style="font-size:13.5px;color:rgba(255,255,255,.86)">大模型 LLM
           <input type="password" id="kLlm" placeholder="LLM_API_KEY"
                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <!-- ★ 2026-10-31（用户："接入 LLM key 之后 AI 的发言还是兜底"）：把"现在到底
+             是 Mock 还是真模型"直接摆出来 —— 罪魁是 MOCK_LLM=1，以前完全不可见。 -->
+        <div id="kLlmNow" style="font-size:12px;color:rgba(255,255,255,.6)"></div>
         <label style="font-size:13.5px;color:rgba(255,255,255,.86)">语音合成 TTS
           <input type="password" id="kTts" placeholder="DASHSCOPE_API_KEY"
                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit"></label>
+        <label style="font-size:13.5px;color:rgba(255,255,255,.86)">TTS 通道
+          <select id="kTtsMode"
+                  style="width:100%;box-sizing:border-box;margin-top:3px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:7px 9px;font-family:inherit">
+            <option value="auto" style="color:#111">自动（有 Key 走云端，否则本地）</option>
+            <option value="sapi" style="color:#111">本地 SAPI（免费，单音色）</option>
+            <option value="qwen" style="color:#111">云端 Qwen（多音色，按量计费）</option>
+          </select></label>
+        <div id="kTtsNow" style="font-size:12px;color:rgba(255,255,255,.6)"></div>
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
-        <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key</button>
+        <button class="bigbtn" id="btnKeys" style="margin:0">应用 Key / 通道</button>
         <span id="keysMsg" style="font-size:12px;color:rgba(255,255,255,.66)"></span>
       </div>
     </div>
@@ -474,14 +544,19 @@
       <!-- 座位号码标识排列：2026-10-07 用户定「直接去掉」。
            （`renderDots` / `moveDotCursor` 都自带 `if (!wrap) return`，删掉这个容器即可
             变成空操作；CSS 里的 #seatDots/#dotCursor/.seatdot 已成死样式，下次清理。） -->
-      <!-- 票型大字（2026-10-02 用户定：不显示 AI 文本，只把票型大字展示） -->
-      <div id="voteBig"></div>
+      <!-- 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报后仍保留）：
+           法官念票型的同时，这个小框显示紧凑票型（首轮 / 加时轮）。
+           宽度约竖屏 15%，内容多时上下滚动；每行一条 "2，3→5"。 -->
+      <div id="voteBox"></div>
       <!-- 拨号盘（2026-10-12 用户定稿）：夜间操作 + 投票；顶部角色大字 + 倒计时 -->
       <div id="dialHead"><div class="r"></div><div class="cd" id="dialCd"></div></div>
       <div id="nightDial"></div>
       <!-- 大圆发言模式的提示行 + 按钮（2026-10-02：录音状态要看得见；
            识别失败不再自动弹卡片 —— 提示行给指引，「打字」是手动出口） -->
       <div id="spkTip"></div>
+      <!-- ★ 2026-11-01（用户实机："真人无法正常发言"）：打字兜底必须**有入口**。
+           麦坏了 / 识别通道不通 / 权限被拒时，只能用这条：点它摊开输入条。 -->
+      <div id="sayCtl"><button id="sayType">⌨ 打字</button></div>
       <!-- 「打字 / 过」两个按钮已去掉（2026-10-07 用户定：发言屏只有号码 + 开麦/关麦） -->
       <!-- 大圆发言模式复用 startSay/stopSay（它们要 #hoSay/#hoText/#hoStatus 存在）：
            给一套视觉隐藏的，点击走大圆本体 -->
@@ -503,6 +578,16 @@
       <!-- 2026-10-26（用户定）：导出对局文件挪到游戏结束末尾 —— 和战报一样，
            只有打完才有意义；给提示词实验室复盘/回放用。 -->
       <a id="lnkExportLab" class="bigbtn" href="#" onclick="exportLabFile(event)">⤓ 导出对局文件</a>
+    </div>
+
+    <!-- 终局弹框（2026-10-28 用户定）：法官念完「游戏结束，狼人/好人胜利」后弹出。
+         静态 DOM，由 renderEndPop() 控制显隐（tableui.js 的 ended 分支每拍调一次）。 -->
+    <div id="endPop">
+      <div class="eb">
+        <div class="eb-who" id="endPopWho">—</div>
+        <div class="eb-sub" id="endPopSub">本局结束。下面的「本局战报」可以看完整复盘。</div>
+        <button class="eb-btn" id="endPopOk">知道了</button>
+      </div>
     </div>
 
     <!-- 交接浮层已并入轮盘（2026-10-05 用户定：取消所有黑色半透明半屏）。
@@ -550,7 +635,10 @@ var GID = null, RULES = null;
 var PUBLIC = null, SPOKEN = 0, SPEAKING = false, PAUSED = false, VOICE_ON = true;
 /* 流式播报：正在播的那一句（跳过按钮要能掐掉它）+ 总开关（?nostream=1 强制走老路） */
 var SPEAK_STREAM = null;
-var VOICE_STREAM = !/[?&]nostream=1/.test(location.search);
+/* 流式默认关：等 /api/health 的 tts_stream 确认后再开（2026-10-31）。
+   本地 SAPI 服务端会明确拒绝 /ws/tts —— 默认开只会每句先吃一次 error。
+   ?nostream=1 仍然强制关。 */
+var VOICE_STREAM = false;
 var LOCAL_LINES = [];        /* 本地产生的提示行（合规提醒等）——它们不在服务端时间线里 */
 var WSINCE = 0;              /* 本"场"开始时间（跨局累计，见 seriesSince） */
 var WREMINDED = 0;           /* 上次提醒时的分钟数（每小时提醒一次，不刷屏） */
@@ -606,6 +694,9 @@ async function api(path, opts){
       if (v.wolf_confirmed) out.wolf_confirmed = v.wolf_confirmed;
       if (v.night_victim != null) out.night_victim = v.night_victim;
       if (v.investigations) out.investigations = v.investigations;
+      /* 平票加时（2026-10-28）：候选集与"能不能投"都由服务端算，demo 场景也要带上，
+         否则画廊里看不到"只有平票候选可点"这一屏。 */
+      if (v.runoff) out.runoff = v.runoff;
       return out;
     }
     /* lost 场景：模拟"服务端这一局没了" ⇒ tick 的 catch 走 💀 失控屏 */
@@ -707,27 +798,79 @@ document.addEventListener('visibilitychange', function(){
 async function loadKeys(){
   try{
     var j = await api('/api/admin/play-keys');
-    $('kAsr').value = j.asr || '';
-    $('kLlm').value = j.llm || '';
-    $('kTts').value = j.tts || '';
+    /* 🔴 2026-11-01（用户实机：Key 明明填了，AI 还是兜底）：非本机请求只回指纹
+       （形如 sk-…a506），旧代码把它当真实值回填；用户改别的配置点「应用」时
+       原样提交 ⇒ 真实 key 被 8 字符掩码覆盖。掩码一律不进输入框、不提交。 */
+    function fillKey(id, v, ph){
+      var el = $(id); if (!el) return;
+      var masked = !!v && (v.indexOf('…') >= 0 || /^\*+$/.test(v));
+      el.value = masked ? '' : (v || '');
+      el.placeholder = masked ? '已配置（本机不回显；留空保持不变）' : ph;
+      el.dataset.masked = masked ? '1' : '';
+    }
+    fillKey('kAsr', j.asr, 'ASR_API_KEY');
+    fillKey('kLlm', j.llm, 'LLM_API_KEY');
+    fillKey('kTts', j.tts, 'DASHSCOPE_API_KEY');
+    $('kTtsMode').value = j.tts_mode || 'sapi';
+    /* 配置台只写 key 不会替你切通道：TTS=sapi 时云端 key 是不生效的（2026-10-31
+       用户填了 key 仍没 AI 声，就是因为这里没有可选项）。现在把"实际在用哪个"
+       直接摆出来，并让用户自己选通道。 */
+    var _now = j.tts_active ? ('当前实际：' + j.tts_active) : '当前实际：未知';
+    _now += j.tts_mocked ? '（Mock —— 这里的 Key 不生效）'
+          : ((j.tts_active === 'QwenTts' && !j.tts_key_present)
+              ? '（未配置 TTS Key —— 云端不可用）'
+              : (j.tts_stream ? '（流式可用）' : '（非流式：AI 逐句走 /api/tts）'));
+    $('kTtsNow').textContent = _now;
+    /* ★ 2026-10-31：LLM 的"当前实际"同样摆出来。`Mock` 时填 key 也不会生效
+       （MOCK_LLM=1 装配的是 MockLlm），而用户只能从"AI 老是说兜底话术"里猜。 */
+    var _llmSet = (typeof j.llm_set === 'boolean')
+      ? j.llm_set : !!(j.llm && j.llm.indexOf('…') < 0);
+    var _llmNow = j.llm_active ? ('当前实际：' + j.llm_active) : '当前实际：未知';
+    _llmNow += j.llm_mocked
+      ? '（Mock —— 这里的 Key 不生效；填好 Key 点应用会自动切到真实模型）'
+      : ('（真实模型：' + (j.llm_model || '未配置模型')
+         + (_llmSet ? (j.llm && j.llm.indexOf('…') >= 0 ? '，Key 已配置（本机不回显）' : '')
+                    : '，但未配置 Key —— 调用会退回兜底') + '）');
+    if ($('kLlmNow')) $('kLlmNow').textContent = _llmNow;
     /* 2026-10-26 一致性检查（用户要求）：实验室第①列席位接管对局 LLM 时必须如实说，
        否则这里填的 LLM key 下一局"看起来生效了"其实被席位覆盖挡住。 */
     if (j.llm_override)
       $('keysMsg').textContent = '⚠️ 对局的 LLM 目前走实验室第①列席位（覆盖此处的 LLM key）；ASR / TTS 以这里为准';
   }catch(e){ $('keysMsg').textContent = '当前配置读取失败：' + e.message; }
 }
+
+/* AI 发言走流式还是整句：由服务端当前 TTS 实现决定（2026-10-31）。
+   SAPI 不能服务 /ws/tts —— 以前每句都先连一次 WS、吃一个 error 再回落
+   /api/tts，诊断面板还会把那条预期内的 error 当成"AI 没声"的证据。 */
+async function refreshVoiceCaps(){
+  try{
+    var h = await api('/api/health');
+    if (!/[?&]nostream=1/.test(location.search))
+      VOICE_STREAM = !!h.tts_stream;
+    return h;
+  }catch(e){ return null; }
+}
 async function applyKeys(){
   var msg = $('keysMsg');
+  /* 掩码占位 + 没重新输入 ⇒ 发空串（服务端会跳过），绝不把指纹写回。 */
+  function keyValue(id){
+    var el = $(id); if (!el) return '';
+    var v = el.value.trim();
+    return (el.dataset.masked === '1' && !v) ? '' : v;
+  }
   try{
     var r = await api('/api/admin/play-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ asr: $('kAsr').value.trim(),
-                             llm: $('kLlm').value.trim(),
-                             tts: $('kTts').value.trim() })
+      body: JSON.stringify({ asr: keyValue('kAsr'),
+                             llm: keyValue('kLlm'),
+                             tts: keyValue('kTts'),
+                             tts_mode: $('kTtsMode').value })
     });
     msg.textContent = (r.changed && r.changed.length ? '已更新（' + r.changed.join('、') + '）—— ' : '没有变化 —— ')
       + (r.note || '');
+    await loadKeys();
+    await refreshVoiceCaps();
   }catch(e){ msg.textContent = '应用失败：' + e.message; }
 }
 
@@ -993,13 +1136,16 @@ async function newGame(){
     GID = d.gid;
     PUBLIC = d.public;
     SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null;
+    if (typeof SPOKE_DONE !== 'undefined') SPOKE_DONE = null;   /* 新局：播报游标从零开始 */
     resetEndLinks();                        /* 收回上一局的局末出口（见上面的注释） */
     resetSeerBig();                         /* 新局清掉上一局的验人结果大标识（见 tableui.js） */
+    SEER_LAST = null;                       /* 连兜底结果一起清（resetSeerBig 只清已展示过的） */
     cardQueue = d.seats.filter(function(s){ return s.kind === 'human'; })
                       .map(function(s){ return s.seat; });
     localStorage.setItem('tt.gid', GID);   /* 断线/刷新恢复的锚点 */
   showResumeButton('');                  /* 开了新局 ⇒ 封面那个「继续上一局」收起来 */
     LOCAL_LINES = [];
+    if (typeof LOCAL_SPOKEN !== 'undefined') LOCAL_SPOKEN = 0;   /* 新局：本地提示行重新计 */
     keepAwake();                            /* 开局就拿屏幕常亮：夜间闭眼不能黑屏 */
     $('bootMsg').textContent = '';
     nextCard();
@@ -1075,31 +1221,151 @@ function enterTable(){
   tick();
 }
 
+/* 死亡图标什么时候暗（2026-10-28 用户定："在法官播报死亡信息后……立即暗掉"）。
+   ⚠️ 不能只看 `players[].alive`：那个字段在**结算那一刻**就变假了，而死讯
+   还要在播报队列里排队（前面可能压着好几句），于是图标会**先暗、后听到死讯**。
+   后端把"哪一句宣布了谁出局"结构化地挂在 timeline 条目的 `dead` 上
+   （engine.log(..., dead=[...]) → speech_io._flush_log），这里等那句被念到
+   （SPOKEN 越过它）再暗。
+   三个兜底，缺一不可：
+     · 语音关掉（VOICE_ON=false）⇒ 没人会来推进 SPOKEN ⇒ 直接暗
+     · 老服务端没有 `dead` 字段 ⇒ 按 alive 立即暗（保持旧观感）
+     · 播报卡住（TTS 悬挂）⇒ 这句挂上去 20 秒后照暗，不能因为念不出来就一直亮着 */
+function deadHeard(){
+  var tl = (PUBLIC && PUBLIC.timeline) || [];
+  var marked = {}, heard = {};
+  var now = Date.now() / 1000;
+  for (var i = 0; i < tl.length; i++){
+    var d = tl[i].dead;
+    if (!d || !d.length) continue;
+    for (var k = 0; k < d.length; k++) marked[d[k]] = true;
+    var playable = (typeof VOICE_ON !== 'undefined') && VOICE_ON;
+    var spoken = (typeof SPOKEN === 'number') && SPOKEN > i;
+    var stale = now - Number(tl[i].at || tl[i].ts || 0) > 20;
+    if (!playable || spoken || stale){
+      for (var k2 = 0; k2 < d.length; k2++) heard[d[k2]] = true;
+    }
+  }
+  return { marked: marked, heard: heard };
+}
+
 function paintSeats(){
   if (!PUBLIC) return;
+  var _dh = deadHeard();
   (PUBLIC.players || []).forEach(function(p){
-    if (!p.alive){ addCls(p.seat + 1, 'dead'); }
+    if (p.alive) return;
+    /* 有"死讯那一句"就等它念到；没有（老服务端 / 老的死者）就立即暗。 */
+    if (!_dh.marked[p.seat] || _dh.heard[p.seat]) addCls(p.seat + 1, 'dead');
   });
+  /* 2026-10-29（用户：做「当前发言玩家高亮」）：
+     · 遗言相位下 current_speaker 是 null —— 那时认 lastword_seat，
+       否则"出局的人正在留遗言"这一整段没有任何高亮。
+     · 只看 current_speaker 还不够：它在 VOTE / NIGHT 是 null，
+       不会误亮（这是对的 —— 夜里高亮该由 .acting 负责）。 */
+  var _spk = (PUBLIC.current_speaker != null) ? PUBLIC.current_speaker
+           : ((PUBLIC.lastword_seat != null) ? PUBLIC.lastword_seat : null);
   (PUBLIC.players || []).forEach(function(p){
-    if (PUBLIC.current_speaker === p.seat) addCls(p.seat + 1, 'speaking');
+    if (_spk === p.seat) addCls(p.seat + 1, 'speaking');
     else delCls(p.seat + 1, 'speaking');
   });
+  /* ★ 2026-10-29（用户）：真正给玩家看的是**轮盘上那圈号码**（.wnum）——
+     上面那套往 .seat 上加的类在 #p4 是 display:none，等于没加。
+     每拍都刷一次，换人/散场都能自己收干净。 */
+  try { paintNumberGlow(); } catch (e) { /* 老页面没有这个函数 */ }
 }
+
+/* ---------------------------------------------------------- 票型框 / 终局弹框 */
+
+/* 票型框（2026-10-28 用户定；2026-10-31 恢复法官播报票型）：
+   · 法官照常用嘴念票型（"3 号 2 票（1 号、4 号投的）…"），
+     底部这个窄条同步显示紧凑票型，每行一条 "2，3→5"。
+     两者是"耳朵一份、眼睛一份"，不互相替代。
+   · 数据来自 `PUBLIC.vote_board.lines`（后端已经排好序、格式化好）。
+   · ⚠️ 内容没变时**绝不重画** —— 这个函数每 0.3 秒被调一次，
+     重画会把用户正在滚动的票型框弹回顶部（"能滑动但一滑就回弹"）。 */
+var _VB_HTML = '';
+function renderVoteBox(){
+  var box = $('voteBox');
+  if (!box) return;
+  var vb = (PUBLIC && PUBLIC.vote_board) || null;
+  var lines = (vb && vb.lines) || [];
+  if (!lines.length){
+    if (_VB_HTML !== ''){ box.innerHTML = ''; _VB_HTML = ''; }
+    box.style.display = 'none';
+    return;
+  }
+  var title = vb.first_round ? '计票·首轮' : (vb.runoff ? '计票·加时' : '计票');
+  var html = '<div class="vb-t">' + title + '</div>';
+  for (var i = 0; i < lines.length; i++){
+    html += '<div class="vb-l">'
+          + String(lines[i]).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          + '</div>';
+  }
+  if (html !== _VB_HTML){
+    box.innerHTML = html; _VB_HTML = html;
+    /* 新票型刚出来：闪两下，免得这巴掌大的框在手机底部被当成背景（用户实机反馈） */
+    box.classList.remove('vb-pop');
+    void box.offsetWidth;               /* 强制重排，动画才会重头播 */
+    box.classList.add('vb-pop');
+  }
+  box.style.display = 'block';
+}
+
+/* 终局弹框：法官念完「游戏结束，狼人/好人胜利」之后才弹。
+   ★ 2026-10-29（用户："法官语音播报游戏结束后才显示弹框……上一把弹框没了"）：
+   上一版只有「SPOKEN 越过那一句」和「进终局 8 秒」两条路，实测有洞：
+     · **语音队列卡在更早的句子上**时 SPOKEN 永远追不上（这设备上法官播报本来就是
+       老大难），只能等 8 秒；
+     · **中途刷新/重开页面**时 SPOKEN 从 0 开始，那一局历史有 40 多条播报要一句句
+       过一遍，用户对着"本局结束"干等几十秒，体感就是"弹框没了"。
+   现在判据是"**播报已经不该再等**"，四条路任意一条成立就弹：
+     ① 语音关掉 / 老服务端没有这一句        → 没人会念，直接弹
+     ② SPOKEN 真的越过了那句                → 正解
+     ③ 队列已经空闲（!SPEAKING）超过 1.5 秒 → 卡住的兜底（比死等 8 秒快得多）
+     ④ 那句「游戏结束」本身是 20 秒前的     → 刷新/接回旧局时照弹
+     ⑤ 最后硬兜底：进终局 8 秒
+   弹框只负责"什么时候弹"；"是不是真的结束了"仍然只看服务端的 phase/winner。 */
+var _END_AT = 0, _END_SHOWN = false;
+function renderEndPop(){
+  var p = $('endPop');
+  if (!p) return;
+  if (!PUBLIC || PUBLIC.phase !== 'ended'){
+    p.classList.remove('on');
+    _END_AT = 0; _END_SHOWN = false;
+    return;
+  }
+  if (!_END_AT) _END_AT = Date.now();
+  var who = PUBLIC.winner === 'wolf' ? '狼人胜利'
+          : (PUBLIC.winner === 'good' ? '好人胜利' : '本局结束');
+  var whoEl = $('endPopWho');
+  if (whoEl) whoEl.textContent = who;
+  var idx = -1;
+  ((PUBLIC.timeline) || []).forEach(function(x, i){
+    if (x.t === 'sys' && String(x.s || '').indexOf('游戏结束') === 0) idx = i;
+  });
+  var _tl = PUBLIC.timeline || [];
+  var _lineAt = (idx >= 0 && _tl[idx]) ? Number(_tl[idx].at || _tl[idx].ts || 0) : 0;
+  var spoken = (idx < 0) || !VOICE_ON
+            || (typeof SPOKEN === 'number' && SPOKEN > idx)
+            /* ③ 队列空闲了 1.5 秒还没轮到那句 ⇒ 别死等（TTS 悬挂是最常见的形态） */
+            || (typeof SPEAKING !== 'undefined' && !SPEAKING
+                && Date.now() - _END_AT > 1500)
+            /* ④ 那句本身就是 20 秒前的：刷新页面 / 接回旧局，播报早该放完了 */
+            || (_lineAt > 0 && Date.now() / 1000 - _lineAt > 20)
+            /* ⑤ 硬兜底 */
+            || (Date.now() - _END_AT > 8000);
+  if (!spoken || _END_SHOWN) return;
+  _END_SHOWN = true;
+  p.classList.add('on');
+}
+
+if ($('endPopOk')) $('endPopOk').onclick = function(){ $('endPop').classList.remove('on'); };
 
 function renderLog(){
   /* 🔴 2026-10-12（用户：日志区在所有页面**彻底删除**）—— 时间线不再上屏，
-     公有信息以法官播报为准。本函数只保留票型大字（voteBig）的更新；
-     合规提醒走 longUse 横幅，不再有日志出口。 */
-  var vote = null;
-  ((PUBLIC && PUBLIC.timeline) || []).forEach(function(x){
-    if (x.t !== 'sys') return;
-    if (x.s.indexOf('投票结果') === 0) vote = x.s;
-  });
-  var vb = $('voteBig');
-  if (vb){
-    if (vote){ vb.textContent = vote.replace(/^投票结果：/, ''); vb.style.display = 'block'; }
-    else vb.style.display = 'none';
-  }
+     公有信息以法官播报为准。
+     2026-10-28：票型从"大字"改成底部窄条票型框（2026-10-31 恢复法官播报，两者并存，见 renderVoteBox）。 */
+  renderVoteBox();
 }
 
 /* ---------------------------------------------------------- 底部控制 */
@@ -1127,6 +1393,8 @@ $('btnAgain').onclick = function(){
 /* 回到开始界面：留住"还能接回"的锚点、显示接回按钮、停轮询（tick 自己会停）、换页。 */
 function backToCover(){
   if (GID) localStorage.setItem('tt.gid', GID);   /* 锚点留着 ⇒ 那一局还能接回 */
+  /* 终局弹框不能带到封面上（tick 停了就没人收它） */
+  if ($('endPop')) $('endPop').classList.remove('on');
   showResumeButton(GID
     ? ('继续上一局（局号 ' + GID + '，'
        + (PUBLIC && PUBLIC.phase === 'ended' ? '已结束' : '进行中') + '）')
@@ -1160,6 +1428,8 @@ function showResumeButton(text, gid){
 function resumeInto(gid, pub){
   GID = gid; PUBLIC = pub;
   SPOKEN = 0; HANDOFF = null; MYVIEW = null; PICK = null; LOCAL_LINES = [];
+  if (typeof SPOKE_DONE !== 'undefined') SPOKE_DONE = null;   /* 接局：播报游标从零开始 */
+  if (typeof LOCAL_SPOKEN !== 'undefined') LOCAL_SPOKEN = 0;
   cardQueue = [];                    /* 身份牌已经看过了，不再走那一轮 */
   showResumeButton('');              /* 进桌面了，封面那个按钮收起来 */
   enterTable();
@@ -1251,8 +1521,27 @@ function loadScript(src){
     }
     return;
   }
+  /* 先问清楚服务端 TTS 能不能流式，再决定 AI 发言走哪条路（2026-10-31）。
+     必须赶在 tryResume 之前：`?gid=` 会立刻接进进行中的局，首句就已经要播了。 */
+  await refreshVoiceCaps();
   boot();
   await tryResume();
+  /* ★ 2026-10-29：`?gid=<局号>` 直接接进指定那一局（不进封面）。
+     用途只有两个：无头浏览器截图验收（否则要先在页面上点开局、再等半天），
+     以及前端负责人/队友复现某一局。**不改变正常入口**：不带这个参数时
+     仍然"永远从封面开始"。 */
+  var _qg = /[?&]gid=([\w-]+)/.exec(location.search);
+  if (_qg){
+    /* ⚠️ 先落到一个**普通变量**再用：_check-split-consistency 把
+       `'/api/game/' + X + '/public'` 归一化成 {param} 靠的是"标识符"，
+       写成 `_qg[1]` 这种带下标的它认不出来，会误报"前端调了不存在的接口"。 */
+    var _qgid = _qg[1];
+    try {
+      var _qpub = await api('/api/game/' + _qgid + '/public');
+      resumeInto(_qgid, _qpub);
+      return;
+    } catch (e) { /* 那一局没了 ⇒ 老老实实留在封面 */ }
+  }
   show('p0');            /* **永远从封面开始**：要接着上一局，就按上面的「继续上一局」 */
 })();
 

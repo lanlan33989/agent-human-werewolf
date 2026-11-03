@@ -39,6 +39,9 @@ logs/
 npm-debug.log*
 yarn-error.log*
 
+# ---- 开发交接/探针产物（日志、patch、临时脚本；交接 docx 在工作区上层，不进仓库） ----
+_handoff/
+
 # ---- Dev scratch files ----
 =
 _tips.txt

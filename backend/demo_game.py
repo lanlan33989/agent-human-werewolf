@@ -82,15 +82,26 @@ def run(humans: int, ais: int, seed: int, max_steps: int = 80):
             if g.end_speech() is None:
                 g.open_vote()
         elif g.phase is Phase.VOTE:
+            # ★ 平票加时（2026-10-28）：加时投票里平票者不投票、其余人只能投平票者。
+            #   bot 也必须照这套规则走 —— 引擎会硬拦，不照就是直接抛异常。
+            _runoff = (g.runoff_stage == 2)
+            _cand = list(g.runoff_candidates)
             for p in list(g.alive):
-                bot_act(g, p.seat, g.rng)
+                if not g.can_vote(p.seat):
+                    continue
+                if _runoff:
+                    g.cast_vote(p.seat, rng.choice(_cand) if _cand else -1)
+                else:
+                    bot_act(g, p.seat, g.rng)
             for p in list(g.alive):
-                if p.seat not in g.votes:
+                if g.can_vote(p.seat) and p.seat not in g.votes:
                     g.cast_vote(p.seat, -1)
             g.resolve_vote()
             if g.phase is Phase.SHOOT:      # 猎人被投出：bot 放弃开枪
                 g.night_shoot(g.shooter, -1)
-            if g.phase is not Phase.ENDED:
+            elif g.phase is Phase.DISCUSS:
+                pass                        # 平票加时：下一轮循环走加时发言
+            elif g.phase is not Phase.ENDED:
                 g.next_night()
     return g
 

@@ -87,6 +87,14 @@ class Phase(str, Enum):
     # 它要插在**两处**（夜间死讯公布之后 / 投票结算之后），所以必须是一个独立相位，
     # 而不是夹在别处的一个 if —— 否则判胜会抢在开枪之前（见 resolve_vote 的说明）。
     SHOOT = "shoot"
+    # ★ 2026-10-28（用户定）：遗言。
+    # 规则：**第一夜**死的、**白天被投出**的都有遗言；第二夜及以后夜里死的不留遗言；
+    # 猎人带走的人跟猎人自己同命（猎人第一夜/白天出局 ⇒ 被带走的人也有遗言）。
+    # 它是独立相位而不是塞进 DISCUSS 的"额外发言人"，因为遗言发生在
+    # **死讯播报之后、白天发言之前**（被投出的则发生在"下一夜之前"），
+    # 而 DISCUSS 的发言轮转只认活人（`_rotation_from(self.alive)`）——
+    # 把死人塞进去要同时改轮转、投票顺序、发言进度三处，且会破坏"发言顺序=投票顺序"。
+    LASTWORD = "lastword"
     ENDED = "ended"
 
 
@@ -190,6 +198,17 @@ GOD_ORDER: List[Role] = [Role.WITCH, Role.SEER, Role.HUNTER, Role.GUARD, Role.ID
 _GOD_SHORT = {Role.WITCH: "巫", Role.SEER: "预", Role.HUNTER: "猎",
               Role.GUARD: "守", Role.IDIOT: "白"}
 
+# ★ 2026-10-29（用户定）：**屠边**规则的生效门槛。
+#   9 人局、12 人局在「狼数 ≥ 好人数」之外，再加两条：
+#     · 神职**全灭** ⇒ 狼人胜
+#     · 平民**全灭** ⇒ 狼人胜
+#   为什么是 `total >= 9` 而不是写死 9/12：板子是**按人数现算**的（见 make_board），
+#   9 人 3 狼 3 神 3 民、10 人 3 狼 3 神 4 民、12 人 4 狼 4 神 4 民、15 人 5 狼 5 神 5 民
+#   是同一副骨架，按"局"写死会出现"10 人局突然没有屠边"这种没法解释的断崖。
+#   ⚠️ 6 人局（2 狼 2 神 2 民）**明确不启用** —— 用户点名只要 9/12；6 人局人少，
+#      屠边会让它变成"两晚就结束"，节奏完全变样。
+SIDE_WIPE_MIN_TOTAL = 9
+
 
 def wolf_count(total: int) -> int:
     """狼数 = floor(总人数 × 34%)，至少 1 只（0 只狼没法玩）。"""
@@ -286,6 +305,14 @@ class Game:
         self.round = 0
         self.winner: Optional[str] = None          # "wolf" | "good"
         self.public_log: List[str] = []
+        # ★ 2026-10-28（用户定）：与 public_log **等长**的"这句点到了谁出局"标记。
+        # 为什么要有它：用户要求"法官播报死亡信息后，死亡玩家图标**立即**暗掉"。
+        # 前端只拿到 `players[].alive` 的话，只能在"状态变了"那一刻变暗 —— 而状态
+        # 是在结算时就变的，播报却还在音频队列里排队（死讯往往晚好几秒才念到）。
+        # 于是图标会**先暗、后听到死讯**。这里把"哪一句话宣布了谁的死亡"结构化地
+        # 带出去（timeline 条目上的 `dead` 字段），前端就能在**那句被念到的那一刻**变暗。
+        # ⚠️ 必须与 public_log 保持等长（log() 是唯一写入口）。
+        self.log_dead: List[List[int]] = []
         # 内部备注（**永不外发**）：给排查和将来的结构化日志用。
         # 为什么必须有它：狼队协商的分歧、"按谁的意见定案"这类话**绝不能进公共日志** ——
         # 那等于当众宣布"狼队刚才商量过、3 号的意见赢了"，3 号立刻就是狼。
@@ -312,6 +339,23 @@ class Game:
         self._slot_reason: Dict[int, str] = {}
         # 投票顺序：与发言同一套轮转（用户定的规则：都从前一晚被刀的人开始顺时针）
         self.vote_order: List[int] = []
+        # ★ 平票加时（2026-10-28 用户定）：
+        #     第一轮投票平票 ⇒ **平票的人再发一轮言**，然后其余玩家重投一次
+        #     （平票者不投票，且只能投给平票者之一或弃票）；**再平票才算平安日**。
+        #   `runoff_stage`：0 = 正常投票；1 = 加时发言中；2 = 加时投票中。
+        #     用"阶段号"而不是新相位，是因为发言/投票的驱动、面板、倒计时全都是
+        #     按 `Phase.DISCUSS` / `Phase.VOTE` 分派的 —— 加一个 Phase 要同时改
+        #     驱动表、面板协议和前端三处；而这里真正变化的只是"谁能说、谁能投"。
+        #   `runoff_candidates`：平票的座位（0 基，升序）。加时投票的唯一合法目标集。
+        #   `runoff_first_votes`：第一轮的票型快照。第一轮**不进 vote_history**
+        #     （见 resolve_vote 的说明），但 AI 在加时投票时要用它，所以单独留一份。
+        self.runoff_stage: int = 0
+        self.runoff_candidates: List[int] = []
+        self.runoff_first_votes: Dict[int, int] = {}
+        # 加时发言从第几条 `speeches` 之后开始记。`speech_progress` 要靠它把
+        # "白天那轮的发言"和"加时这一轮的发言"分开 —— 否则候选人一开口，
+        # 进度里所有人都是"已发言"，AI 会误判现场没人还没说话。
+        self._runoff_speech_mark: int = 0
         # 上一轮**最后一个发言的人**。只用于一件事：平安夜的中性起点
         # （见 _neutral_anchor —— 平安夜不能拿"被刀的人"当起点，那会泄漏夜里发生了什么）。
         # 在 open_vote() 里落定：那一刻本轮发言才真正结束。
@@ -320,6 +364,16 @@ class Game:
         # 夜间死讯之后 → 开完继续白天；投票出局之后 → 开完进下一夜。
         self.shooter: Optional[int] = None
         self.shoot_from: Optional[Phase] = None
+        # ★ 遗言（2026-10-28 用户定）：这是**排队中**的遗言发言人与"说完遗言回哪去"。
+        #   · `lastword_order` 的顺序 = 出局顺序（先被刀/毒的，再是被带走的）
+        #   · `lastword_back`：'discuss'（第一夜的遗言 → 接着白天发言）
+        #                      'night'  （白天被投出 / 被带走 → 接着进黑夜）
+        #   为什么用显式队列而不是"每次看 deaths 算一遍"：遗言是**一次性**的，
+        #   算一遍就必须有个"已经说过了"的记号，否则同一个人会在白天发言前
+        #   被反复请来留遗言（第二夜之后被刀的人也一样会被算进来）。
+        self.lastword_order: List[int] = []
+        self.lastword_cursor: int = 0
+        self.lastword_back: str = "discuss"
         # 死因分层（G11）：[{"seat": 3, "cause": "kill"|"poison"|"vote"|"shoot"}]
         # 猎人判例（被毒能不能开枪）、六维指标、复盘战报都要用它 ——
         # 不能再靠"看他死没死"去猜死因。
@@ -339,6 +393,8 @@ class Game:
         # ⚠️ 存它们**不是**为了给 AI 一段对话历史（那会把不该记的也带进去），
         #    而是为了按 §4.5 的规矩，通过 get_view_for(自己的座位) 显式喂给它。
         self.vote_history: List[Dict[int, int]] = []     # 每轮结算后的票型快照
+        # 最近一次票型是**加时那一轮**结算的吗（界面票型框上打个"加时"标记）
+        self.vote_board_runoff: bool = False
         self.speeches: List[Dict[str, Any]] = []         # {"round", "seat", "text"}
 
         roles = list(board.roles)
@@ -368,6 +424,26 @@ class Game:
     def good_alive(self) -> List[Player]:
         return [p for p in self.alive if not p.role.is_wolf]
 
+    def gods_alive(self) -> List[Player]:
+        """还活着的神职（含**翻过牌的白痴** —— 他翻牌不死，人还在场上）。"""
+        return [p for p in self.alive if p.role.is_god]
+
+    def villagers_alive(self) -> List[Player]:
+        """还活着的平民。白痴/神职不算民，狼也不算。"""
+        return [p for p in self.alive if p.role is Role.VILLAGER]
+
+    def side_wipe_on(self) -> bool:
+        """本局动不动用屠边（见 SIDE_WIPE_MIN_TOTAL）。
+
+        除了人数门槛，还要求**两类都有**：板子里没有民（或没有神）时，
+        "平民全灭"会在开局第一秒就成立 —— 那不是规则，那是 bug。
+        """
+        if len(self.players) < SIDE_WIPE_MIN_TOTAL:
+            return False
+        has_god = any(p.role.is_god for p in self.players)
+        has_vil = any(p.role is Role.VILLAGER for p in self.players)
+        return bool(has_god and has_vil)
+
     def player(self, seat: int) -> Player:
         return self.players[seat]
 
@@ -380,9 +456,15 @@ class Game:
         """
         self.debug_log.append(text)
 
-    def log(self, text: str) -> None:
-        """只写公共信息。任何私有内容都不许进这里。"""
+    def log(self, text: str, dead: Optional[List[int]] = None) -> None:
+        """只写公共信息。任何私有内容都不许进这里。
+
+        `dead`（2026-10-28 用户定）：**这一句宣布了谁出局**（0 基座位）。
+        界面要在"念到这一句"的瞬间把那些人的图标暗掉，所以这个信息必须
+        跟着句子一起走，不能只在 `players[].alive` 里（那会比播报早好几秒）。
+        """
         self.public_log.append(text)
+        self.log_dead.append(sorted({int(s) for s in (dead or [])}))
 
     def log_speech(self, seat: int, text: str,
                    card: Optional[Dict[str, Any]] = None) -> None:
@@ -425,7 +507,13 @@ class Game:
                       "poison": None, "witch_asked": False,
                       "guard": None, "guard_asked": False,
                       "wolf_points": {}, "wolf_confirm": [], "wolf_order": [],
-                      "wolf_followed": [], "kill_settled": False, "wolf_steps": 0}
+                      "wolf_followed": [], "kill_settled": False, "wolf_steps": 0,
+                      # wolf_decided_by：这一夜刀口最终由谁说了算
+                      #   "human" = 真人狼表态即定 / "ai" = AI 多数决 / "none" = 没有活狼
+                      #   只在 debug_log 与复盘里有意义，**不进播报**。
+                      "wolf_decided_by": None,
+                      # wolf_quiet：协商步数到顶后停止内耗（不是定案，见 wolf_force_settle）
+                      "wolf_quiet": False}
         self.log(f"第 {self.round} 夜，天黑请闭眼。")
 
     # ---- 夜间动作 ----
@@ -437,8 +525,9 @@ class Game:
         · target >= 0 → 点这个座位；**允许自刀**（target == actor，面杀本来就有）
         · target == -1 → 提议空刀
         · 改点会把自己从"已确认"里移除（改了就得重新确认）
-        · **单狼局：点即定案** —— 保持旧行为，也让夜晚能直接往下走
-        · 多狼局：等全员确认后由 _settle_wolf_kill() 定案
+        · **窗口内不定案**：点子只作记录，刀口由窗口结束时决定 ——
+          真人狼表过态就以他为准（2026-10-30 用户定），否则按多数
+          （见 `settle_wolf_window`）。用户 2026-10-28 定："这期间可任意修改刀口"
 
         为什么要有这套：以前只有一只狼能定刀，其余狼（含 AI 狼）连"队友点了谁"
         都不知道。白天投票时狼各投各的、一只跟大势一只咬好人 ⇒ 立刻暴露。
@@ -448,6 +537,10 @@ class Game:
         p = self.player(actor)
         if not p.role.is_wolf:
             raise PermissionError(f"{p.display} 不是狼人，不能刀人")
+        # ★ 2026-10-30：刀口已经结算（窗口关）⇒ 不许再改，否则
+        #   `wolf_points` 与真正落地的 `kill` 会互相矛盾（复盘/战报对不上）。
+        if self.night.get("kill_settled"):
+            raise RuntimeError("狼刀已经结算，不能再改")
         if target != -1:
             self._require_alive(target)      # 允许自刀 ⇒ 不再排除 target == actor
         pts = self.night.setdefault("wolf_points", {})
@@ -468,12 +561,13 @@ class Game:
             # 空转（点回同一个点）不算一步 —— 否则"步数上限兜底"会被重按刷爆，
             # 变成"玩家多按几下就把刀口强行定了"。
             self.night["wolf_steps"] = self.night.get("wolf_steps", 0) + 1
-        wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        if len(wolves) <= 1:
-            self.night["kill"] = target
-            self.night["kill_settled"] = True
-            return
-        self._settle_wolf_kill()
+        # ★ 2026-10-28（用户定）：**窗口内不再定案**。
+        #   以前单狼"点即定案"、多狼"全员确认即定案"，都会立刻把 kill_settled
+        #   置真 ⇒ `_actions_available` 把 kill 摘掉 ⇒ 面板在窗口中途消失。
+        #   用户的要求是"这期间可任意修改刀口，以窗口结束时的选择为准"，
+        #   所以这里只记点子，真正的结算推迟到窗口关闭
+        #   （driver 的 `_nn_close` 调 `settle_wolf_window`）。
+        return
 
     def wolf_agree_kill(self, target: int) -> None:
         """
@@ -503,10 +597,11 @@ class Game:
 
     def night_confirm(self, actor: int) -> None:
         """
-        狼人**确认**自己当前的点（多狼局定案的最后一步）。
+        狼人**确认**自己当前的点。
 
-        首次确认时把座位压进 wolf_order —— 这就是"先落地"的顺序，
-        分歧时用它决定刀口（用户定的规则：两个人狼分别点了不同好人，就刀第一个被投的）。
+        ★ 2026-10-28 之后它只是"表态完成"的记号：定案发生在狼刀窗口结束时
+        （多数决），不再由"全员确认"触发 —— 因为用户要求整段窗口内都能改刀。
+        首次确认仍然压进 wolf_order（老局/战报还会看这个顺序）。
         """
         self._require_phase(Phase.NIGHT)
         p = self.player(actor)
@@ -520,61 +615,184 @@ class Game:
         if actor not in conf:
             conf.append(actor)
         self.night["wolf_steps"] = self.night.get("wolf_steps", 0) + 1
+
+    def settle_wolf_window(self) -> None:
+        """★ 2026-10-28（用户定）：狼刀窗口**结束时**结算，以当时的点子为准。
+
+        规则（2026-10-30 更新，用户逐字）：
+        · **真人狼表过态就以真人为准** ——「真人选 5 号，其他几个 AI 都选 6 号
+          ⇒ 刀 5 号」；真人点空刀 ⇒ 当夜空刀。
+        · 真人没表态（整窗一次没点）⇒ 才走原来的多数决：意见不合按刀口对象
+          最多者执行（2、3 打 5，4 打 7 ⇒ 刀 5）；平票在并列对象里随机；
+          **空刀不参与 AI 的刀口票计数**。
+
+        为什么放在窗口末而不是"全员确认即定"：用户明确要求这几十分钟里
+        狼可以任意改刀，"以结束时的选择为准"。所以协商过程只记点子，
+        定案只发生在这里（driver 的 `_nn_close` 调）。
+        """
         self._settle_wolf_kill()
 
     def _settle_wolf_kill(self) -> None:
-        """
-        全员确认 ⇒ 定案。规则（用户定，照面杀）：
-          · 点子一致 → 就刀那个
-          · 有分歧   → 刀**第一个落地的人**点的那个（时间序，不是座位号）
+        """定刀：★ 2026-10-30（用户定）**真人狼的刀口优先**，没有真人才走多数决。
+
+        规则（用户逐字）：
+        · 真人狼表过态（点过某个号码，或点了"空刀"）⇒ **就以真人的为准**。
+          哪怕其余 AI 狼全点别人：「真人选 5 号，其他几个 AI 都选 6 号 ⇒ 刀 5 号」。
+        · 真人点了空刀 ⇒ **当夜就是空刀**。空刀在真人手里是**有效决议**，
+          不再像 AI 票那样"不参与计数"（用户明确要求）。
+        · 真人整窗没表态（`wolf_points` 里没有他这一项）⇒ 回落到原来的 AI 刀口
+          多数决：票多者胜、平票随机、空刀不参与计数、全空则空刀。
+
+        多个真人狼：先在**真人内部**按多数决；真人与真人平票才随机（空刀参与，
+        它和座位号一样是一张票）。真人的票投出去后 AI 的票就不再计入 ——
+        这是"人定的算"的直接含义，不叠加成"真人 1 票 vs AI 3 票"。
+
+        为什么把"真人优先"放在**结算**而不是**点刀时**：真人整段窗口内都能改
+        （2026-10-28 定），点刀只是记录；谁能号令刀口只能在窗口关闭这一刻判。
         """
         wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        conf = self.night.get("wolf_confirm") or []
-        if not wolves or not all(s in conf for s in wolves):
+        if not wolves:
+            self.night["kill"] = -1
+            self.night["kill_settled"] = True
+            self.night["wolf_decided_by"] = "none"
             return
         pts = self.night.get("wolf_points") or {}
-        targets = [pts.get(s) for s in wolves]
-        if len(set(targets)) == 1:
-            final = targets[0]
-        else:
-            # 分歧时的优先级（用户定，照面杀）：
-            #   ① **人狼们自己一致** → 听人狼的（"平票就刀人狼票的人"）
-            #   ② 否则 → 听**第一个提议**的那个（"两个人狼分别票两个好人，就刀第一个被投的"）
-            humans = [q.seat for q in self.alive if q.role.is_wolf and q.kind == "human"]
-            human_targets = {pts.get(s) for s in humans}
-            if humans and len(human_targets) == 1:
-                final = human_targets.pop()
-                # ⚠️ note 而不是 log：这句话进公共播报就等于宣布"狼队商量过、
-                #    人狼的意见赢了" ⇒ 人狼立刻暴露。它只该出现在内部备注里。
-                self.note("狼队刀口有分歧，按人狼那一票定。")
+
+        # ---- ① 真人狼优先（点过就算，-1 空刀也算）----
+        human_picks = [pts[s] for s in wolves
+                       if self.player(s).kind != "ai" and pts.get(s) is not None]
+        if human_picks:
+            if len(set(human_picks)) == 1:
+                final = human_picks[0]
             else:
-                first = next((s for s in (self.night.get("wolf_order") or []) if s in wolves),
-                             wolves[0])
-                final = pts.get(first)
-                self.note(f"狼队刀口有分歧，按先提议的 {first + 1} 号的意见。")
-        self.night["kill"] = -1 if final is None else final
+                hc: Dict[int, int] = {}
+                for t in human_picks:
+                    hc[t] = hc.get(t, 0) + 1
+                top = max(hc.values())
+                leaders = sorted(t for t, n in hc.items() if n == top)
+                final = leaders[0] if len(leaders) == 1 else self.rng.choice(leaders)
+                self.note("真人狼之间刀口不一致（"
+                          + "、".join("空刀" if t < 0 else f"{t + 1}号"
+                                      for t in sorted(hc))
+                          + "），按真人内部的多数决定刀。")
+            self.night["kill"] = final
+            self.night["kill_settled"] = True
+            self.night["wolf_decided_by"] = "human"
+            self.note("真人狼定刀："
+                      + ("空刀" if final < 0 else f"{final + 1}号")
+                      + f"（真人 {len(human_picks)} 票；AI 狼的点子不再计入）")
+            return
+
+        # ---- ② 没有真人表态：原来的 AI 刀口多数决 ----
+        counts: Dict[int, int] = {}
+        for s in wolves:
+            t = pts.get(s)
+            if t is None or t < 0:      # 没表态 / 空刀：不参与计票（用户定）
+                continue
+            counts[t] = counts.get(t, 0) + 1
+        if not counts:
+            final = -1
+        else:
+            top = max(counts.values())
+            leaders = sorted(t for t, n in counts.items() if n == top)
+            final = leaders[0] if len(leaders) == 1 else self.rng.choice(leaders)
+            if len(leaders) > 1:
+                self.note("狼队刀口平票（"
+                          + "、".join(str(t + 1) for t in leaders)
+                          + " 号），随机定刀。")
+        self.night["kill"] = final
         self.night["kill_settled"] = True
+        self.night["wolf_decided_by"] = "ai"
+
+    # ============================================================ 窗口结算
+    #
+    # ★ 2026-10-29（用户定）：「夜间窗口点击之后窗口先不退出，在时间结束前均可
+    #   更改选择，按最终时间结束时的选择为准」。
+    #   ⇒ 点选只写"当前选择"，**扣药/定案/置 asked 一律推迟到窗口关闭**。
+    #   四个 settle 由驱动器在节点关闭那一刻调用（`night_driver._nn_close`），
+    #   与 `settle_wolf_window` 同一个位置、同一个语义。
+
+    def settle_guard_window(self) -> None:
+        """守卫窗口关闭：以此刻的 `night["guard"]` 为准（None = 空守）。"""
+        if self.night.get("guard_settled"):
+            return
+        self.night["guard_asked"] = True
+        self.night["guard_settled"] = True
+
+    def settle_witch_heal(self) -> None:
+        """解药窗口关闭：**这一刻才扣药**（窗口内点错了还能改/取消）。"""
+        n = self.night
+        if n.get("heal_settled"):
+            return
+        tgt = n.get("heal")
+        if tgt is not None and tgt != -1:
+            for p in self.players:
+                if p.role is Role.WITCH:
+                    self.private[p.seat].potions["heal"] = False
+                    break
+        n["heal_settled"] = True
+
+    def settle_witch_poison(self) -> None:
+        """毒药窗口关闭：扣毒药，并把"女巫这一夜问完了"的旗子立在这里。
+
+        `witch_done` 是 steps 表里 witch 那一步的判据 —— 它必须等到**毒药窗口**
+        结束（而不是解药一问完），否则毒药那一支永远轮不到 AI 决策。
+        """
+        n = self.night
+        if n.get("poison_settled"):
+            return
+        tgt = n.get("poison")
+        if tgt is not None and tgt != -1:
+            for p in self.players:
+                if p.role is Role.WITCH:
+                    self.private[p.seat].potions["poison"] = False
+                    break
+        n["poison_settled"] = True
+        n["witch_asked"] = True
+        n["witch_done"] = True
+
+    def settle_seer_window(self) -> None:
+        """预言家窗口关闭：到点没验 = 今晚不验（investigate = -1 收尾）。"""
+        n = self.night
+        if n.get("seer_settled"):
+            return
+        if n.get("investigate") is None:
+            n["investigate"] = -1
+        n["seer_settled"] = True
+
+    def night_seer_confirm(self, actor: int) -> Optional[bool]:
+        """预言家点「确认」—— ★ 2026-10-29（用户定）：点人之后再点确认，
+        确认的这一刻报出结果；窗口照旧走到时间结束才退。
+
+        为什么"确认"必须是一个独立动作：`investigate` 现在只表示"我看的是谁"
+        （窗口内还能改），只有确认才把它定下来。没有这一步，前端分不清
+        "选中"和"验过了"，而且改点数会把已经报过的结果作废。
+        """
+        self._require_phase(Phase.NIGHT)
+        p = self.player(actor)
+        if p.role is not Role.SEER:
+            raise PermissionError(f"{p.display} 不是预言家")
+        tgt = self.night.get("investigate")
+        if tgt is None:
+            raise RuntimeError("还没选要验谁，不能确认")
+        if tgt == -1:
+            raise RuntimeError("今晚已经放弃验人")
+        self.night["seer_confirmed"] = True
+        return self.private[actor].investigations.get(tgt)
 
     def wolf_force_settle(self) -> None:
-        """
-        兜底：协商步数超上限时强行定案（取先落地的意见）。
+        """兜底：协商来回太多时让狼队**停止协商**（不是定案）。
+
+        ★ 2026-10-28 改语义：以前这里直接把刀口定下来（kill_settled=True），
+        那会让狼刀面板在窗口中途消失。现在只立一个 `wolf_quiet` 旗停止 AI 内耗，
+        刀口仍旧等窗口结束按多数决定（`settle_wolf_window`）。
 
         纯 AI 狼队理论上会自己在有限步内收敛（跟随 = 点队友的点），
         但"固执"的人格将来会让它反复改主意 —— 必须有这条兜底，
         否则一夜能无限来回，表现就是"卡在夜里不动"。
         """
-        pts = self.night.get("wolf_points") or {}
-        order = self.night.get("wolf_order") or []
-        wolves = [q.seat for q in self.alive if q.role.is_wolf]
-        first = next((s for s in order if s in wolves), None)
-        if first is None:
-            first = next((s for s in pts if s in wolves), None)
-        if first is None:
-            self.night["kill"] = -1
-        else:
-            self.note(f"狼队协商超时，按先落地的 {first + 1} 号的意见。")
-            self.night["kill"] = pts.get(first)
-        self.night["kill_settled"] = True
+        self.night["wolf_quiet"] = True
+        self.note("狼队协商步数到顶，停止继续协商，按窗口结束时的点子定夺。")
 
     def night_investigate(self, actor: int, target: int) -> Optional[bool]:
         """预言家验人。返回结果，同时写入自己的 L2 私有记录。"""
@@ -582,6 +800,12 @@ class Game:
         p = self.player(actor)
         if p.role is not Role.SEER:
             raise PermissionError(f"{p.display} 不是预言家")
+        # ★ 2026-10-30：确认过（结果已经报了）或窗口已关 ⇒ 不许再改目标，
+        #   否则大圆上写着"X 号是狼人"、引擎里却已经换成别人。
+        if self.night.get("seer_settled"):
+            raise RuntimeError("预言家这一问已经结束，不能再改")
+        if self.night.get("seer_confirmed"):
+            raise RuntimeError("已经确认过验人结果，不能再改目标")
         self._require_alive(target)
         result = self.player(target).role.is_wolf
         self.night["investigate"] = target
@@ -597,6 +821,8 @@ class Game:
         p = self.player(actor)
         if p.role is not Role.SEER:
             raise PermissionError(f"{p.display} 不是预言家")
+        if self.night.get("seer_settled"):
+            raise RuntimeError("预言家这一问已经结束，不能再改")
         if self.night.get("investigate") is not None:
             return
         self.night["investigate"] = -1
@@ -606,6 +832,14 @@ class Game:
         p = self.player(actor)
         if p.role is not Role.WITCH:
             raise PermissionError(f"{p.display} 不是女巫")
+        # ★ 2026-10-30（用户定「女巫一天晚上最多使用一瓶药」）：
+        #   窗口关闭后不许再改（那时药已经扣过/定案已经落下），以及今晚已经
+        #   下过毒就不许再救。界面不会发这两个请求，但引擎必须是第二道防线 ——
+        #   否则一次伪造的 /act 就能一夜用两瓶，或把已结算的用药改掉。
+        if self.night.get("heal_settled"):
+            raise RuntimeError("解药这一问已经结束，不能再改")
+        if self.night.get("poison") not in (None, -1):
+            raise PermissionError("今晚已经用过毒药，不能再救人")
         # 解药只能救**今晚被狼刀的那个人**。不校验的后果：点错人 ⇒ 解药被消耗、
         # 被刀的人照样死（resolve_night 是拿 heal 和 kill 比对的），也就是白耗一瓶。
         killed = self.knife_target()
@@ -630,7 +864,15 @@ class Game:
         #    （驱动器到点注入 pass）或毒药真被用掉时才置位。
         # ⚠️ 2026-10-07 更正：无条件置位（夜能不能收尾看它）—— 同 `night_decline`。
         self.night["witch_asked"] = True
-        self.private[actor].potions["heal"] = False
+        # ★ 2026-10-29（用户定）：窗口内**不扣药** —— 点了还能改（点别的 / 再点
+        #   同一个取消），真正扣药发生在窗口关闭时（`settle_witch_heal`）。
+        #   扣早了的话 potions["heal"] 一假，`_actions_available` 立刻不再列 heal
+        #   ⇒ 面板当场消失，跟"时间结束前都能改"直接冲突。
+        self.night["heal_picked"] = True
+        # 兼容：**不经节点时钟**的调用方（引擎单测 / 回放 / 脚本）没有 `stage`，
+        # 它们没有"窗口关闭"这个时刻，所以按老语义立刻扣药。
+        if self.night.get("stage") is None:
+            self.private[actor].potions["heal"] = False
 
     def night_poison(self, actor: int, target: int) -> None:
         """
@@ -644,6 +886,12 @@ class Game:
         p = self.player(actor)
         if p.role is not Role.WITCH:
             raise PermissionError(f"{p.display} 不是女巫")
+        # ★ 2026-10-30：同 night_heal —— 毒药窗口关闭后不许再改；
+        #   今晚已经用过解药就不许再下毒（"一晚最多一瓶"的引擎侧防线）。
+        if self.night.get("poison_settled"):
+            raise RuntimeError("毒药这一问已经结束，不能再改")
+        if self.night.get("heal") not in (None, -1):
+            raise PermissionError("今晚已经用过解药，不能再毒人")
         # 🔴 2026-10-07：判据同 night_decline —— "刀已定案"就允许（空刀也算定案）。
         #    空刀只是**解药无处可用**，毒药照常能下（定稿：那一问照走）。
         if not self.night.get("kill_settled") and self.knife_target() is None:
@@ -653,7 +901,9 @@ class Game:
         self._require_alive(target)
         self.night["poison"] = target
         self.night["witch_asked"] = True
-        self.private[actor].potions["poison"] = False
+        self.night["poison_picked"] = True
+        if self.night.get("stage") is None:      # 兼容老调用方，见 night_heal
+            self.private[actor].potions["poison"] = False
 
     def night_decline(self, actor: int) -> None:
         """女巫决定本轮不用药。必须是显式动作，否则夜晚永远结束不了。"""
@@ -667,11 +917,21 @@ class Game:
         #   女巫既不能用药也不能放弃，witch_asked 永远置不上，夜晚结束不了。
         if not self.night.get("kill_settled") and self.knife_target() is None:
             raise RuntimeError("狼人还没刀人，女巫不能睁眼")
-        # ⚠️ 2026-10-07 更正：无条件置位（夜能不能收尾看它）。
-        #    "用了/不用解药，毒药那一问都要照常走"（用户定）的正确改法是**节点感知**
-        #    （毒药窗口的收口由驱动器以 `stage="poison"` 调用），前两版都把夜搞卡了
-        #    （实测），已回退 —— 见 §10.7 第九起。
-        self.night["witch_asked"] = True
+        # ★ 2026-10-29（用户定：两问 = 两个窗口）：这里必须**按窗口分开记**。
+        #   解药窗口说"不用"只是解药那一问表态，毒药那一问还得照常走
+        #   （所以不置 witch_asked）；witch_asked / witch_done 一律挪到毒药窗口
+        #   关闭时（`settle_witch_poison`）。一个旗子糊两问的老写法，
+        #   正是"她用了解药就再也不会毒人"的根因。
+        st = self.night.get("stage")
+        if st == "witch_poison":
+            self.night["witch_asked"] = True
+            self.night["poison_picked"] = True
+        elif st == "witch_heal":
+            self.night["heal_picked"] = True
+        else:
+            # 兼容老调用方（没有 stage）：一次 decline 就算这一夜问完了，与改之前一致。
+            self.night["witch_asked"] = True
+            self.night["heal_picked"] = True
 
     def night_clear(self, actor: int) -> None:
         """撤回**本窗口**刚做的那个动作（2026-10-07 定稿交互：轮盘"再点同一个号码 = 取消"）。
@@ -697,26 +957,40 @@ class Game:
         p = self.player(actor)
         n = self.night
         if p.role is Role.GUARD:
+            if n.get("guard_settled"):
+                raise RuntimeError("守卫这一问已经结束，不能再改")
             n["guard"] = None
             n["guard_asked"] = False
             return
         if p.role.is_wolf:
+            if n.get("kill_settled"):
+                raise RuntimeError("狼刀已经结算，不能再改")
             pts = n.get("wolf_points") or {}
             pts.pop(actor, None)
             n["wolf_points"] = pts
             n["wolf_confirm"] = [s for s in (n.get("wolf_confirm") or []) if s != actor]
             n["kill"] = None
             n["kill_settled"] = False
+            n["wolf_decided_by"] = None
             return
         if p.role is Role.SEER:
+            if n.get("seer_settled") or n.get("seer_confirmed"):
+                raise RuntimeError("验人结果已经确认/结算，不能再撤")
             n["investigate"] = None
             return
         if p.role is Role.WITCH:
+            # ★ 2026-10-30：结算之后再"撤回"等于把已经扣掉的药还回来（一夜两瓶）。
+            if n.get("poison_settled"):
+                raise RuntimeError("女巫这一夜的用药已经结算，不能再改")
+            if n.get("heal") is not None and n.get("heal_settled"):
+                raise RuntimeError("解药已经结算，不能再改")
             if n.get("heal") is not None:
                 n["heal"] = None
+                n["heal_picked"] = False
                 self.private[actor].potions["heal"] = True
             if n.get("poison") is not None:
                 n["poison"] = None
+                n["poison_picked"] = False
                 self.private[actor].potions["poison"] = True
             n["witch_asked"] = False
             return
@@ -737,6 +1011,9 @@ class Game:
         p = self.player(actor)
         if p.role is not Role.GUARD:
             raise PermissionError(f"{p.display} 不是守卫，不能守人")
+        # ★ 2026-10-30：窗口关闭（已结算）后不许再改 —— 与女巫/狼同一个口径。
+        if self.night.get("guard_settled"):
+            raise RuntimeError("守卫这一问已经结束，不能再改")
         if target == -1:
             # 空守（2026-10-06 用户定：神职操作只给 15 秒，超时=自动放弃 ——
             # 守卫的"放弃"就是不守任何人。只置 guard_asked 让夜晚能结束。
@@ -769,10 +1046,19 @@ class Game:
         if target != -1:
             self._require_alive(target)
             self._damage(target, 1)
-            self.deaths.append({"seat": target, "round": self.round, "cause": "shoot"})
             tgt = self.player(target)
-            self.log(f"{tgt.display} 被猎人带走，出局。" if not tgt.alive
-                     else f"{tgt.display} 被猎人带走，还剩 1 条命。")
+            # ★ 遗言（2026-10-28 用户定）：**被猎人带走的人，跟猎人自己同命** ——
+            #   猎人是第一夜死的、或者是白天被投出的 ⇒ 被带走的人也有遗言；
+            #   猎人是第二夜及以后夜里死的 ⇒ 被带走的人没有遗言。
+            #   判据不能看"被带走的这个人自己是哪一夜死的"：白天被投出的猎人
+            #   开枪时 round 已经是当天，按 round==1 判会把他带走的人错判成"没遗言"。
+            self.deaths.append({"seat": target, "round": self.round, "cause": "shoot",
+                                "lastword": self._hunter_has_lastword(actor)
+                                           and not tgt.alive})
+            if not tgt.alive:
+                self.log(f"{tgt.display} 被猎人带走，出局。", dead=[target])
+            else:
+                self.log(f"{tgt.display} 被猎人带走，还剩 1 条命。")
         else:
             self.log(f"{self.player(actor).display}（猎人）选择不开枪。")
         back_to = self.shoot_from or Phase.DAWN
@@ -782,7 +1068,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
 
     # ---- 夜晚结算 ----
 
@@ -795,6 +1081,14 @@ class Game:
         """
         self._require_phase(Phase.NIGHT)
         events: List[str] = []
+        # ★ 2026-10-29（用户定）：「天亮时，法官**先**播报『天亮了』，**再**播报
+        #   昨夜死亡信息」。这两句以前是反的（死讯在 resolve_night，
+        #   "天亮了…"在 open_discuss，而遗言相位还夹在中间）。
+        #   现在天亮句落到这里，死讯紧随其后 —— 顺序稳定成"天亮 → 死讯 → 遗言"。
+        # 文案与改之前**一字不差**（原来在 open_discuss 里说「天亮了，请睁眼。从 X 号
+        # 开始依次发言。」）—— 用户要的只是**顺序**，没让改措辞；而且那句的前半截
+        # 一旦改字，前端的整队播报与"念到天亮"的对齐都要跟着动。
+        self.log("天亮了，请睁眼。")
 
         target = self.knife_target()          # 空刀(-1) ⇒ None（不许流进 _damage）
         guarded = self.night.get("guard")
@@ -821,7 +1115,9 @@ class Game:
             pass                       # 刀没落定（空刀 / 被救 / 被守）—— 一个字都不说
         else:
             self._damage(target, 1)
-            self.deaths.append({"seat": target, "round": self.round, "cause": "kill"})
+            self.deaths.append({"seat": target, "round": self.round, "cause": "kill",
+                                "lastword": self._night_has_lastword()
+                                           and not self.player(target).alive})
             (_died if self.player(target).alive is False else _hurt).append(
                 self.player(target).display)
 
@@ -830,7 +1126,10 @@ class Game:
         poison_target = self.night.get("poison")
         if poison_target is not None and poison_target != -1:
             self._damage(poison_target, 1)
-            self.deaths.append({"seat": poison_target, "round": self.round, "cause": "poison"})
+            self.deaths.append({"seat": poison_target, "round": self.round,
+                                "cause": "poison",
+                                "lastword": self._night_has_lastword()
+                                           and not self.player(poison_target).alive})
             (_died if self.player(poison_target).alive is False else _hurt).append(
                 self.player(poison_target).display)
 
@@ -840,8 +1139,16 @@ class Game:
             events.extend(f"昨夜 {n} 倒牌，还剩 1 条命。" for n in _hurt)
         else:
             events.append("平安夜。")
+        # ★ 2026-10-28（用户定）：死讯那句要带上"宣布了谁出局"——
+        #   界面在法官**念到这句**时才把图标暗掉（而不是结算那一刻）。
+        #   逐句匹配（一人一句），不能把整批死人都挂在第一句上 —— 那样第二个人
+        #   会在他的死讯还没念出来时就先暗掉。
+        _night_dead = [int(d["seat"]) for d in self.deaths
+                       if int(d.get("round", -1)) == self.round
+                       and d.get("cause") in ("kill", "poison")
+                       and not self.player(int(d["seat"])).alive]
         for e in events:
-            self.log(e)
+            self.log(e, dead=[s for s in _night_dead if self.player(s).display in e])
 
         # 逐夜记录（六维指标 / 战报 / 复盘都要它）：
         # 只记"这一夜到底发生了什么"，不带任何身份 → 它不参与隔离，也不进公共播报。
@@ -875,7 +1182,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
             return events
         self.phase = Phase.DAWN
         return events
@@ -890,7 +1197,7 @@ class Game:
             错误地再来一轮白天）。由调用方声明。"""
         # 🔴 2026-10-02：必须**只看本轮**的 deaths —— 以前遍历全部历史，
         #    死掉的猎人被票出/被刀开过一次枪之后，每一晚的结算都会把他
-    #    重新任命成 shooter ⇒ 死人反复开枪（实测单测复现）。
+        #    重新任命成 shooter ⇒ 死人反复开枪（实测单测复现）。
         for d in self.deaths:
             if int(d.get("round", -1)) != self.round:
                 continue
@@ -899,9 +1206,36 @@ class Game:
                 if d["cause"] == "poison" and not self.rules.hunter_can_shoot_on_witch_poison:
                     self.log(f"{self.player(seat).display}（猎人）被毒杀，无法开枪。")
                     continue
+                # ★ 2026-10-29（用户定）：**猎人就是最后一个神**时，他一出局
+                #   屠神就成立、胜负当场就定了 —— 这一枪不允许打（用户原话：
+                #   「若猎人作为最后一神出局，则无法开枪，直接判定狼人胜利」）。
+                #   ⚠️ 判据必须是「屠边生效 + 神职全灭」，**不能**写成
+                #   `check_winner() == "wolf"`：那样会把「狼数 ≥ 好人数」也算进去，
+                #   于是最小板（1 狼 / 猎人 / 1 民）里猎人的最后一枪被吃掉 ——
+                #   而那一枪恰恰是能翻盘的（`_smoke-rules` 的 H4 就是钉这条）。
+                #   两种"狼已胜"的形状不同：屠边是**结局已定**，绑票是**票数已定**，
+                #   后者仍允许猎人开完枪再结算。
+                if self.side_wipe_on() and not self.gods_alive():
+                    self.log(f"{self.player(seat).display}（猎人）出局，无法开枪。")
+                    continue
                 if self.shooter is None:
                     self.shooter = seat
                     self.shoot_from = back_to or Phase.DAWN
+
+    def _hunter_has_lastword(self, hunter: int) -> bool:
+        """这位猎人**自己**有没有遗言 —— 也就是他带走的人有没有遗言的判据。
+
+        用户定（2026-10-28）：第一夜死的、白天被投出的人都有遗言；
+        第二夜及以后夜里死的人没有遗言。被带走的人**跟猎人同命**。
+        """
+        for d in reversed(self.deaths):
+            if int(d.get("seat", -1)) == hunter:
+                return bool(d.get("lastword"))
+        return False
+
+    def _night_has_lastword(self) -> bool:
+        """今夜出局的人有没有遗言（用户定：**只有第一夜**有）。"""
+        return self.round == 1
 
     def _damage(self, seat: int, amount: int) -> None:
         p = self.player(seat)
@@ -946,6 +1280,76 @@ class Game:
             return kill
         return self._neutral_anchor()
 
+    def _round_dead_seats(self) -> List[int]:
+        """本夜出局的人（刀 / 毒 / 猎人带走），按结算顺序去重。
+
+        ⚠️ 不能直接用 `night["kill"]`：被救/被守时它还在，但人没死；
+        也不能数 `self.deaths` 全表：里面混着前几天的出局。按 round + 死因筛。
+        """
+        out: List[int] = []
+        for d in self.deaths:
+            if int(d.get("round", -1)) != self.round:
+                continue
+            if d.get("cause") not in ("kill", "poison", "shoot"):
+                continue
+            s = int(d["seat"])
+            if self.player(s).alive or s in out:
+                continue
+            out.append(s)
+        return out
+
+    def _rotation_dir(self, start: int, clockwise: bool) -> List[int]:
+        """存活座位从 start 起按方向排（顺时针 = 座位号递增，逆时针 = 递减）。"""
+        seats = [p.seat for p in self.alive]
+        if not seats:
+            return []
+        if start not in seats:
+            return self._rotation_from(start)
+        idx = seats.index(start)
+        if clockwise:
+            return seats[idx:] + seats[:idx]
+        return list(reversed(seats[:idx + 1])) + list(reversed(seats[idx + 1:]))
+
+    def _day_speech_plan(self) -> tuple:
+        """白天发言的起点与方向（2026-10-30 用户定）。
+
+        · 平安夜 / 多人死亡：随机一名存活玩家 + 随机顺/逆序；
+        · 恰好一人死亡：从他两侧最近的存活玩家里随机一位开始，方向由
+          「死者 → 该玩家」的方位决定（在死者的顺时针侧 ⇒ 顺时针，
+          逆时针侧 ⇒ 逆时针）。
+
+        返回 `(order, clockwise)`。随机数走 `self.rng`（seed 可复现）。
+        """
+        seats = [p.seat for p in self.alive]
+        if not seats:
+            return [], True
+        dead = self._round_dead_seats()
+        if len(dead) == 1:
+            d = dead[0]
+            n = len(self.players)
+            before = after = None
+            for step in range(1, n + 1):
+                s = (d - step) % n
+                if s in seats:
+                    before = s
+                    break
+            for step in range(1, n + 1):
+                s = (d + step) % n
+                if s in seats:
+                    after = s
+                    break
+            cands = [s for s in (before, after)
+                     if s is not None and s in seats]
+            cands = list(dict.fromkeys(cands))
+            if cands:
+                start = self.rng.choice(cands)
+                # 选中的是死者顺时针侧 ⇒ 顺时针（例子：4 死、选 5 ⇒ 5,1,3）
+                clockwise = (start == after)
+                return self._rotation_dir(start, clockwise), clockwise
+        start = self.rng.choice(seats)
+        clockwise = bool(self.rng.getrandbits(1))
+        return self._rotation_dir(start, clockwise), clockwise
+
     def _rotation_from(self, anchor: Optional[int]) -> List[int]:
         """
         存活座位按「从 anchor 开始顺时针」排。
@@ -968,8 +1372,12 @@ class Game:
     def open_discuss(self, start_seat: Optional[int] = None) -> List[int]:
         self._require_phase(Phase.DAWN)
         self.phase = Phase.DISCUSS
-        anchor = self._night_anchor() if start_seat is None else start_seat
-        seats = self._rotation_from(anchor)
+        if start_seat is None:
+            # ★ 2026-10-30（用户定）：发言起点/方向按「上一夜死亡情况」定，
+            #   见 _day_speech_plan。首个白天也是先遗言、后发言（调用方顺序）。
+            seats, clockwise = self._day_speech_plan()
+        else:
+            seats, clockwise = self._rotation_from(start_seat), True
         if not seats:
             raise RuntimeError("场上没有活人，无法开始发言")
         self.speaking_order = seats
@@ -978,12 +1386,14 @@ class Game:
         self._responded = set()
         self._inserted = 0
         self._slot_reason = {}
-        # ⚠️ 播报只说**起点是谁**，不能说他「为什么」成为起点。
+        # ⚠️ 播报只说**起点和方向**，不能说他「为什么」成为起点。
         #    以前写的是「从昨晚被刀的 3 号开始依次发言。」—— 在平安夜
         #    （被女巫救 / 被守卫守住 / 空刀）时，这一句就把"谁是目标、有人救了他"
-        #    公开了（见 _neutral_anchor）。现在两种情况的文案完全一致，
-        #    外部看不出区别。
-        self.log(f"天亮了，请睁眼。从 {seats[0] + 1} 号开始依次发言。")
+        #    公开了（见 _neutral_anchor）。
+        # ★ 2026-10-29：天亮那一句已经挪到 `resolve_night`（先天亮、再死讯）。
+        #   这里只剩轮转起点，**不许**再带"天亮了"—— 否则全场听两遍。
+        self.log(f"从 {seats[0] + 1} 号开始"
+                 f"{'顺时针' if clockwise else '逆时针'}依次发言。")
         return seats
 
     def current_speaker(self) -> Optional[int]:
@@ -1007,10 +1417,80 @@ class Game:
             return None
         _slot = self.speak_cursor          # 这一句所在的**光标位**（讨论位判定要用它）
         self.speak_cursor += 1
-        if self.rules.speech_mode == "challenge":
+        # 平票加时发言（runoff_stage == 1）**不启用**挑战式插队：这一轮只有平票者
+        # 说话，让他们互相点名插队会把"最后一轮陈述"拖成无休止的对呛，而加时的目的
+        # 恰恰是让每个人把话说完、然后立刻重投。
+        if self.rules.speech_mode == "challenge" and not self.runoff_stage:
             rec = self.speeches[-1] if self.speeches else None
             self._queue_challenge(spk, rec, _slot)
         return self.current_speaker()
+
+    # ------------------------------------------------------------ 遗言（2026-10-28）
+
+    def pending_lastwords(self) -> List[int]:
+        """还没安排遗言的、**按规则该留遗言**的出局者（按出局顺序，去重）。
+
+        判据全在死因记录上（`lastword` 在死亡发生时就按规则算好了，见
+        resolve_night / resolve_vote / night_shoot），这里只负责"取还没排过的"。
+        `lw_done` 是"已经排进过队列"的记号 —— 少了它，同一个人会在下一次
+        进入 DAWN/EXILE 时被再请一次。
+        """
+        out: List[int] = []
+        for d in self.deaths:
+            if d.get("lw_done") or not d.get("lastword"):
+                continue
+            s = int(d["seat"])
+            if s not in out:
+                out.append(s)
+        return out
+
+    def open_lastwords(self, seats: List[int], back: str = "discuss") -> List[int]:
+        """开始遗言：`seats` 依次留遗言，说完回 `back`（'discuss' / 'night'）。
+
+        只在两处进来：死讯结算之后（DAWN 之前 → 白天发言之前）、投票结算之后
+        （EXILE → 下一夜之前）。别的地方进来一律拒绝 —— 遗言是"刚死"的产物，
+        不能凭空调出来。
+        """
+        if self.phase not in (Phase.DAWN, Phase.EXILE):
+            raise RuntimeError(f"当前阶段是 {self.phase.value}，不能开始遗言")
+        order = [int(s) for s in seats if s is not None]
+        if not order:
+            return []
+        self.lastword_order = order
+        self.lastword_cursor = 0
+        self.lastword_back = back if back in ("discuss", "night") else "discuss"
+        self.phase = Phase.LASTWORD
+        for d in self.deaths:                 # 排过就记账，别再排第二次
+            if int(d["seat"]) in order:
+                d["lw_done"] = True
+        return order
+
+    def current_lastword(self) -> Optional[int]:
+        if self.phase is not Phase.LASTWORD:
+            return None
+        if self.lastword_cursor >= len(self.lastword_order):
+            return None
+        return self.lastword_order[self.lastword_cursor]
+
+    def end_lastword(self) -> Optional[int]:
+        """当前这位留完遗言 ⇒ 返回下一位（None = 遗言说完了）。"""
+        if self.current_lastword() is None:
+            return None
+        self.lastword_cursor += 1
+        return self.current_lastword()
+
+    def end_lastwords(self) -> str:
+        """遗言全部结束：把相位拨回"该去的地方"，返回 'discuss' / 'night'。
+
+        ⚠️ 这里**只拨相位**，不替调用方 open_discuss / next_night ——
+        那两件事各自有前置条件（DAWN 才能开讨论、SHOOT 时不许进夜），
+        由驱动器按顺序调，才不会把前置条件绕过去。
+        """
+        back = self.lastword_back
+        self.lastword_order = []
+        self.lastword_cursor = 0
+        self.phase = Phase.DAWN if back == "discuss" else Phase.EXILE
+        return back
 
     def _queue_challenge(self, speaker: int, rec: Optional[Dict[str, Any]],
                          slot_index: int) -> bool:
@@ -1074,14 +1554,27 @@ class Game:
             raise RuntimeError("还没到投票阶段")
         self.phase = Phase.VOTE
         self.votes = {}
-        # 本轮发言到此结束 ⇒ 记下"最后发言的人"，给下一个平安夜当中性起点用。
+        # ★ 平票加时（2026-10-28 用户定）：加时发言结束后开的是"加时投票"。
+        #   与第一轮的区别只有两条：**平票者不投票**、**只能投平票者或弃票**。
+        #   投票顺序因此要重新过滤一遍（手机依次递给谁，也靠这个字段）。
+        if self.runoff_stage == 1:
+            self.runoff_stage = 2
+            _rc = set(self.runoff_candidates)
+            # 沿用第一轮的投票顺序（= 本轮发言顺序），只把平票者摘掉。
+            self.vote_order = [s for s in self.vote_order
+                               if s not in _rc and self.can_vote(s)]
+            _names = "、".join(f"{s + 1} 号" for s in self.runoff_candidates)
+            self.log(f"加时投票开始：只能投给 {_names}中的一位，或者弃票；"
+                     f"{_names}本轮不参加投票。")
+            return
+        # 本轮发言到此结束 ⇒ 记下"最后发言的人"（战报 / 历史字段）。
+        # ⚠️ 加时发言**不覆盖**它：那只是平票者的最后陈述，不是"今天的发言结束"。
         self.last_speaker = self.speaking_order[-1] if self.speaking_order else None
-        # 投票顺序与发言**必须同一套轮转**（用户定的规则）。
-        # ⚠️ 这里不能直接拿 self.night["kill"] 当锚点：平安夜时那等于把发言顺序
-        #    刚藏起来的事情又写进 vote_order（同一个泄漏，只是换了个字段）。
-        #    所以两者都走 _night_anchor()。
-        # 它决定「手机依次递给谁」，也决定 AI 的投票先后 —— 靠后的人要能听到前面的。
-        self.vote_order = self._rotation_from(self._night_anchor())
+        # 投票顺序与发言**必须同一套轮转**（用户定的规则）——
+        # 它决定「手机依次递给谁」，也决定 AI 的投票先后（靠后的人能先听到前面的）。
+        # ★ 2026-10-30：发言顺序改成按"上一夜死亡情况"随机起点/方向后，
+        #   投票跟着发言走，不再单独从 _night_anchor 重算 —— 否则两套顺序会打架。
+        self.vote_order = [s for s in self.speaking_order if self.can_vote(s)]
         self.log("发言结束，开始投票。")
 
     def cast_vote(self, voter: int, target: int) -> None:
@@ -1091,9 +1584,20 @@ class Game:
         ⚠️ 2026-09-17 起**允许投自己**（用户定）：标准局里自投≈弃权的一种表达，
         引擎没必要拦。`tally_text` 与 `resolve_vote` 会照常把他算进那一组，
         和面杀里"举手投自己"的表现一致。
+
+        ★ 加时投票（runoff_stage == 2）例外：**平票的人不投票**，其余人**只能
+        投平票的人**或弃票。这两条在这里硬拦 —— 前端也会把候选收窄，但人类可能
+        带着上一屏的缓存点下去，AI 更可能给出一个不在候选里的座位号。
+        静默改成别的票是不行的（那等于替玩家改票），所以要明确报错。
         """
         self._require_phase(Phase.VOTE)
         self._require_alive(voter)
+        if self.runoff_stage == 2:
+            if voter in self.runoff_candidates:
+                raise ValueError(
+                    f"{self.player(voter).display} 是本轮平票候选人，不参加加时投票")
+            if target != -1 and target not in self.runoff_candidates:
+                raise ValueError("加时投票只能投给平票候选人，或者弃票")
         if target != -1:
             self._require_alive(target)
         self.votes[voter] = target
@@ -1121,6 +1625,54 @@ class Game:
             # 见下面 tally_speech 的说明：这个紧凑写法只给 AI / demo 用
             for target, voters in order
         )
+
+    def vote_board(self) -> Dict[str, Any]:
+        """最近一次**已公开**的票型，专供界面底部的「票型框」（2026-10-28 用户定）。
+
+        可见性纪律与播报完全一致：投票进行中没有任何票型可看，结算之后才出现。
+        加时期间给的是**第一轮**那套（它已经因为"平票进入加时"而公开），
+        加时结算之后再换成加时那一轮（`vote_board_runoff` 就是那个切换点）。
+
+        返回的 `lines` 就是界面上要显示的那几行，格式是用户点名的紧凑写法：
+            2，3→5        （2 号、3 号投给 5 号）
+            弃票：4        （4 号弃票 / 空刀不算票）
+        票数多的组在前、同票座位号小的在前 —— 与 `tally_text()` 同一套排序。
+        """
+        votes: Optional[Dict[int, int]] = None
+        in_runoff = self.runoff_stage in (1, 2)
+        # 🔴 2026-10-31：加时**结算之后** `runoff_stage` 仍停在 2（直到进夜），
+        #   旧写法会让票型框一直显示第一轮 —— 加时那一轮的票永远看不到。
+        #   结算点由 `vote_board_runoff` 标记：它置位后改读 `vote_history[-1]`。
+        if in_runoff and self.runoff_first_votes and not self.vote_board_runoff:
+            votes = self.runoff_first_votes
+        elif self.vote_history:
+            votes = self.vote_history[-1]
+        if not votes:
+            return {}
+        groups: Dict[int, List[int]] = {}
+        abstain: List[int] = []
+        for voter, t in votes.items():
+            if t is None or int(t) < 0:
+                abstain.append(int(voter))
+                continue
+            groups.setdefault(int(t), []).append(int(voter))
+        order = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        lines = ["，".join(str(v + 1) for v in sorted(voters)) + "→" + str(t + 1)
+                 for t, voters in order]
+        if abstain:
+            lines.append("弃票：" + "，".join(str(v + 1) for v in sorted(abstain)))
+        return {
+            "round": len(self.vote_history) or self.round,
+            # 「计票·首轮 / 计票·加时 / 计票」三个标题口径：
+            #   · 加时进行中（还没结算）→ 框里是第一轮票型 ⇒ 首轮；
+            #   · 加时结算之后（`vote_board_runoff`）→ 框里是加时票型 ⇒ 加时；
+            #   · 其余（普通一天 / 进入下一夜之后）→ 计票。
+            "runoff": bool(self.vote_board_runoff),
+            "first_round": bool(in_runoff and not self.vote_board_runoff),
+            "groups": [{"target": t, "voters": sorted(v)} for t, v in order],
+            "abstain": sorted(abstain),
+            "lines": lines,
+        }
 
     def knife_target(self) -> Optional[int]:
         """今晚真正被刀的座位；**空刀返回 None**。
@@ -1177,8 +1729,64 @@ class Game:
             return out if tied else out + f"{top[0] + 1} 号票最多。"
         return "；".join(parts) + "。全部弃票。"
 
+    def _open_runoff(self, leaders: List[int]) -> Optional[int]:
+        """
+        平票加时（2026-10-28 用户定）：平票的人**再发一轮言**，然后其余人重投。
+
+        规则原文：「若放逐投票环节出现平票，则由平票玩家再发一轮言后再次投票
+        （平票玩家不参加投票，其余玩家只能将票投给平票玩家中的一位或弃票），
+        若再次平票才为平安日，进入黑夜」。
+
+        为什么是 DISCUSS + `runoff_stage`，而不是新相位：发言与投票的驱动、
+        面板、语音播报全部按 Phase 分派，新相位要同时动驱动表、now_state、
+        前端三处；这里真正变的只有"谁说、谁能投"。stage 让这三处**零改动**地复用。
+
+        调用方 `resolve_vote` 此时已经能确定"第一轮没人出局"，所以：
+          · 第一轮票型先播报（票已结算，公开不违反暗投纪律）
+          · 第一轮票型**不进 `vote_history`** —— 那张表是"每天一条"的口径
+            （`vote_patterns` / `my_votes` / 战报都按 round 索引），
+            平票这天塞两条会让后面每一天的轮次都错位一格。
+            加时结算时再写，写的是**决定出局的那一轮**。
+          · 这里返回 None：本函数"返回被放逐的座位"，加时这一个瞬间没人出局。
+        """
+        self.runoff_stage = 1
+        self.runoff_candidates = sorted(leaders)
+        self.runoff_first_votes = dict(self.votes)
+        self._runoff_speech_mark = len(self.speeches)
+
+        # ★ 2026-10-31（用户："缺少法官票型播报，补回来"）：恢复票型播报 ——
+        #   先用口语版念票型，再说"进入加时"（与普通结算同序：先票型后结果）。
+        #   播报只进 `public_log`/时间线，不改变任何状态；平票这一轮照旧不进
+        #   `vote_history`（见上面的轮次口径）。
+        self.log("投票结果：" + self.tally_speech())
+        _names = "、".join(f"{s + 1} 号" for s in self.runoff_candidates)
+        self.log(f"{_names}票数相同，进入加时。{_names}请各再说一轮，"
+                 f"之后其余玩家重新投票，只能投给 {_names}中的一位，也可以弃票。")
+
+        # 发言顺序：沿用本轮投票的轮转，只留下平票者（用户没规定顺序，
+        # 沿用轮转的好处是"和刚才发言、投票是同一套顺序"，桌上不用重新适应）。
+        order = [s for s in self.vote_order if s in self.runoff_candidates]
+        for s in self.runoff_candidates:          # 兜底：vote_order 异常时也别漏人
+            if s not in order:
+                order.append(s)
+        self.phase = Phase.DISCUSS
+        self.speaking_order = order
+        self.speak_cursor = 0
+        # 三个闸门清零的语义与 open_discuss 一致（都是"这一轮"的范围）。
+        # 加时发言里不启用挑战式插队（见 end_speech）—— 这一轮只有平票者说话，
+        # 让他们互相点名插队会把"最后一轮陈述"拖成无休止的对呛。
+        self._discussion_slots = set()
+        self._responded = set()
+        self._inserted = 0
+        self._slot_reason = {
+            i: "你在本轮投票里票数并列最高：现在做最后一轮陈述 —— "
+               "说服大家不投你，或者把票集中到另一位候选人身上。"
+            for i in range(len(order))
+        }
+        return None
+
     def resolve_vote(self) -> Optional[int]:
-        """结算投票，返回被放逐的座位（None = 平票或全弃票）。"""
+        """结算投票，返回被放逐的座位（None = 平票 / 全弃票 / 已转入加时）。"""
         self._require_phase(Phase.VOTE)
         tally: Dict[int, int] = {}
         for t in self.votes.values():
@@ -1187,33 +1795,44 @@ class Game:
             tally[t] = tally.get(t, 0) + 1
 
         exiled: Optional[int] = None
+        leaders: List[int] = []
         if tally:
             top = max(tally.values())
-            leaders = [s for s, v in tally.items() if v == top]
+            leaders = sorted(s for s, v in tally.items() if v == top)
             if len(leaders) == 1:
                 exiled = leaders[0]
             elif self.rules.tie_vote_rule == "random":
                 # 可配规则（G9）：平票随机出一个（默认是"无人出局"，见 Rules）
-                exiled = self.rng.choice(sorted(leaders))
+                exiled = self.rng.choice(leaders)
 
-        # 存档这一轮的票型。用途有两个，都在"结算之后"：
+        # ★ 平票加时（2026-10-28）：**第一轮**平票不判平安日，改走"平票者再发言 + 重投"。
+        #   `tally` 为空（全员弃票）不是平票 —— 那是"没人得到票"，照旧直接平安日；
+        #   加时投票（stage=2）再平票才落到下面的 tie 分支（= 平安日，进黑夜）。
+        if exiled is None and len(leaders) > 1 and self.runoff_stage == 0:
+            return self._open_runoff(leaders)
+
+        # 存档这一轮的票型。用途有三个，都在"结算之后"：
         #   · AI 能从自己的视图里看到「我投给了谁」（get_view_for 的 my_votes）
-        #   · 完整票型进 public_log，AI 下一轮能看到 —— **投票进行中看不到**
-        #     （public_log 是这一行才写入的，进行中它里面根本没有本轮票型）
+        #   · 完整票型进 vote_history / vote_patterns，AI 下一轮能看到 —— **投票进行中看不到**
+        #   · 界面底部「票型框」从 `vote_board()` 读（2026-10-28 用户定：另有紧凑写法）
         self.vote_history.append(dict(self.votes))
+        self.vote_board_runoff = (self.runoff_stage == 2)
 
-        # 票型先播报，再播报结果 —— 顺序与 demo/index.html 一致
-        # （「投票结果：…」在前，「x号玩家投票出局」在后）。
-        # 它进的是 public_log，所以界面上的日志、时间线、以及语音播报都会自动带上，
-        # 前端不需要再单独画一块「投票板」。
-        # 播报用**口语版**（人类靠耳朵抓信息）；紧凑版留给 AI/界面（tally_text）
+        # ★ 2026-10-31（用户："缺少法官票型播报，补回来"）：恢复口语版票型播报 ——
+        #   先念票型，再念结果（出局 / 平票），与 demo 和旧版同序。
+        #   `tally_speech()` 是"3 号 2 票（1 号、4 号投的）…"，给耳朵听；
+        #   紧凑写法仍由界面底部的票型框显示。
         self.log("投票结果：" + self.tally_speech())
 
         if exiled is None:
             # 平票 / 全员弃票都算"这一轮没出人"。节奏维度要看它 ——
             # 平票率高说明好人不敢投（或狼在故意打散），是个真实的平衡信号。
             self.tie_count += 1
-            self.log("投票平票，本轮无人出局。")
+            if self.runoff_stage == 2:
+                # 加时也平票 ⇒ 平安日（用户定的终点，不再进入第三轮）
+                self.log("加时投票仍然平票，本轮无人出局，进入黑夜。")
+            else:
+                self.log("投票平票，本轮无人出局。")
         elif self.player(exiled).role is Role.IDIOT:
             # ★ 白痴判例（标准）：
             #   · 第一次被投出 → **翻牌不死**，但从此**失去投票权**
@@ -1226,12 +1845,14 @@ class Game:
                 self.log(f"{self.player(exiled).display} 已翻过牌，本轮不再出局。")
         else:
             self._damage(exiled, 1)
-            self.deaths.append({"seat": exiled, "round": self.round, "cause": "vote"})
             p = self.player(exiled)
+            # ★ 遗言（2026-10-28 用户定）：**白天被投出的一律有遗言**。
+            self.deaths.append({"seat": exiled, "round": self.round, "cause": "vote",
+                                "lastword": not p.alive})
             if p.alive:
                 self.log(f"{p.display} 被投出，还剩 1 条命。")
             else:
-                self.log(f"{p.display} 被投出并出局。")
+                self.log(f"{p.display} 被投出并出局。", dead=[exiled])
 
         # ★ D6：猎人被投出也要能开枪，而**判胜必须等这一枪之后**。
         #   以前这里立刻 check_winner() 并置 ENDED ⇒ 会出现"已经宣布狼人胜利，
@@ -1249,7 +1870,7 @@ class Game:
         self.winner = self.check_winner()
         if self.winner:
             self.phase = Phase.ENDED
-            self.log("狼人胜利。" if self.winner == "wolf" else "好人胜利。")
+            self.log("游戏结束，" + ("狼人胜利。" if self.winner == "wolf" else "好人胜利。"))
         return exiled
 
     def can_vote(self, seat: int) -> bool:
@@ -1266,6 +1887,12 @@ class Game:
             return False
         if p.role is Role.IDIOT and self.private[seat].flipped:
             return False
+        # ★ 平票加时投票（2026-10-28 用户定）：平票的人**不参加**这一轮投票。
+        #   必须落在这里而不是只在 cast_vote 里拦：`_all_voted` / `_actions_available` /
+        #   `_pending_seats_of` / 前端面板全都读这一个判据 —— 少改一处就会出现
+        #   "手机递给了一个不该投票的人"或者"归票永远等不到他"。
+        if self.runoff_stage == 2 and seat in self.runoff_candidates:
+            return False
         return True
 
     def next_night(self) -> None:
@@ -1278,17 +1905,43 @@ class Game:
             #    这里明确拒绝：开枪必须先落定（开或弃），谁跳谁炸 —— 不许静默。
             raise RuntimeError("猎人还没开枪（SHOOT 相位），不能进下一夜")
         self.round += 1
+        # 加时状态是天级的：进入黑夜 ⇒ 清空（下一轮平票要重新开始计）。
+        self.runoff_stage = 0
+        self.runoff_candidates = []
+        self.runoff_first_votes = {}
+        # 票型框的"这是加时那一轮"标记也是天级的 —— 不清的话，第二天白天
+        # 会一直把昨天的加时票型挂在框上（标题还写着「计票·加时」）。
+        self.vote_board_runoff = False
         self._open_night()
 
     # ------------------------------------------------------------ 胜负
 
     def check_winner(self) -> Optional[str]:
+        """胜负判定 —— 2026-10-29 用户定稿（三个判据，按优先级）。
+
+        ① `w == 0`            → 好人胜（屠狼，唯一的"好人胜"入口）
+        ② `w >= g`            → 狼人胜（绑票口径：狼数不比好人少，白天票也拦不住）
+        ③ 屠边（仅 9 人及以上局，见 `SIDE_WIPE_MIN_TOTAL`）：
+           神职全灭 **或** 平民全灭 → 狼人胜
+
+        为什么要加 ③（用户原话）：9/12 人局里"狼数 ≥ 好人数"永远等不到 ——
+        12 人局开局 4 狼 8 好人，狼要杀到 4 才触发②，而这时候好人往往已经被屠掉一边，
+        等于"明明神都死光了，游戏还不停，还要再打一整天"。屠边是标准判例。
+
+        ⚠️ 白痴翻牌**不算死**：他还在 `alive` 里 ⇒ 既算进 `g`，也算进"神职未全灭"。
+           这一点和"白痴翻牌后失去投票权"是两件事，别合并（见 can_vote）。
+        """
         w = len(self.wolves_alive())
         g = len(self.good_alive())
         if w == 0:
             return "good"
         if w >= g:
             return "wolf"
+        if self.side_wipe_on():
+            if not self.gods_alive():
+                return "wolf"
+            if not self.villagers_alive():
+                return "wolf"
         return None
 
     # ------------------------------------------------------------ 视图
@@ -1353,8 +2006,15 @@ class Game:
         非讨论阶段返回 {}（夜晚/投票没有这个概念）。"""
         if self.phase is not Phase.DISCUSS:
             return {}
-        spoken = sorted({int(s["seat"]) for s in self.speeches
-                         if int(s.get("round", 0)) == self.round})
+        if self.runoff_stage == 1:
+            # 加时发言：进度只算**加时开始之后**说的那几句（见 _runoff_speech_mark）。
+            # 不分开的话，白天那一轮已经把所有人都记成"说过"，候选人一开口
+            # 进度里就变成"全场都发过言了" —— 模型据此会说出与现场矛盾的话。
+            spoken = sorted({int(s["seat"])
+                             for s in self.speeches[self._runoff_speech_mark:]})
+        else:
+            spoken = sorted({int(s["seat"]) for s in self.speeches
+                             if int(s.get("round", 0)) == self.round})
         return {"order": list(self.speaking_order), "spoken": spoken,
                 "current": self.current_speaker()}
 
@@ -1478,6 +2138,25 @@ class Game:
         # 所以放在引擎视图 —— 发言/投票/刀人/技能全部走 get_view_for，一处覆盖。
         # 「正在投的今天」不在 vote_history（结算时才 append）⇒ 天然不暴露。
         view["vote_patterns"] = self.vote_patterns()
+        # ★ 平票加时（2026-10-28 用户定）：把"现在谁能说、谁能投、能投给谁"明确下发。
+        #   放在引擎视图里，是因为发言 / 投票 / 语音播报全部走 get_view_for ——
+        #   一处覆盖三处，不会出现"AI 知道限制、前端还在给全体候选"这种不一致。
+        #   `first_votes` 是第一轮票型：它已经播报过（public_log 里有），
+        #   结构化给 AI 比让它从中文播报里再解析一遍更可靠。
+        if self.runoff_stage:
+            view["runoff"] = {
+                "stage": self.runoff_stage,           # 1 = 加时发言，2 = 加时投票
+                "candidates": list(self.runoff_candidates),
+                # 只给**还活着**的候选：候选在这两步之间理论上不会死，
+                # 但一旦有人因别的原因出局，前端不该再画一个点不动的号码。
+                "votable": [s for s in self.runoff_candidates
+                            if self.player(s).alive],
+                "can_vote": self.can_vote(seat),
+                "first_votes": {int(k): int(v)
+                                for k, v in self.runoff_first_votes.items()},
+            }
+        else:
+            view["runoff"] = None
         # 今天的发言进度（公开）：谁说过/谁没说/现在轮到谁 —— 防「评论还没发生的发言」
         view["speech_progress"] = self.speech_progress()
 
@@ -1508,6 +2187,10 @@ class Game:
             view["investigations"] = dict(priv.investigations)
         if p.role is Role.WITCH:
             view["potions"] = dict(priv.potions)
+            # ★ 2026-11-01（用户定）：救人之后、倒计时结束之前可以改为不救。
+            #   前端据此把「不救」变成可用的撤回键（当前窗口选没选过，只有本人需要知道）。
+            view["heal_picked"] = bool(self.night.get("heal_picked"))
+            view["poison_picked"] = bool(self.night.get("poison_picked"))
             # 女巫必须知道今晚谁被刀才能决定救不救 —— 这正是「法官私下告知」的信息。
             # 只在夜间暴露，且只给她一个人（L2）。
             if self.phase is Phase.NIGHT:
@@ -1526,24 +2209,54 @@ class Game:
         if self.phase is Phase.SHOOT:
             # 给 "pass" 这个出口：猎人可以选择**不开枪**（前端会把它显示成「不开枪」按钮）
             return ["shoot", "pass"] if self.shooter == seat else []
+        # ★ 遗言（2026-10-28）：**要说话的人刚刚死了**，所以这一支必须放在
+        #   "死人不给动作"之前（与 SHOOT 同理）。遗言复用 `speak` 动作 ——
+        #   前端的发言屏（大圆 + 开麦）本来就是按 speak 渲染的，白捡一套 UI。
+        if self.phase is Phase.LASTWORD:
+            return ["speak"] if self.current_lastword() == seat else []
         p = self.player(seat)
         if not p.alive:
             return []
 
         if self.phase is Phase.NIGHT:
             acts = []
+            # ★ 2026-10-29：列表的判据从"表态过没有"改成"**窗口关没关**"
+            #   （`*_settled`）。表态过（guard_asked / witch_asked / investigate）
+            #   只管 steps 表的"这一步做完没有"，不再影响界面 —— 否则守卫一点号码、
+            #   guard_asked 一置位，面板当场消失，用户说的"时间结束前都能改"就做不到。
+            # ⚠️ `stage` 由驱动器在节点打开时写入（`_nn_open`）：引擎不看时钟，
+            #   只读这个"现在问的是哪一问"的标记。女巫两问必须靠它分开，
+            #   否则解药窗口一开就把毒药也列出来。
+            st = self.night.get("stage")
             if p.role.is_wolf and not self.night.get("kill_settled"):
                 acts.append("kill")
-                # 点过之后还要"确定"。多狼局里不确认 = 没表态，刀口定不下来；
-                # 单狼局点即定案（kill_settled 立刻为真），走不到这一支。
-                if seat not in (self.night.get("wolf_confirm") or []):
+                # 点过之后还要"确定"。多狼局里不确认 = 没表态；
+                # ★ 2026-10-28：定案改到**窗口结束**，所以确认现在只是"表态完成"的
+                #   记号 —— 但它仍然只对多狼局有意义（单狼一个人没什么可确认的）。
+                if (len([q for q in self.alive if q.role.is_wolf]) > 1
+                        and seat not in (self.night.get("wolf_confirm") or [])):
                     acts.append("confirm")
-            if p.role is Role.SEER and self.night.get("investigate") is None:
-                acts.append("investigate")
+            # ★ 2026-10-29（用户定）：**列表的判据从"表态过没有"改成"窗口关没关"**
+            #   （`*_settled`）。表态过（guard_asked / witch_asked / investigate）
+            #   只管 steps 表的"这一步做完没有"，不再影响界面 —— 否则守卫一点号码、
+            #   guard_asked 一置位，面板当场消失，用户说的"时间结束前都能改"就做不到。
+            # ⚠️ `stage` 由驱动器在节点打开时写入（`_nn_open`）：引擎不看时钟，
+            #   只读这个"现在问的是哪一问"的标记。女巫两问必须靠它分开，
+            #   否则解药窗口一开就把毒药也列出来。
+            if p.role is Role.SEER and not self.night.get("seer_settled"):
+                # 先点人、再点确认（2026-10-29 用户定）：没点过只有 investigate；
+                # 点过没确认 ⇒ 两个都给（还能改点数 + 确认）；
+                # **确认之后什么都不列**（结果已经报了，改点数没有意义），
+                # 面板由前端的结果屏挂到「预言家请闭眼」念完。
+                if not self.night.get("seer_confirmed"):
+                    acts.append("investigate")
+                    # -1 = 已经"不验"了，没有可确认的目标
+                    if self.night.get("investigate") not in (None, -1):
+                        acts.append("confirm")
             # 守卫：每晚都要守一个人（标准规则里没有"今晚不守"这个选项）。
             # guard_asked 与 witch_asked 同理：不显式标记"问过了"，
             # 人类守卫会被整个跳过、夜晚也结束不了。
-            if p.role is Role.GUARD and not self.night.get("guard_asked"):
+            if p.role is Role.GUARD and not self.night.get("guard_settled"):
                 acts.append("guard")
             # 女巫必须**在狼人刀完之后**才睁眼。这是规则，也是她在结构上唯一
             # 「事后救人」的方式 —— 狼没刀之前，她根本拿不到死者是谁。
@@ -1556,7 +2269,8 @@ class Game:
             #    **第二窗**：解药那一问表过态之后（witch_asked 已置位），只要毒药还在、
             #    还没用，就在毒药它自己的窗口里列出来。收尾由 `night_decline(stage=
             #    "poison")` 负责（毒药窗口到点注入）—— 不会再卡夜。
-            if p.role is Role.WITCH and not self.night.get("witch_asked"):
+            if p.role is Role.WITCH:
+                # ⚠️ 外层**不能**限定 stage：`stage is None` 是老调用方那条兼容路。
                 # 🔴 2026-10-07：判据从"有刀口"改成"**刀已定案**" —— 空刀也是一种
                 #   定案（kill_settled=True、kill=-1）。定稿要求"女巫没药也要走满
                 #   「你要使用毒药吗？」那 15 秒"，空刀同理；只认刀口的话，空刀这一夜
@@ -1568,11 +2282,39 @@ class Game:
                     #    "狼空刀，人类女巫照常走解药播报和面板流程，只是解药按钮置灰"。
                     #    所以这一屏由**前端置灰**、引擎在 night_heal 里兜底拒绝；
                     #    不列出来的话那一屏整个消失（那是我第一版做窄了）。
-                    if self.private[seat].potions["heal"]:
-                        acts.append("heal")
-                    if self.private[seat].potions["poison"]:
-                        acts.append("poison")
-                    acts.append("pass")
+                    # ★ 2026-10-29（用户定）：解药 / 毒药是**两个窗口**，各自收口
+                    #   （`heal_settled` / `poison_settled`）。以前一个 witch_asked
+                    #   糊两问，点了或放弃了解药就把毒药那问一起掐死。
+                    if st == "witch_poison":
+                        # ★ 2026-10-30（用户定「女巫一天晚上最多使用一瓶药」）：
+                        #   今晚**已经用过解药**（`heal_settled` 且真的救了人）⇒
+                        #   毒药这一问只是流程：播报照常念（节点在剧本里），
+                        #   但面板**不给任何可点的东西**（前端显示为占位灰屏，
+                        #   到点由 `default='pass'` 收口）。
+                        #   以前这里只看"毒药还在不在"，于是解药 + 毒药能在同一夜
+                        #   连着用掉两瓶 —— 那是直接违反规则的。
+                        _used_heal = (self.night.get("heal_settled")
+                                      and self.night.get("heal") not in (None, -1))
+                        if (not self.night.get("poison_settled")
+                                and self.private[seat].potions["poison"]
+                                and not _used_heal):
+                            acts.append("poison")
+                            acts.append("pass")
+                    elif st == "witch_heal":
+                        if (not self.night.get("heal_settled")
+                                and self.private[seat].potions["heal"]):
+                            acts.append("heal")
+                            acts.append("pass")
+                    elif st is None:
+                        # 兼容：**不经节点时钟**的调用方（引擎单测 / 回放 / 脚本）
+                        # 没有 `stage` ⇒ 退化成改之前的口径（两问一起列、witch_asked
+                        # 一置就不再问）。正常对局永远走上面两个分支。
+                        if not self.night.get("witch_asked"):
+                            if self.private[seat].potions["heal"]:
+                                acts.append("heal")
+                            if self.private[seat].potions["poison"]:
+                                acts.append("poison")
+                            acts.append("pass")
             return acts
 
         if self.phase is Phase.DISCUSS and self.current_speaker() == seat:

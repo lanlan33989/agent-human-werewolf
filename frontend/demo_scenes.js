@@ -209,15 +209,50 @@ var DEMO_SCENES = {
     })
   },
 
-  /* 票型大字 */
+  /* 加时投票（2026-10-28 后端新增：平票 → 平票者再发言 → 其余人重投） */
+  vote_runoff: {
+    title: "加时投票（只能投平票候选）",
+    note: "平票后加时：平票者不投票，其余人只能投 2 号或 5 号（或弃票）—— 其他号码点不动。",
+    next: "vote_result",
+    public: _pub(function (p) {
+      p.phase = "vote";
+      p.pending = "human_vote";
+      p.votes = { "1": 4 };
+      p.voted_seats = [1];
+      /* 后端 engine.get_view_for 的 runoff 结构（stage=2 加时投票） */
+      p.runoff = { stage: 2, candidates: [1, 4], votable: [1, 4], can_vote: true,
+                   first_votes: { "0": 1, "1": 4, "2": 1, "3": 4, "4": 0, "5": 1 } };
+      /* 票型框的数据（2026-10-28：法官不再念票型，改由底部框显示）。
+         首轮票型：1/3/6 号投 2 号，2/4 号投 5 号，5 号投 1 号 */
+      p.vote_board = { round: 1, runoff: false, first_round: true,
+                       groups: [{ target: 1, voters: [0, 2, 5] }, { target: 4, voters: [1, 3] },
+                                { target: 0, voters: [4] }],
+                       abstain: [], lines: ["1，3，6→2", "2，4→5", "5→1"] };
+      p.public_log.push("2 号、5 号票数相同，进入加时。2 号、5 号请各再说一轮。");
+      p.timeline.push({ t: "sys", s: "2 号、5 号票数相同，进入加时。", voice: "Neil", ts: 1793034460 });
+      p.timeline.push({ t: "sys", s: "加时投票开始：只能投给 2 号、5 号中的一位，或者弃票。",
+                        voice: "Neil", ts: 1793034464 });
+      var need = { seat: 0, node: "vote", actions: ["vote", "pass"], seconds_left: 15 };
+      p.now = { kind: "wheel", seat: 0, node: "vote", need: need,
+                until: Date.now() / 1000 + 15, until_left: 15,
+                started: true, why: "加时投票：只能投 2 号或 5 号" };
+      p._ps = { seats: [need] };
+    })
+  },
+
+  /* 票型框（2026-10-28：法官不再念票型，改成底部窄条计票） */
   vote_result: {
-    title: "投票结果（票型大字）",
-    note: "#voteBig 只摆票型，不显示 AI 文本。",
+    title: "投票结果（底部票型框）",
+    note: "窄条约屏宽 15%，内容多了可上下滑动；每行一条「2，3→5」。",
     public: _pub(function (p) {
       p.phase = "day"; p.night_node = null; p.night_plan = [];
       p.votes = { "0": 2, "1": 2, "3": 0, "4": 2, "5": 4 };
       p.voted_seats = [0, 1, 3, 4, 5];
-      p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
+      /* 1/2/5 号投 3 号，4 号投 1 号，6 号投 5 号 */
+      p.vote_board = { round: 1, runoff: false, first_round: false,
+                       groups: [{ target: 2, voters: [0, 1, 4] }, { target: 0, voters: [3] },
+                                { target: 4, voters: [5] }],
+                       abstain: [], lines: ["1，2，5→3", "4→1", "6→5"] };
       p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
       p.players[2].alive = false; p.players[2].lives = 0;
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
@@ -303,11 +338,35 @@ var DEMO_SCENES = {
     public: _pub(function (p) {
       p.phase = "day"; p.round = 2; p.night_node = null; p.night_plan = [];
       p.pending = "working";
-      p.timeline.push({ t: "sys", s: "投票结果：3 号 3 票，1 号 2 票。", voice: "Neil", ts: 1793034470 });
       p.timeline.push({ t: "sys", s: "3 号出局。", voice: "Neil", ts: 1793034472 });
       p.players[2].alive = false; p.players[2].lives = 0;
       p.timeline.push({ t: "say", s: "我是好人……昨天投我的人今天盯紧 4 号，他的发言太滑了。", seat: 2, voice: "Grace", spoken: false });
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
+    })
+  },
+
+  /* ★ 2026-10-29（用户：AI 发言时大圆在两种文案间跳）——
+     这一屏就是那个态：**AI 在说**，人类没事可做（now.kind=none、pending=working）。
+     正确表现：大圆写「2号正在发言中」，且**只写这一句**（不许出现「2（人）」
+     或「点击结束发言」）；轮盘上 2 号小圆带金环呼吸光晕。 */
+  ai_say: {
+    title: "白天 · AI 正在发言",
+    note: "大圆 =「2 号正在发言中」；2 号号码小圆金色高亮；人类这一拍没有任何操作。",
+    public: _pub(function (p) {
+      p.phase = "discuss"; p.round = 1; p.night_node = null; p.night_plan = [];
+      p.pending = "working";
+      p.current_speaker = 1;
+      p.speaking_order = [0, 1, 2];
+      p.speech = [{ seat: 0, spoken: true }, { seat: 1, spoken: false }];
+      p.timeline.push({ t: "sys", s: "天亮了。昨夜 5 号出局。", voice: "Neil", ts: 1793034420 });
+      p.timeline.push({ t: "sys", s: "从 1 号开始发言。", voice: "Neil", ts: 1793034422 });
+      p.timeline.push({ t: "sys", s: "1号请发言", voice: "Neil", ts: 1793034424 });
+      p.timeline.push({ t: "say", s: "我先说。1 号就一句“我是好人”，太薄了。", seat: 0, voice: "Neil", spoken: true });
+      p.timeline.push({ t: "sys", s: "2号请发言", voice: "Neil", ts: 1793034430 });
+      p.timeline.push({ t: "say", s: "我站 1 号的对立面：他昨天的位置太靠后，发言却最像定调。", seat: 1, voice: "Ethan", spoken: false });
+      p.now = { kind: "none", seat: null, node: null, need: null,
+                started: false, why: "AI 发言中 / 等切换" };
+      p._ps = { seats: [] };
     })
   },
 
@@ -324,7 +383,7 @@ var DEMO_SCENES = {
       p.winner = "good";
       p.pending = "ended";
       p.timeline.push({ t: "sys", s: "最后一名狼人出局。", voice: "Neil", ts: 1793034700 });
-      p.timeline.push({ t: "sys", s: "游戏结束：好人胜利！", voice: "Neil", ts: 1793034702 });
+      p.timeline.push({ t: "sys", s: "游戏结束，好人胜利。", voice: "Neil", ts: 1793034702 });
       p.now = { kind: "none", seat: null, node: null, need: null, started: false };
     })
   }

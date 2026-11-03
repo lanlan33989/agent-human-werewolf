@@ -76,7 +76,9 @@ def _step_ai_wolf(self) -> bool:
     所以"AI 抢走人类狼的操作"不存在：**票没齐就定不了案**。
     """
     g = self.game
-    if g.night.get("kill_settled"):
+    # ★ 2026-10-28：定案搬到狼刀窗口结束时（engine.settle_wolf_window）。
+    #   窗口内再多点子都只是"改刀"，所以这里只在**真的定案**或**协商被叫停**时收手。
+    if g.night.get("kill_settled") or g.night.get("wolf_quiet"):
         return False
     wolves = [p for p in g.alive if p.role.is_wolf]
     if not wolves:
@@ -144,6 +146,12 @@ def _step_ai_witch(self):
     # 空刀（无人被刀）也要走那一问，否则这一步永远做不完、夜晚结束不了。
     if g.knife_target() is None and not g.night.get("kill_settled"):
         return False
+    # ★ 2026-10-29（用户定：执行顺序与播报顺序一致）：**只在女巫自己的窗口里答**。
+    #   以前不判 stage，AI 女巫可能在守卫/狼人那一段就已经把药决定了 ——
+    #   玩家听到的是"女巫还没睁眼，AI 已经用了解药"。现在卡死在她的两问里。
+    #   `None` = 没过节点时钟（引擎单测 / 回放 / 脚本）⇒ 放行，保持老语义。
+    if g.night.get("stage") not in (None, "witch_heal", "witch_poison"):
+        return False
     witch = next((p for p in g.alive
                   if p.role is Role.WITCH and p.kind == "ai"), None)
     if witch is None:
@@ -205,7 +213,9 @@ def _ai_wolf_propose(self, seat: int):
         target = None
     if target is None:
         pts = g.night.get("wolf_points") or {}
-        mates = [t for s, t in pts.items() if s != seat and t is not None]
+        # 跟随队友：不能跟"空刀"(-1)。跟到**自己**头上是合法的自刀。
+        mates = [t for s, t in pts.items()
+                 if s != seat and t is not None and t >= 0]
         if mates:
             target = mates[0]              # 跟随队友（默认行为）
         else:
@@ -237,8 +247,11 @@ def _ai_wolf_maybe_follow(self, seat: int) -> bool:
         return False
     if seat in followed or not humans:
         return False
+    # 能跟随的目标必须：不是自己的点子、不是空刀(-1)。
+    # 队友点了你 ⇒ 跟随 = 自刀，这是允许的（骗女巫的药）。
     want = next((pts.get(s) for s in humans
-                 if pts.get(s) is not None and pts.get(s) != mine), None)
+                 if pts.get(s) is not None and pts.get(s) != mine
+                 and pts.get(s) >= 0), None)
     if want is None:
         return False
     followed.append(seat)
@@ -307,6 +320,18 @@ def _ai_witch_act(self, seat: int):
     agent = self.agents[seat]
     view = g.get_view_for(seat)
 
+    st = g.night.get("stage")
+    # ★ 2026-10-29（用户定：两问是窗口、执行顺序跟播报走）：
+    #   解药窗口只答解药、毒药窗口只答毒药。以前是"一次调用里先解药再毒药"，
+    #   而 `night_heal` 一置 witch_asked，steps 那一步就算做完 ⇒ 后面毒药问
+    #   永远轮不到（她有解药就一辈子不毒人）。
+    if st == "witch_poison":
+        if g.night.get("poison_picked") or not potions["poison"]:
+            return False
+        return self._ai_witch_poison(seat)
+    if st == "witch_heal" and g.night.get("heal_picked"):
+        return False
+
     if victim not in (None, -1) and potions["heal"]:
         try:
             d, flag = _pre_decide(self, seat, "heal",
@@ -325,7 +350,7 @@ def _ai_witch_act(self, seat: int):
             g.night_decline(seat)
         return True
 
-    if potions["poison"]:
+    if st not in ("witch_heal", "witch_poison") and potions["poison"]:
         try:
             d, flag = _pre_decide(self, seat, "poison",
                                   lambda: agent.decide_target(view, self.speech, "poison"))
@@ -346,11 +371,44 @@ def _ai_witch_act(self, seat: int):
     return True
 
 
+def _ai_witch_poison(self, seat: int):
+    """AI 女巫**毒药那一问**（2026-10-29 从 `_ai_witch_act` 拆出来的第二窗口）。
+
+    为什么必须单独一个入口：用户把两问定成了**两个窗口**（解药 15 秒、毒药 15 秒），
+    而原来是一次调用里"先解药、再毒药" —— 解药一问完 `night_heal` 就置了
+    witch_asked，steps 的 witch 那一步当场算做完 ⇒ 毒药这一支在同一次调用里
+    就被 `return True` 断掉，她的毒药一辈子用不出去。
+    模型挂了 / 没给出目标 ⇒ **不毒**（盲毒是误伤好人的主要来源，宁可空）。
+    """
+    g = self.game
+    agent = self.agents[seat]
+    view = g.get_view_for(seat)
+    # ★ 2026-10-30（用户定「女巫一天晚上最多使用一瓶药」）：今晚已经用过解药 ⇒
+    #   毒药这一问只是流程，**AI 也不许再毒**（以前人类女巫被引擎挡住了、AI 女巫
+    #   却还能在同一夜连着用掉两瓶 —— 同一套规则两种行为）。
+    if (g.night.get("heal_settled") and g.night.get("heal") not in (None, -1)):
+        g.night_decline(seat)
+        return True
+    try:
+        d, flag = _pre_decide(self, seat, "poison",
+                              lambda: agent.decide_target(view, self.speech, "poison"))
+    except Exception:                      # noqa: BLE001
+        d, flag = Decision(rejected=["模型调用失败"]), None
+    if flag == "wait":
+        return "wait"
+    if flag == "giveup" or d.target is None:
+        g.night_decline(seat)
+        return True
+    g.night_poison(seat, d.target)
+    return True
+
+
 # ---- 白天 ----
 
-def _ai_speak(self, seat: int) -> None:
+def _ai_speak(self, seat: int, lastword: bool = False) -> None:
     g = self.game
-    if g.current_speaker() != seat:
+    _cur = g.current_lastword() if lastword else g.current_speaker()
+    if _cur != seat:
         # 不变量：只有"当前发言人"能说话。走到这里说明驱动被重入了
         # （历史上就是 /public 与 /act 并发推进），跳过而不是让他说第二遍。
         print(f"[race] 跳过重复发言：座位 {seat + 1} 不是当前发言人", flush=True)
@@ -446,6 +504,11 @@ def _fallback_target(self, seat: int, kind: str) -> Optional[int]:
     g = self.game
     if kind == "kill":
         pool = [p.seat for p in g.good_alive() if p.seat != seat]
+    elif kind == "vote" and getattr(g, "runoff_stage", 0) == 2:
+        # ★ 平票加时投票（2026-10-28）：唯一合法目标集是平票候选人。
+        #   不加这一支的话，兜底会从"全体活人"里挑 —— 那一票必然被引擎拒。
+        pool = [s for s in g.runoff_candidates
+                if g.player(s).alive and s != seat]
     else:                       # vote / investigate：任何活人都可以
         pool = [p.seat for p in g.alive if p.seat != seat]
     return self.rng.choice(pool) if pool else None
@@ -458,7 +521,7 @@ def _run_one_ai_vote(self):
     order = g.vote_order or [p.seat for p in g.alive]
     actor = next((g.player(s) for s in order
                   if s not in g.votes and g.player(s).kind == "ai"
-                  and g.player(s).alive), None)
+                  and g.can_vote(s)), None)
     if actor is None:
         return False
     r = self._pick_ai_vote(actor.seat)
@@ -467,7 +530,16 @@ def _run_one_ai_vote(self):
     if r == "giveup":
         g.cast_vote(actor.seat, -1)        # 超时未决策 ⇒ 弃票
         return True
-    g.cast_vote(actor.seat, r)
+    target = int(r)
+    # ★ 平票加时投票（2026-10-28）目标的兜底：模型看到的是"全场都还能投"，
+    #   给出的号可能不在候选里。`cast_vote` 会明确拒绝（不替玩家改票），
+    #   但**不能把整局卡在这儿** —— 换成候选里的一个（同 _fallback_target 的口径：
+    #   这一票必须投出去，否则归票永远不成立）。
+    if g.runoff_stage == 2 and target != -1 and target not in g.runoff_candidates:
+        target = self._fallback_target(actor.seat, "vote")
+        if target is None:
+            target = -1
+    g.cast_vote(actor.seat, target)
     return True
 
 

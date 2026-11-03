@@ -46,10 +46,50 @@ from typing import Dict, List, Optional
 
 # ---------------------------------------------------------------- 时长（秒，用户定）
 WIN_GUARD = 15          # 守卫请睁眼
-WIN_WOLF = 20           # 狼人请睁眼（狼队共用一个窗口）
+WIN_WOLF = 20           # 狼人请睁眼（**只有查不到人数时的兜底**，见下）
 WIN_GOD = 15            # 女巫两问 / 预言家 / 猎人开枪
 AI_VOTE_GRACE = 5       # AI 投票兜底
 GAP = 3                 # 闭眼句之后、下一个开眼句之前的留白（用户定：3 秒）
+
+# ★ 狼刀窗口按**人数**定（2026-10-28 用户定）：
+#     6 人局 30 秒 / 9 人局 60 秒 / 12 人局 90 秒。
+#   为什么必须长：窗口太短时，狼队"睁眼→闭眼"之间几乎没有停留，
+#   只要狼全是 AI，桌上光凭这个节奏就能断定"狼队没人" —— 这是结构性泄露。
+#   窗口拉长之后，人类狼有充分时间改刀，AI 狼也照常在这段时间里协商。
+#   窗口**结束的那一刻**才结算，以当时的点子为准（见 engine.settle_wolf_window）。
+WOLF_WIN_BY_SIZE = {6: 30, 9: 60, 12: 90}
+WOLF_WIN_DEFAULT = 60   # 不在表里的人局：按 9 人档（60 秒）
+WOLF_LAST_CALL = 15     # 剩余多少秒时法官喊一句
+WOLF_LAST_CALL_SAY = "还剩15秒"
+
+
+def wolf_window(size: Optional[int]) -> int:
+    """狼刀窗口（秒）：6→30 / 9→60 / 12→90；表外人数按最近的档位取。
+
+    取"最近档"而不是"默认 60"，是为了让 8 人、10 人、11 人这类自定义局
+    不会出现"10 人局只给 30 秒"这种明显偏短的窗口。
+    """
+    if size in WOLF_WIN_BY_SIZE:
+        return WOLF_WIN_BY_SIZE[size]
+    if not size:
+        return WOLF_WIN_DEFAULT
+    return WOLF_WIN_BY_SIZE[min(WOLF_WIN_BY_SIZE,
+                                key=lambda k: (abs(k - size), k))]
+
+
+def wolf_has_last_call(size: Optional[int]) -> bool:
+    """这个人数下，狼刀窗口够不够长到能喊一句「还剩15秒」。
+
+    ⚠️ 判据必须用**原始秒数**（不是 `_WIN_SCALE` 缩放后的）—— 测试把窗口
+    缩到 1.5 秒时，这句仍然应该出现在"剩 15 秒"对应的**相对位置**上，
+    而不是因为 1.5 < 15 就整个消失。
+    """
+    return wolf_window(size) > WOLF_LAST_CALL
+
+
+def wolf_last_call_offset(size: Optional[int]) -> float:
+    """「还剩15秒」这句在窗口开始后多少秒发出（已按 `_WIN_SCALE` 缩放）。"""
+    return _scaled(WOLF_LAST_CALL)
 
 # 测试钩子（**只在测试里调**）：0.05 ⇒ 15s→0.75s。生产恒 1.0。
 # 为什么要有它：窗口是真·墙上时间，不缩短短跑不进 CI（一夜四段 = 65 秒）。
@@ -216,22 +256,30 @@ def node_for_acts(acts) -> Optional[str]:
     return None
 
 
-def window_of(node_id: Optional[str]) -> float:
-    """节点的倒计时窗口（秒，已按 `_WIN_SCALE` 缩放）。查不到 = 神职档 15s。"""
+def window_of(node_id: Optional[str], size: Optional[int] = None) -> float:
+    """节点的倒计时窗口（秒，已按 `_WIN_SCALE` 缩放）。
+
+    狼刀节点**不看表里的 `win`**，改按人数现算（6/9/12 人 = 30/60/90 秒，
+    见 `wolf_window`）。这是 2026-10-28 用户定的：节奏本身会暴露狼队全是 AI。
+    `size` 传 None 时退回表里的兜底值（20 秒），只给"还拿不到人数"的老调用方用。
+    查不到节点的 = 神职档 15s。
+    """
+    if node_id == "wolf":
+        return _scaled(wolf_window(size) if size else WIN_WOLF)
     nd = _BY_ID.get(node_id or "")
     if nd is None:
         return _scaled(WIN_GOD)
     return _scaled(nd.get("win"))
 
 
-def window_for_acts(acts) -> float:
+def window_for_acts(acts, size: Optional[int] = None) -> float:
     """一组待办的窗口 —— 按它所属的节点查（**唯一的窗口来源**）。"""
-    return window_of(node_for_acts(acts))
+    return window_of(node_for_acts(acts), size)
 
 
-def window_for_act(act: Optional[str]) -> float:
-    """单个动作的窗口（AI 预跑的上限用它）。"""
-    return window_of(ACT_NODE.get(act or ""))
+def window_for_act(act: Optional[str], size: Optional[int] = None) -> float:
+    """单个动作的窗口（AI 预跑的上限用它；狼刀按人数算）。"""
+    return window_of(ACT_NODE.get(act or ""), size)
 
 
 def on_executed(kind: str, ctx: dict) -> None:

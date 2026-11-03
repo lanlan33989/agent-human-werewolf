@@ -11,6 +11,11 @@ AI 玩家层回归（D3 骨架）。
 用法（在 h5 目录下）：
     ./.venv/Scripts/python.exe tests/_smoke-agents.py
 """
+import sys as _sys
+try:                      # 中文 Windows 控制台默认 GBK：测试名里的 ⇒ / emoji 会让整条脚本中途崩
+    _sys.stdout.reconfigure(errors="replace")   # 保留控制台原编码（中文照常显示），只把编不了的字符换成 ?
+except Exception:         # noqa: BLE001  （老 Python / 被替换过的 stdout）
+    pass
 import sys as _s, os as _o
 _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
 _s.path.insert(0, _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "backend"))  # 2026-10-26 拆分：py 在 backend/  # 仓库根目录入 path：保证 python tests/xxx.py 可直接跑
@@ -262,8 +267,10 @@ check("★ 别人的记忆不进我的 prompt（新加的这块没破隔离）",
       "我今晚要验 3 号" not in joined_other, joined_other[:90])
 
 # 票型：**公布之后**必须进 prompt；**投票进行中**不许进。
-check("★ 票型公布后进了 prompt（AI 这才看得到谁投了谁）",
-      "投票结果" in joined_me, joined_me[-180:])
+# ★ 2026-10-28：票型不再进公共日志（法官不念了），改走 vote_patterns 这条结构化通道。
+#   断言跟着换通道，判据不变：**结算之后 AI 必须知道谁投了谁**。
+check("★ 票型公布后进了 prompt（走 vote_patterns，AI 这才看得到谁投了谁）",
+      "票（" in joined_me and "投的）" in joined_me, joined_me[-180:])
 
 g_m2 = Game(make_board(3, 3), kinds=["human"] * 3 + ["ai"] * 3, seed=6)
 g_m2.start()
@@ -274,7 +281,8 @@ g_m2.open_vote()
 g_m2.cast_vote(0, 1)                     # 已经有人投了，但还没结算
 joined_voting = build_messages(g_m2.get_view_for(0), [], TASKS["speak"])[1]["content"]
 check("★ 投票进行中，票型不在 prompt 里（中途看不到 —— 交接时不会被读到）",
-      "投票结果" not in joined_voting, joined_voting[-150:])
+      "票（" not in joined_voting and "投票结果" not in joined_voting,
+      joined_voting[-150:])
 
 # ================================================================ 防注入 / 防逻辑炸弹
 # 2026-09-16 换的写法，出处：智源/BAAI《AI 狼人杀·赛事分享 | 手把手教你打造高分 Agent》

@@ -112,6 +112,11 @@ PROMPT_STATIC = (
     ("agents", "HEAD_MY_PLAN", "段落标题（user 消息）", "夜末预案段标题"),
     ("agents", "HEAD_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段标题（挑战式发言）"),
     ("agents", "TAIL_WHY_TURN", "段落标题（user 消息）", "「为什么轮到你」段收尾（回应提醒）"),
+    # 2026-10-28 平票加时：候选集被收窄 + 「这是最后一轮陈述」两句都要显式讲。
+    ("agents", "HEAD_RUNOFF_SPEAK", "段落标题（user 消息）",
+     "平票加时·最后一轮陈述段（加时发言时注入）"),
+    ("agents", "HEAD_RUNOFF_VOTE", "段落标题（user 消息）",
+     "平票加时·加时投票规则段；{names} 是候选座位占位符，**别删**"),
     ("agents", "HEAD_WOLF_TERMS", "段落标题（user 消息）", "桌上通用说法段标题"),
     ("agents", "HEAD_PLAYBOOK", "段落标题（user 消息）", "身份常规打法段标题"),
     ("agents", "HEAD_TASK", "段落标题（user 消息）", "任务段标题"),
@@ -197,7 +202,7 @@ NUMERIC_KEYS = ("SAPI_RATE", "DASHSCOPE_TIMEOUT", "DASHSCOPE_TTS_TIMEOUT",
                 "DASHSCOPE_TTS_RETRIES")
 ASR_KINDS = ("qwen", "faster-whisper", "faster_whisper", "whisper", "local",
              "doubao", "mock")
-TTS_KINDS = ("qwen", "dashscope", "bailian", "aliyun", "sapi", "local", "windows",
+TTS_KINDS = ("auto", "qwen", "dashscope", "bailian", "aliyun", "sapi", "local", "windows",
              "doubao", "mock")
 
 STATE_NAME = "_runtime.json"
@@ -276,6 +281,16 @@ def fingerprint(v: str) -> str:
     return s[:3] + "…" + s[-4:]
 
 
+def _masked_key(v: str) -> bool:
+    """指纹/星号 — **绝不能再当 key 写回**。
+
+    2026-11-01 用户实机：从非本机打开 /play 时 GET 只回指纹，页面原样提交
+    ⇒ `sk-…a506` 覆盖了真实 key，之后所有 LLM 调用 401 走兜底。
+    真实 key 不会含省略号；全星号只会来自 fingerprint 的短值分支。
+    """
+    return "…" in v or (bool(v) and set(v) == {"*"})
+
+
 def _is_local(request: Request) -> bool:
     try:
         host = (request.client.host or "") if request.client else ""
@@ -294,6 +309,21 @@ def _is_local(request: Request) -> bool:
 PLAY_KEYS = (("asr", "ASR_API_KEY", "DASHSCOPE_API_KEY"),
              ("llm", "LLM_API_KEY", None),
              ("tts", "DASHSCOPE_API_KEY", None))
+
+
+def _tts_mode_current() -> str:
+    """封面选择器该回填哪个值（等价别名归一成 auto / qwen / sapi）。"""
+    k = (os.environ.get("TTS", "sapi") or "sapi").strip().lower()
+    if k in ("qwen", "dashscope", "bailian", "aliyun"):
+        return "qwen"
+    if k in ("sapi", "local", "windows"):
+        return "sapi"
+    return k
+
+
+def _tts_key_present() -> bool:
+    return bool(os.environ.get("DASHSCOPE_TTS_API_KEY")
+                or os.environ.get("DASHSCOPE_API_KEY"))
 
 
 def _lab_override_active() -> bool:
@@ -315,7 +345,23 @@ def api_play_keys_get(request: Request):
         if not v and fallback:
             v = os.environ.get(fallback, "")
         out[name] = v if local else fingerprint(v)
+        # 非本机拿到的是指纹 ⇒ 前端不能拿它判断「有没有配 key」，也不能回写。
+        out[name + "_set"] = bool(v)
     out["llm_override"] = _lab_override_active()
+    out["tts_mode"] = _tts_mode_current()
+    out["tts_key_present"] = _tts_key_present()
+    live = _snapshot_fn() if _snapshot_fn else {}
+    out["tts_active"] = live.get("tts")
+    out["tts_mocked"] = live.get("tts_mocked")
+    out["tts_stream"] = live.get("tts_stream")
+    # ★ 2026-10-31（用户："接入 LLM key 之后 AI 的发言还是兜底"）：
+    #   把"当前对局 LLM 到底在用什么"如实摆出来。`MOCK_LLM=1` 时装配的是
+    #   MockLlm（只会说"（mock）我先过"），填多少 key 都不会变成真模型 ——
+    #   以前这块完全不可见，用户只能从 AI 的发言里猜。
+    out["llm_active"] = live.get("llm")
+    out["llm_mocked"] = live.get("llm_mocked")
+    out["llm_model"] = os.environ.get("LLM_MODEL", "")
+    out["llm_base_url"] = os.environ.get("LLM_BASE_URL", "")
     return out
 
 
@@ -326,24 +372,65 @@ async def api_play_keys_set(request: Request):
         raise HTTPException(status_code=400, detail="body 必须是 JSON") from e
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body 必须是对象")
+    mode = str(body.get("tts_mode") or "").strip().lower()
+    if mode and mode not in ("auto", "qwen", "sapi"):
+        raise HTTPException(status_code=400,
+                            detail="tts_mode 只能是 auto / qwen / sapi")
+    if (mode == "qwen"
+            and not str(body.get("tts") or "").strip()
+            and not _tts_key_present()):
+        raise HTTPException(status_code=400,
+                            detail="切到云端 TTS 需要先填 TTS key"
+                                   "（DASHSCOPE_API_KEY / DASHSCOPE_TTS_API_KEY）")
     st = _state()
     changed = []
+    masked = []
     for name, env, _fb in PLAY_KEYS:
         v = str(body.get(name) or "").strip()
         if not v or env not in ADMIN_ENV_KEYS:
+            continue
+        # 🔴 2026-11-01：非本机 GET 回的是指纹（含 …）；页面原样提交会把真实 key
+        #   覆盖成 8 字符的掩码，之后所有调用 401 走兜底。掩码一律不写。
+        if _masked_key(v):
+            masked.append(name)
             continue
         if os.environ.get(env, "") == v:
             continue                     # 值没变：不写不 reload（避免假"已更新"）
         os.environ[env] = v
         st.setdefault("env", {})[env] = v
         changed.append(env)
+    if mode:
+        if _tts_mode_current() != mode:
+            os.environ["TTS"] = mode
+            st.setdefault("env", {})["TTS"] = mode
+            changed.append("TTS")
+    # ★ 2026-10-31（用户报："接入 LLM key 之后 AI 的发言还是兜底"）：
+    #   根因是 `MOCK_LLM=1` 时 `build_pipeline()` 装的是 `MockLlm` ——
+    #   填了 key 也只回"（mock）我先过"。这件事以前在封面上完全看不见。
+    #   口径：**用户在这次提交里填了 LLM key 就是在要真模型**，所以顺手把
+    #   `MOCK_LLM` 关掉并持久化；不想花 token 的人自己把它设回 1（配置台里同样能改）。
+    #   ⚠️ 只在**这次提交带了 llm key** 时触发：用户如果只想切 TTS 通道、而场上
+    #   恰好有 key，不该被顺手改掉 LLM 的 mock 选择。
+    _llm_key = str(body.get("llm") or "").strip()
+    if _masked_key(_llm_key):
+        _llm_key = ""                    # 掩码不是用户填的新 key，别顺手改 MOCK_LLM
+    if _llm_key and os.environ.get("MOCK_LLM", "").strip() != "0":
+        os.environ["MOCK_LLM"] = "0"
+        st.setdefault("env", {})["MOCK_LLM"] = "0"
+        changed.append("MOCK_LLM")
     if not changed:
-        return {"ok": True, "changed": [], "note": "没有要更新的 key"}
+        _note = "没有要更新的配置"
+        if masked:
+            _note += ("。⚠️ " + "、".join(masked)
+                      + " 传来的是掩码（…），未写入；请重新粘贴完整 Key")
+        return {"ok": True, "changed": [], "note": _note}
     _write_state(st)
     note = "进行中的对局不受影响，下一局生效"
+    _reload_ok = False
     if _reload_fn:
         try:
             _reload_fn()
+            _reload_ok = True
             note = "已热替换模型通道（进行中的对局不受影响，下一局生效）"
         except Exception as e:                               # noqa: BLE001
             note = "key 已保存，但热替换失败（重启服务后生效）：" + repr(e)
@@ -351,6 +438,15 @@ async def api_play_keys_set(request: Request):
     if "LLM_API_KEY" in changed and _lab_override_active():
         note += ("。⚠️ 对局的 LLM 走实验室第①列席位配置（key 以席位为准），"
                  "本页的 LLM key 要等席位清空后才用于对局")
+    if "MOCK_LLM" in changed:
+        note += ("。已关闭 LLM Mock —— 下一局的 AI 发言走真实模型" if _reload_ok
+                 else "。已关闭 LLM Mock（重启服务后生效）")
+    if _llm_key and not (os.environ.get("LLM_BASE_URL", "").strip()
+                         and os.environ.get("LLM_MODEL", "").strip()):
+        note += "。⚠️ 还缺 LLM_BASE_URL / LLM_MODEL，调用会退化成兜底话术"
+    if masked:
+        note += ("。⚠️ " + "、".join(masked)
+                 + " 传来的是掩码（…），未写入；请重新粘贴完整 Key")
     print("[admin] 主产品封面更新 key：" + ", ".join(changed), flush=True)
     return {"ok": True, "changed": changed, "note": note}
 

@@ -19,8 +19,15 @@ MetaGPT 的做法是给每一步一张卡片 {内容, 发给谁, 谁可发言}�
    判例（女巫只能救被刀的人、守卫不能连守…）全在 engine 里。
    所以改这张表**改不动任何判例** —— 这也是它能安全重构的前提。
 
-⚠️ 顺序就是语义：女巫必须在狼刀定下来之后（她要看着刀口决定救不救），
-   所以 wolf 那一行必须在 witch 前面。加新步骤时别插错位置。
+⚠️ 顺序就是语义，而且**必须与播报顺序逐字一致**（2026-10-29 用户定）：
+   `night_script.NIGHT_NODES` 喊的是 守卫 → 狼人 → 女巫 → 预言家，
+   这张表就必须是 guard → wolf → witch → seer。
+   改之前是 wolf → seer → witch → guard（"女巫要看刀口"那个理由驱动的），
+   逻辑上没错，但**玩家听到的顺序**和**AI 出手的顺序**不一样：守卫的台词第一个
+   念，AI 守卫却最后一个决策 —— 用户实机听出"喊完守卫睁眼半天没动静"。
+   现在两张表同序，播报、决策、落定三件事一条线。
+   ⚠️ 唯一被这个顺序绑住的规则是"女巫必须在狼刀之后"（她要看着刀口决定救不救），
+   它由 wolf 排在 witch 前面保证 —— 调整顺序时别把这两行拆开。
 """
 from __future__ import annotations
 
@@ -42,6 +49,13 @@ def _wolves_alive(g) -> list:
 
 NIGHT_STEPS: Tuple[NightStep, ...] = (
     NightStep(
+        key="guard",
+        label="守卫守人",
+        done=lambda g: (not any(p.role.value == "guard" for p in g.alive))
+                       or bool(g.night.get("guard_asked")),
+        run="_step_ai_guard",
+    ),
+    NightStep(
         key="wolf",
         label="狼队刀人",
         # 场上没狼 ⇒ 这一步天然"做完"（否则会永远等不到刀口，整个夜晚卡死）
@@ -49,26 +63,23 @@ NIGHT_STEPS: Tuple[NightStep, ...] = (
         run="_step_ai_wolf",
     ),
     NightStep(
+        key="witch",
+        label="女巫用药",
+        # 必须在刀口定下来之后（她要看着刀口决定救不救）——顺序在表里保证
+        # ★ 2026-10-29：判据从 `witch_asked` 换成 `witch_done`。
+        #   两问是两个窗口（解药 / 毒药），以前"解药一问过就 witch_asked"
+        #   ⇒ 毒药那一步永远轮不到 AI 决策（她有解药就不会用毒）。
+        #   现在 `witch_done` 只在**毒药窗口关闭**时置位（driver 的 settle）。
+        done=lambda g: (not any(p.role.value == "witch" for p in g.alive))
+                       or bool(g.night.get("witch_done")),
+        run="_step_ai_witch",
+    ),
+    NightStep(
         key="seer",
         label="预言家验人",
         done=lambda g: (not any(p.role.value == "seer" for p in g.alive))
                        or g.night.get("investigate") is not None,
         run="_step_ai_seer",
-    ),
-    NightStep(
-        key="witch",
-        label="女巫用药",
-        # 必须在刀口定下来之后（她要看着刀口决定救不救）——顺序在表里保证
-        done=lambda g: (not any(p.role.value == "witch" for p in g.alive))
-                       or bool(g.night.get("witch_asked")),
-        run="_step_ai_witch",
-    ),
-    NightStep(
-        key="guard",
-        label="守卫守人",
-        done=lambda g: (not any(p.role.value == "guard" for p in g.alive))
-                       or bool(g.night.get("guard_asked")),
-        run="_step_ai_guard",
     ),
 )
 
@@ -98,9 +109,13 @@ class PhaseStep:
 
 
 PHASE_STEPS: Tuple[PhaseStep, ...] = (
-    PhaseStep("night", "夜晚（狼刀/验人/用药/守人）", "_advance_night"),
+    PhaseStep("night", "夜晚（守卫/狼刀/用药/验人）", "_advance_night"),
     PhaseStep("shoot", "猎人开枪", "_advance_shoot"),
     PhaseStep("dawn", "天亮", "_advance_dawn"),
+    # ★ 遗言（2026-10-28 用户定）：**第一夜**死的人、**白天被投出**的人有遗言。
+    # 它是 DAWN 与 DISCUSS 之间（以及 EXILE 与下一夜之间）的一个独立相位：
+    # 发言轮转只认活人，把死人塞进 DISCUSS 会破坏"发言顺序 = 投票顺序"。
+    PhaseStep("lastword", "遗言", "_advance_lastword"),
     PhaseStep("discuss", "白天发言", "_advance_discuss"),
     PhaseStep("vote", "投票", "_advance_vote"),
     # 🔴 2026-10-05：EXILE 不再是"瞬时态" —— 被投出的猎人开完枪会回到这里

@@ -27,21 +27,99 @@ function kindOf(seat){
 function paintBig(){
   var who = $('bigWho'), icon = $('bigIcon'), bc = $('bigCircle');
   if (!who || !icon || !bc) return;
+  /* 🔴 2026-11-01：验人结果屏（act='done'）占着大圆时，播报队列每念一句都会
+     调 paintBig() —— 它按"法官/发言者"重写 bigWho，把「2 号是 好人/狼人」
+     当场清空。用户看到的就是"结果窗口在、字没了"（或干脆以为没弹）。
+     结果只由 showPrivateResult / 点圆心收回，播报不许覆盖。 */
+  if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') return;
   if (SPK_MODE){
-    who.textContent = SPK_MODE + '（人）';   /* 2026-10-07 用户定：发言屏只留号码 */
+    bc.classList.remove('talking');
+    /* ★ 2026-10-29：**这里不再写「N（人）」**。那句话原来每播一句就被
+       paintBig 写回来一次，而 syncSpkTip 每拍又写回「点击结束发言」——
+       两处互相顶，屏幕上就是那两个词在跳（用户实机原话）。
+       现在文案只由 syncSpkTip / enterSpeakerMode 负责（点击开始发言 /
+       发言中 / 点击结束发言），这里只管图标和高亮。 */
     icon.textContent = '🎤';
+    paintNumberGlow();
     return;
   }
   var l = CUR_LINE;
-  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined){
-    who.textContent = (l.seat + 1) + '号玩家（' + (kindOf(l.seat) === 'human' ? '人类' : 'AI') + '）';
+  /* 说话的人从两处取：正在播的那条 say（最准，含遗言），以及服务端的
+     `current_speaker` / `lastword_seat`。后者是兜底 —— AI 那句话播完之后
+     CUR_LINE 会清空，可这一回合还没结束，大圆不该退回"法官"。 */
+  var sp = speakingSeat();
+  /* 正在播的那条 say 最准（含遗言）。★ 2026-10-30（用户实机：5 号发遗言时圆盘
+     显示 1 号发言、读秒在走）：引擎在 AI 遗言说完话的**同一拍**就推进下一位，
+     所以服务端 now.seat 已经变成 1 号；这段音频却还在念 5 号。
+     判据必须以**正在播的那条 say** 为准，不能因为「下一位还没轮到」就把 5 号盖掉。 */
+  if (l && l.t === 'say' && l.seat !== null && l.seat !== undefined) sp = l.seat;
+  if (sp !== null && sp !== undefined){
+    /* ★ 2026-10-29（用户）：AI 发言时大圆原来在「1（人）」和「点击结束发言」
+       之间跳 —— 那两条都是**发言屏**（人类自己的麦）的文案，AI 回合本不该出现。
+       现在统一成一句人话：谁在说就写谁。`.talking` 负责把"法官"标题藏掉、
+       把字号收到圆盘里（详见 play.html 那段 CSS）。 */
+    bc.classList.add('talking');
+    who.textContent = (sp + 1) + '号正在发言中';
     icon.textContent = '💬';
     moveDotCursor();
+    paintNumberGlow(sp);          /* 用「大圆正在演的那个人」高亮，别再去问引擎当前轮到谁 */
     return;
   }
+  bc.classList.remove('talking');
   who.textContent = '';                       /* 法官说话时大圆就是法官本尊 */
   icon.textContent = '⚖️';
   moveDotCursor();
+  paintNumberGlow();
+}
+
+/* 没有面板、也不在我的麦上时，才允许按"谁在说话"刷大圆 ——
+   有面板时大圆是那块面板的提示语（"点一个号码就是决定"等），
+   每拍无条件刷会把提示语盖掉。 */
+function paintBigIfIdle(){
+  if (SPK_MODE || HANDOFF || (WHEEL && WHEEL.mode)) return;
+  paintBig();
+}
+
+/* 这一拍**该谁发言已经定了、但那句还没念到**（服务端 started=false）。
+   ★ 2026-10-30（用户实机：「夜间还没结束、其他玩家还没发言，圆盘就显示
+     4 号正在发言中，倒计时还在减」）：服务端推进**不等播报** —— 相位一到
+     DISCUSS，`current_speaker` 立刻有了（4 号），可法官还在念「天亮了」
+     「昨夜 X 出局」「4号请发言」。原来大圆只看 `current_speaker`，
+     于是视觉比听觉提前了十几秒。
+     现在：`started === false` ⇒ 这段就算"还没轮到"，大圆退回法官、
+     号码不高亮、读秒不显示。旧服务端不认这个字段（undefined）⇒ 行为不变。 */
+function speakPending(){
+  var n = (typeof PUBLIC !== 'undefined' && PUBLIC) ? PUBLIC.now : null;
+  return !!(n && n.kind === 'speak' && n.started === false);
+}
+
+/* 当前在说话的座位（0 基）；没人说话 = null。
+   ⚠️ 遗言相位下 `current_speaker` 是 null（引擎只在 DISCUSS 里认它），
+   那时认 `lastword_seat` —— 否则"出局的人正在留遗言"这一段整个不高亮。 */
+function speakingSeat(){
+  if (SPK_MODE) return SPK_MODE - 1;
+  if (!PUBLIC) return null;
+  if (speakPending()) return null;          /* 法官还没念到「N号请发言」 */
+  if (PUBLIC.current_speaker !== null && PUBLIC.current_speaker !== undefined)
+    return PUBLIC.current_speaker;
+  if (PUBLIC.lastword_seat !== null && PUBLIC.lastword_seat !== undefined)
+    return PUBLIC.lastword_seat;
+  return null;
+}
+
+/* 号码小圆高亮（2026-10-29 用户定）：给**轮盘上那圈号码**（.wnum）加 .speaking。
+   为什么不去动 .seat：`#p4 .seat{display:none}` —— 那些座位圈在手机上根本
+   不显示（2026-10-02 改成"单个大圆"时收掉了），之前往它们身上加类当然没人看得见。 */
+function paintNumberGlow(who){
+  var box = $('hoActs');
+  if (!box) return;
+  if (who === undefined) who = speakingSeat();
+  var bs = box.querySelectorAll('.wnum');
+  for (var i = 0; i < bs.length; i++){
+    var no = Number(bs[i].getAttribute('data-no'));
+    if (who === null) bs[i].classList.remove('speaking');
+    else bs[i].classList.toggle('speaking', no === who + 1);
+  }
 }
 
 /* ---------------------------------------------------------- 座位小圆（2026-10-02 用户追加） */
@@ -124,7 +202,16 @@ function enterSpeakerMode(need){
   $('handoff').classList.remove('on', 'speak');
   $('wheelBtns').classList.remove('on');
   $('wheelExtra').classList.remove('on');
+  /* ★ 2026-11-01（用户实机："真人无法正常发言"）：进发言屏**必须**把拨号盘收掉、
+     把大圆恢复可见 —— 它们只是上一屏的 DOM，`HANDOFF=null` 清不到。
+     不清的话：拨号盘整块盖在大圆上（而且 `renderNightDial` 把大圆设成了
+     `visibility:hidden`）⇒ 屏幕上写着「点击发言」，真人怎么点都点不到。 */
+  var _ndS = $('nightDial'); if (_ndS) _ndS.classList.remove('on');
+  var _dhS = $('dialHead'); if (_dhS) _dhS.classList.remove('on');
+  var _bcS = $('bigCircle'); if (_bcS) _bcS.style.visibility = '';
   $('bigCircle').classList.add('pickable');
+  /* 打字兜底入口（麦坏了 / 识别不通时的唯一出口 —— 见 #sayType 的接线） */
+  var _scS = $('sayCtl'); if (_scS) _scS.classList.add('on');
   /* 「打字 / 过」两个按钮已去掉（2026-10-07 用户定：发言屏只有号码 + 开麦/关麦）。
      识别失败时：再点一下关麦即可（空文本服务端会按「过」记）。 */
   paintBig();
@@ -133,7 +220,7 @@ function enterSpeakerMode(need){
   if (_bi) _bi.style.display = 'none';
   if (_bt) _bt.style.display = 'none';
   var _bw0 = $('bigWho');
-  if (_bw0) _bw0.textContent = '点击开始发言';
+  if (_bw0) _bw0.textContent = '点击发言';   /* ★ 2026-10-30：与 syncSpkTip 同一句，别一进屏就闪另一个词 */
   syncSpkTip();
   foot('');      /* 同上：发言屏不留提示文案（用户定 2026-10-07） */
 }
@@ -189,9 +276,13 @@ function syncSpkTip(){
      （有声音/无声音）/ 点击结束发言），识别出的文字不再上圆。 */
   var bw = $('bigWho');
   if (bw){
+    /* ★ 2026-10-30（用户实机）：还没开口时大圆写「点击结束发言」是错的 ——
+       那一下是**开始**说话，不是结束。两态文案必须分清楚：
+         没录音 = 「点击发言」（点一下开麦）
+         录音中 = 「发言中…」（再点一下结束） */
     bw.textContent = SAY_REC
       ? ('发言中' + (ok ? '（有声音）' : (st ? '（无声音）' : '')))
-      : '点击结束发言';
+      : '点击发言';
   }
   var ic = $('bigIcon');
   if (ic) ic.textContent = '';
@@ -215,7 +306,9 @@ async function tick(){
      而进桌面时 `enterTable()` 会重新调一次 tick() —— "停"和"重启"都是自愈的。 */
   if (!$('p4') || !$('p4').classList.contains('on')) return;
   try {
-    PUBLIC = await api('/api/game/' + GID + '/public');
+    /* X-Played：已播完的行数 —— 服务端用它保证白天/夜间交替翻页（2026-10-31） */
+    PUBLIC = await api('/api/game/' + GID + '/public',
+                       {headers: {'X-Played': String(playedCount())}});
   } catch (e) {
     /* ★ 这里以前是 `catch (e) { return; }` —— **整个轮询循环就此静默停住**，
        界面永久冻在最后一屏、一句提示都没有。真机上就是这么卡住的：
@@ -231,9 +324,29 @@ async function tick(){
     }
     return;
   }
+  /* ★ 2026-11-01（用户："预言家依旧没有验人结果窗口"）：验人节点已经过去
+     （`now.node` 不再是 seer）而结果屏还没摊开 ⇒ 自动补上。语音关掉/队列卡住
+     时也照样生效，不再依赖「他是这个」那句真的播出来。 */
+  try { showSeerResultScreen(); } catch (e) { /* 不拖累 tick */ }
   paintSeats();
   renderDots();          /* 座位小圆：阵容/存活变化才重建，光标每拍都校一次 */
+  /* ★ 2026-10-29（用户：AI 发言时大圆在「1（人）」和「点击结束发言」之间跳）：
+     发言屏只属于**我这一回合**。服务端说"现在说话的不是我"（AI 在说 / 进了投票 /
+     这一拍根本没人说话）⇒ 当场收掉。
+     为什么必须收在**这里**：下面那段面板逻辑会被 `_gateOk`（播报门）挡住 ——
+     而 AI 那句「N号请发言」刚进队列时门正好是关的，于是 closeSpeakerMode 一直
+     轮不到执行，SPK_MODE 就粘在那儿，大圆每播一句都"闪"回「N（人）」。
+     ⚠️ 判据只看 `kind === 'speak'` 与座位号，不看 `pending`：pending 是
+     "该谁拿手机"，和"谁在说话"不是一回事（AI 发言时 pending 是 working）。 */
+  if (SPK_MODE){
+    var _now0 = PUBLIC.now || null;
+    if (!_now0 || _now0.kind !== 'speak'
+        || (_now0.seat !== null && _now0.seat !== undefined && _now0.seat !== SPK_MODE - 1)){
+      closeSpeakerMode();
+    }
+  }
   if (SPK_MODE) syncSpkTip();   /* 收尾中/失败文案有更新时，提示行跟着走（tick 兜底） */
+  paintBigIfIdle();      /* AI 回合里"谁在说话"要跟着换人走（播报队列不会每句都来刷） */
   paintCountdown();      /* 夜间操作倒计时（服务端裁决，这里只显示） */
   /* 🔴 2026-10-12（用户：AI 说话时麦不该是可点状态）：圆盘的可点态只在**轮到人类
      发言**（SPK_MODE 有值）时出现，其余时刻一律摘掉 —— 视觉与拦截一致。 */
@@ -243,6 +356,10 @@ async function tick(){
   speakQueue();
   if (PUBLIC.phase === 'ended'){
     foot('本局结束：' + (PUBLIC.winner === 'wolf' ? '狼人胜利' : '好人胜利'));
+    /* ★ 2026-10-28（用户定）：法官念完「游戏结束，狼人/好人胜利」后弹终局框。
+       显隐与时机全在 renderEndPop()（play.html）里，这里只负责每拍喂一次 ——
+       判断播报有没有念到那句靠的是 SPOKEN 游标，不能在这里自己算。 */
+    try { renderEndPop(); } catch (e) { /* 老页面没有这个函数：不影响结束态 */ }
     /* 局末才亮出「本局战报」：战报会解密所有人身份，
        接口层对局中访问返回 409，所以这两个出口恰好出现在正确的位置。 */
     var _el = $('endLinks');
@@ -286,7 +403,7 @@ async function tick(){
     /* 三档口径（2026-10-23 起）：wheel/shoot = **服务端 started**；speak/vote = voicedUp；none = 放行。 */
     var _gateOk = NOW
       ? (NOW.kind === 'none'
-         || ((NOW.kind === 'wheel' || NOW.kind === 'shoot')
+         || ((NOW.kind === 'wheel' || NOW.kind === 'shoot' || NOW.kind === 'speak')
              /* 🔴 2026-10-23（用户实机："狼人/解药面板依旧不弹、毒药读秒 12→14→13"）：
                 面板门改听**服务端的 started**。v4 已把起算权收回服务端
                 （est = 估算"念完+2s"，水泵按墙钟走窗口），而旧门 `linePlayed`
@@ -299,7 +416,11 @@ async function tick(){
                  失联兜底在半窗置真 —— v4 的 started 已改为精确 est，不再有
                  那个半窗抢跑源。）
                 老服务端不下发 started ⇒ 退回 linePlayed（音频卡死兜底仍在其内）。 */
-             ? (typeof NOW.started === 'boolean' ? NOW.started : linePlayed(NOW.node))
+             ? (typeof NOW.started === 'boolean'
+                ? NOW.started
+                /* 旧服务端没有 started：发言退回"整队播报播完"（voicedUp），
+                   夜间仍用本段那句（linePlayed）。 */
+                : (NOW.kind === 'speak' ? voicedUp() : linePlayed(NOW.node)))
              : voicedUp()))
       : nightReady(top);
     /* 记下"这个节点的窗口第一次被看到"的时刻（上面 arm 兜底用） */
@@ -314,13 +435,25 @@ async function tick(){
        until 是服务器墙钟，设备时钟有偏差时（手机 vs 服务端）倒计时一出来
        就像"已经走了好久"。until_left 与面板 arm 同拍下发 ⇒ 面板与倒计时
        天然同时出、且从满窗起走（用户定稿口径）。老服务端没有该字段时回退 until。 */
-    if (NOW && typeof NOW.until_left === 'number'){
+    /* ★ 2026-10-30：`speak` 且 `started === false`（法官还没念到「N号请发言」）
+       时**不显示读秒** —— 服务端此刻下发的 `until_left` 是满窗（120），
+       但那是"还没开始"的满窗，显示出来就是"人还没开口，倒计时已经在掉"。 */
+    if (NOW && typeof NOW.until_left === 'number'
+        && !(NOW.kind === 'speak' && NOW.started === false)){
       NIGHT_CD = { left: Math.max(0, NOW.until_left), at: Date.now() };
     } else if (NOW && typeof NOW.until === 'number' && NOW.until > 0){
       NIGHT_CD = { left: Math.max(0, NOW.until - Date.now() / 1000),
                    at: Date.now() };
     } else if (top && typeof top.seconds_left === 'number'){
       NIGHT_CD = { left: top.seconds_left, at: Date.now() };
+    } else if (NOW && NOW.closing && WHEEL && WHEEL.forNode === NOW.closing){
+      /* ★ 2026-10-29（用户定：「喊完『守卫请闭眼』后立即退出守卫窗口」）：
+         窗口关闭的**同一刻**产生闭眼句，服务端这时把 `closing` 下发下来。
+         以前这一拍 NIGHT_CD 变 null ⇒ 面板当场收掉，而闭眼句还在念
+         —— 听感就是"窗口比闭眼句退得早"。现在留一个 `left:0` 的空窗口，
+         面板保持显示（读秒停在 0），等服务端推进节点后自然收。
+         ⚠️ 只留**自己那一段**：`closing` 与当前面板的节点不同就不留。 */
+      NIGHT_CD = { left: 0, at: Date.now() };
     } else {
       NIGHT_CD = null;
     }
@@ -425,22 +558,44 @@ async function tick(){
        （或天亮离夜）⇒ 强制清 seerBig + 撤结果屏。wheelTags 的验人标记只画在
        轮盘面板里，面板一撤随之消失。 */
     try {
-      var _scIdx = nightNodeIdx('seer_close');
+      /* ★ 2026-10-30：下标只认服务端下发的**本夜**那一条（`seer_close_line`）。
+         原来用 nightNodeIdx('seer_close') 从头找 ⇒ 第二夜起拿到第一夜的下标 ⇒
+         "已经念完"恒成立 ⇒ 结果屏刚摊出来就被收掉（用户："验人窗口还是没出来"）。 */
+      var _scIdx = (typeof PUBLIC.seer_close_line === 'number')
+        ? PUBLIC.seer_close_line : nightNodeIdx('seer_close');
+      /* 🔴 2026-10-31（用户："验人窗口一闪而过，什么都看不到"）：
+         晚一步点确认时（目标已选、窗口刚关、闭眼句已经在播/播完），
+         `seer_close` 的判据当拍就成立 ⇒ 结果屏刚摊开就被收掉。
+         结果屏至少展示 6 秒（本人点圆心可以提前交回）—— 这是"看得见"的底线，
+         不是新的流程节拍：正常时辰（早确认）本来就远超过 6 秒。 */
+      var _resultFresh = !!(WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done'
+                            && WHEEL.shownAt
+                            && (Date.now() - WHEEL.shownAt) < 6000);
       if ((_scIdx >= 0 && SPOKE_DONE && SPOKE_DONE.idx >= _scIdx && SPOKE_DONE.at > 0)
           || PUBLIC.phase !== 'night'){
         if (typeof resetSeerBig === 'function') resetSeerBig();
-        if (WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') closeHandoff();
+        if (!_resultFresh && WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done') closeHandoff();
       }
     } catch (e) { /* 不拖累 tick */ }
     if (!_gateOk){
+      /* 还没念到"该你说话" ⇒ 把发言屏也收掉。
+         否则上一拍残留的麦屏会盖住法官（用户看到的就是"人还没开口，
+         大圆已经写着 4 号正在发言、读秒还在掉"）。 */
+      if (speakPending()) closeSpeakerMode();
       foot('还有话没念完…');
     } else if (NOW && !top){
       /* 服务端说"这一拍没有人类要点"（AI 在算 / 窗口在走 / 收尾播报）——
-         桌上就不该有面板/发言屏。把残余的收掉，免得窗口关了还能按（会 400）。 */
+         桌上就不该有面板/发言屏。把残余的收掉，免得窗口关了还能按（会 400）。
+         ★ 2026-10-30（用户实机："预言家点了确认窗口直接退出"）：**验人结果屏例外**。
+         服务端在 `seer_confirmed` 之后 `can_act` 立刻变空（结果当场已经报过），
+         这一支会把刚摊出来的结果屏一起收掉。结果屏 `act='done'` 只由
+         「预言家请闭眼」念完（上面那段）或点圆心交回来收 —— 不在这里撤。 */
       closeSpeakerMode();
-      if (typeof closeHandoff === 'function') closeHandoff();
+      var _keepResult = !!(WHEEL && WHEEL.mode === 'act' && WHEEL.act === 'done');
+      if (typeof closeHandoff === 'function' && !_keepResult) closeHandoff();
     } else if (!HANDOFF){
-      if (top && PUBLIC.phase === 'discuss' && isSpeakOnly(top)){
+      if (top && (PUBLIC.phase === 'discuss' || PUBLIC.phase === 'lastword')
+          && isSpeakOnly(top)){
         /* 2026-10-02 用户定：发言回合**不走交接卡片**（取消半透明黑屏）——
            大圆显示「N号玩家（人类）」，点一下开始、再点一下结束。 */
         if (SPK_MODE !== top.seat + 1){ closeSpeakerMode(); enterSpeakerMode(top); }
@@ -622,7 +777,7 @@ function renderWolfPack(seatNo, v){
   $("bigTitle").textContent = "狼人";
   $("bigIcon").textContent = "🎯";
   $("bigWho").textContent = "狼队共屏：选一个人刀";
-  $("hoTip").textContent = "点一个号码（选中后不可改）→ 点圆心提交";
+  $("hoTip").textContent = "点一个号码就是刀；窗口结束前可以随时改";
   var pool = (v.players || []).filter(function(p){ return p.alive; });
   var alive = {};
   pool.forEach(function(p){ alive[p.seat] = true; });
@@ -647,14 +802,10 @@ function renderWolfPack(seatNo, v){
     bs[i].onclick = function(ev){
       ev.stopPropagation();
       var no2 = Number(this.getAttribute("data-no"));
-      if (WHEEL.picks.length){
-        if (WHEEL.picks[0] !== no2){ $("hoTip").textContent = "已经选定了，不能改"; }
-        return;
-      }
+      /* ★ 2026-10-28（用户定）：**整窗可改刀** —— 原来这里是"选定了不能改"，
+         而新规则以窗口结束时的点子为准，改刀是合法操作。再点一个号码就是改刀
+         （共屏的口径是"所有人类狼一起改"，见 wheelConfirmWolfPack）。 */
       WHEEL.picks = [no2];
-      this.classList.add("sel");
-      /* 🔴 2026-10-07 用户定（"选中刀口后不该还能点中央确认，冗余"）：
-         点号码**即刻提交**（与女巫毒药 / 预言家验人同一口径），圆心不再参与。 */
       $("hoTip").textContent = "已刀 " + no2 + " 号（提交中…）";
       wheelConfirmWolfPack();
     };
@@ -697,7 +848,13 @@ async function wheelConfirmWolfPack(){
       await step({ seat: wolves[j] - 1, action: "confirm" });
     }
     paintSeats(); renderLog(); speakQueue();
-    closeHandoff();
+    /* ★ 2026-10-28（用户定）：狼刀整窗可改 ⇒ 提交后**不收屏**，把共屏留在桌上，
+       想改再点一个号码（引擎按窗口结束时的点子定案）。 */
+    try {
+      MYVIEW = await api('/api/game/' + GID + '/seat/' + (WHEEL.seatNo - 1));
+      renderWolfPack(WHEEL.seatNo, MYVIEW);
+      foot('刀口已记下：窗口结束前可以随时改（再点一个号码就是改刀）');
+    } catch (e) { closeHandoff(); }
     setTimeout(tick, 300);
   } catch (e) {
     handoffMsg("提交失败：" + e.message, true);
@@ -719,11 +876,17 @@ function paintCountdown(){
     }
   };
   setTimeout(_mirror, 0);
-  var on = NIGHT_CD && WHEEL.mode === "act" && WHEEL.act !== "done";
+  /* ★ 2026-10-28（用户定）：发言 / 遗言也有倒计时（每人 120 秒，剩 30 秒法官提醒）。
+     数字就画在大圆里（发言屏的大圆本来就空着一条 `#cdNum` 的位置）。
+     ⚠️ 归零的"自动提交"只给夜间面板用 —— 发言到点由**服务端**结束并换人
+     （`night_driver._speech_guard`），前端再补一刀会变成"替玩家说了句话"。 */
+  var _spkMode = (typeof SPK_MODE !== 'undefined') && !!SPK_MODE;
+  var on = NIGHT_CD && ((WHEEL.mode === "act" && WHEEL.act !== "done") || _spkMode);
   if (!on){ el.textContent = ""; el.classList.remove("urgent"); return; }
   var left = NIGHT_CD.left - (Date.now() - NIGHT_CD.at) / 1000;
   if (left <= 0){
     el.textContent = "0"; el.classList.add("urgent");
+    if (_spkMode) return;               /* 发言：交给服务端收尾（见上） */
     /* 2026-10-07 用户定：以面板消失时的状态为准 —— 归零自动提交当前状态 */
     if (!WHEEL._autoSent){
       WHEEL._autoSent = true;
@@ -882,6 +1045,8 @@ function renderWheelBase(){
   box.innerHTML = h;
   var tip = $('hoTip');
   if (tip && WHEEL.mode === null) tip.textContent = '';
+  /* 重画之后高亮要重新贴上去（号码按钮是新建的，类不会自己回来） */
+  paintNumberGlow();
 }
 
 /* 摘掉所有号码按钮的可点状态（切屏时防幽灵点击，见 renderWheelAct 内调用处） */
@@ -1012,7 +1177,21 @@ function renderNightDial(seatNo, v, acts){
   var isHeal = acts.indexOf('heal') >= 0;
   var pool = {};
   if (act === 'vote'){
-    players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });  // 投票可自投
+    /* ★ 平票加时（2026-10-28，后端 engine.cast_vote 硬拦）：
+       平票者不投票，其余人只能投平票者之一或弃票。
+       候选集**只认服务端**（v.runoff.votable）—— 前端按 alive 自己推断的话，
+       玩家会点到引擎必然拒绝的号码，表现成"点了没反应 / 报错"。
+       没有 v.runoff 就是普通投票，口径一字不变。 */
+    var _ro = v.runoff;
+    if (_ro && _ro.stage === 2){
+      (_ro.votable || []).forEach(function(s){ pool[s] = true; });
+    } else {
+      players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });  // 投票可自投
+    }
+  } else if (act === 'kill'){
+    /* ★ 2026-10-31（用户定：改回狼可以刀自己）：自刀是合法刀口
+       （骗女巫的解药），号码池必须包含自己。其余动作仍排除自己。 */
+    players.forEach(function(p){ if (p.alive) pool[p.seat] = true; });
   } else if (act){
     others(v).forEach(function(p){ if (p.alive) pool[p.seat] = true; }); // 其余不含自己
   }
@@ -1029,9 +1208,19 @@ function renderNightDial(seatNo, v, acts){
       if (!alive[no0]) b.classList.add('dead');
       if (isHeal && v.night_victim === no0){
         b.classList.add('victim');
+        /* ★ 2026-11-01：已经点过救人 ⇒ 号码加选中态（服务端回传 heal_picked）。
+           窗口结束前都能改回「不救」—— 见下面 extra 的 clear 分支。 */
+        if (v.heal_picked) b.classList.add('sel');
         b.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'heal', no0 + 1, null); };
       } else if (act && pool[no0]){
         b.onclick = function(ev){ ev.stopPropagation(); wheelSelect(act, no0 + 1); };
+      } else if (act === 'vote' && v.runoff && v.runoff.stage === 2){
+        /* ★ 加时投票（2026-10-28）：不在候选里的号码**明确画成不可点**。
+           只靠"没有 onclick"的话，玩家会以为界面坏了（点下去毫无反应）——
+           而服务端其实会拒（engine.cast_vote 的加时校验）。 */
+        b.disabled = true;
+        b.style.opacity = '0.3';
+        b.style.cursor = 'default';
       }
       d.appendChild(b);
     })(i);
@@ -1040,10 +1229,18 @@ function renderNightDial(seatNo, v, acts){
   extra.className = 'act';
   if (isHeal){
     extra.textContent = '不救';
-    /* 🔴 2026-10-12 bug2 的教训在这里落地：解药"不救"**绝不提交 pass**
+    /* ★ 2026-11-01（用户实机：点了救人之后想改回不救，按钮没反应）：
+       已经点过救人 ⇒ 这一键发 `clear` 撤回（引擎 `night_clear` 把药还回来，
+       窗口关闭时才真正扣药，所以撤回不消耗解药）；没点过 ⇒ 什么都不发。
+       🔴 2026-10-12 bug2 的教训照旧：解药"不救"**绝不提交 pass**
        （pass ⇒ witch_asked ⇒ 毒药那一问消失）。毒药的弃权由毒药窗口自己的
        到点注入负责 —— 这个按钮只是明示"我不救"，夜照常走。 */
-    extra.onclick = function(ev){ ev.stopPropagation(); };
+    var _healing = !!v.heal_picked;
+    if (_healing) extra.classList.add('sel');
+    extra.onclick = function(ev){
+      ev.stopPropagation();
+      if (_healing) submit(seatNo, 'clear', null, null);
+    };
   } else if (act === 'kill'){
     extra.textContent = '空刀';
     extra.onclick = function(ev){ ev.stopPropagation(); wheelSelect('kill', -1); };
@@ -1060,12 +1257,23 @@ function renderNightDial(seatNo, v, acts){
   } else if (act === 'guard'){
     extra.textContent = '空守';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'guard', -1, null); };
+  /* ★ 2026-10-29（用户定）：预言家的**确认键**要排在"不验"前面 ——
+     点了号码之后这一格必须变成「确认验人」，否则他永远没法让结果出来
+     （服务端 `seer_confirm` 才报结果）。狼的 confirm 仍叫「确定」。 */
+  } else if (acts.indexOf('confirm') >= 0){
+    /* ⚠️ 动作名**不能两个角色共用一个**（2026-10-29 实机前自查出来的）：
+       狼的「确定」= 服务端 `confirm`（night_confirm），预言家的「确认验人」=
+       服务端 `seer_confirm`（night_seer_confirm）。统一发 'confirm' 的话，
+       人类预言家一点确认就撞 `PermissionError: 不是狼人，不能确认刀口`。 */
+    var _isWolfConfirm = (acts.indexOf('kill') >= 0);
+    extra.textContent = _isWolfConfirm ? '确定' : '确认验人';
+    extra.onclick = function(ev){
+      ev.stopPropagation();
+      submit(seatNo, _isWolfConfirm ? 'confirm' : 'seer_confirm', null, null);
+    };
   } else if (act === 'investigate'){
     extra.textContent = '不验';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'pass', null, null); };
-  } else if (acts.indexOf('confirm') >= 0){
-    extra.textContent = '确定';
-    extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'confirm', null, null); };
   } else if (acts.indexOf('shoot') >= 0){
     extra.textContent = '不开枪';
     extra.onclick = function(ev){ ev.stopPropagation(); submit(seatNo, 'pass', null, null); };
@@ -1080,7 +1288,18 @@ function renderNightDial(seatNo, v, acts){
   var bc = $('bigCircle');
   if (bc) bc.style.visibility = 'hidden';
   var _ht = DIAL_NAMES[(PUBLIC.now && PUBLIC.now.node)];
-  if (!_ht && act === 'vote') _ht = seatNo + ' 号投票';   /* 用户：投票界面要显示当前投票的人 */
+  if (!_ht && act === 'vote'){
+    /* 用户：投票界面要显示当前投票的人。★ 加时投票（2026-10-28）另外标明候选，
+       否则玩家会以为还能投全场（那一票会被引擎判废）。 */
+    var _ro2 = v.runoff;
+    if (_ro2 && _ro2.stage === 2){
+      _ht = '加时投票 · 只能投 '
+            + (_ro2.votable || []).map(function(s){ return (s + 1) + ' 号'; }).join('/')
+            + ' 或弃票';
+    } else {
+      _ht = seatNo + ' 号投票';
+    }
+  }
   head.querySelector('.r').textContent = _ht || '请操作';
   head.classList.add('on');
   /* WHEEL 状态照旧写（走查/自检按它判"卡住"） */
@@ -1272,9 +1491,16 @@ function renderWheelAct(seatNo, v, actsOverride){
       : '';
     $('bigTitle').textContent = TITLE[a] || '操作';
     $('bigIcon').textContent = '🎯';
-    $('bigWho').textContent = victimNote + { kill: '要刀谁？点他的号码', investigate: '要验谁？点他的号码',
-                                poison: '要毒谁？点他的号码', guard: '要守谁？点他的号码',
-                                vote: '投给谁？点他的号码' }[a];
+    /* ★ 平票加时（2026-10-28）：加时投票的候选只有平票者，问句与候选集都跟着收窄 */
+    var _roW = (a === 'vote') ? v.runoff : null;
+    var _roWNames = (_roW && _roW.stage === 2)
+      ? (_roW.votable || []).map(function(s){ return (s + 1) + ' 号'; }).join('、')
+      : '';
+    $('bigWho').textContent = victimNote + (_roWNames
+      ? '加时投票：只能投给 ' + _roWNames + '（或弃票）'
+      : { kill: '要刀谁？点他的号码', investigate: '要验谁？点他的号码',
+          poison: '要毒谁？点他的号码', guard: '要守谁？点他的号码',
+          vote: '投给谁？点他的号码' }[a]);
     /* 毒药屏也把被刀号标红（heal 问句屏标过，但 renderWheelBase 重建刻度会清掉） */
     if (a === 'poison' && v.night_victim != null){
       var vEl2 = $('hoActs').querySelector('.wnum[data-no="' + (v.night_victim + 1) + '"]');
@@ -1286,7 +1512,14 @@ function renderWheelAct(seatNo, v, actsOverride){
        · 刀允许自刀（2026-10-04 用户定）
        · 其余从活人里选（不含自己） */
     var pool;
-    if (a === 'vote' || a === 'kill'){
+    if (a === 'vote'){
+      /* ★ 加时投票（2026-10-28）：候选只认服务端给的 votable；普通投票口径不变 */
+      pool = (_roW && _roW.stage === 2)
+        ? (v.players || []).filter(function(p){
+            return (_roW.votable || []).indexOf(p.seat) >= 0;
+          })
+        : (v.players || []).filter(function(p){ return p.alive; });
+    } else if (a === 'kill'){
       pool = (v.players || []).filter(function(p){ return p.alive; });
     } else {
       pool = others(v);
@@ -1460,10 +1693,13 @@ function wheelSelect(act, target){
   WHEEL.pick = target;
   paintWheelSel(act, target);
   if (act === 'kill'){
-    /* 定稿："人狼在轮盘按某人号码即视为刀" —— 点了就是我的刀。
-       多狼局里"确认"是引擎定案的必要条件，所以这里替玩家补上（单狼局引擎会早返回）。 */
-    var _p = submit(seatNo, 'kill', target, null);
-    if (_p && _p.then) _p.then(function(){ submit(seatNo, 'confirm', null, null); });
+    /* ★ 2026-10-28（用户定）：狼刀**整窗可改**，以窗口结束时的选择为准。
+       所以这里**只提交刀口**：
+         · 不再跟着补一个 `confirm` —— 那会把自己标成"已表态"，
+           而"表态"在新规则下没有任何裁决权（定案在窗口末按多数决）。
+         · 提交后面板**不许关**（见 submit() 里的 keepOpen 分支）——
+           关了就没法改刀了，用户报的就是这个："点完击杀目标窗口直接退出了"。 */
+    submit(seatNo, 'kill', target, null);
     return;
   }
   submit(seatNo, act, target, null);
@@ -1518,13 +1754,18 @@ function wheelTake(){
   })();
 }
 
-/* 「打字」兜底：透明输入条（识别失败时的手动出口，2026-10-05 取消卡片） */
+/* 「打字」兜底：透明输入条（识别失败 / 麦不可用时的唯一出口）。
+   ★ 2026-11-01：`HANDOFF_SIG` 必须用 `sigOf()` 的同一口径 —— 手写成
+   `'1:speak'` 与 tick 算出的 `'1:speak@'` 不相等 ⇒ 每拍都被判「屏幕过期」，
+   输入框被反复重建（字打一半就没了）。 */
 function openSpeakFallback(seatNo){
   HANDOFF = seatNo;                    /* 1-based，口径同 openHandoff */
-  HANDOFF_SIG = seatNo + ':speak';
+  HANDOFF_SIG = sigOf({ seat: seatNo - 1, actions: ['speak'] });
   MYVIEW = null; PICK = null;
   renderWheelBase();
-  renderWheelAct(seatNo, { can_act: ['speak'] });
+  /* 第三参显式给 acts：跳过 800ms 同签名防抖（这一屏是用户点出来的，必须立刻渲染） */
+  renderWheelAct(seatNo, { can_act: ['speak'] }, ['speak']);
+  var _sc = $('sayCtl'); if (_sc) _sc.classList.remove('on');
 }
 
 /* 旧 renderHandoff 卡片的后半段（发言兜底/不用药/狼盘/按钮接线）已由
@@ -1538,6 +1779,7 @@ function openSpeakFallback(seatNo){
    把它们逐条显示在屏幕上，比隔着屏幕来回猜快得多 ——
    这也是"手机上情况不一样"的唯一有效解法：**先让差异可见**。 */
 var DIAG_ASR_ERR = '', DIAG_NET = [], DIAG_CANCEL = 0;
+var DIAG_TTS = '（点「试语音」检测）';
 function diagRefresh(){
   var el = $('diagPanel'); if (!el) return;
   var d = (Rec.diag ? Rec.diag() : {});
@@ -1574,6 +1816,13 @@ function diagRefresh(){
     /* 🔴 2026-10-05「AI 不发声」：把最近一次播报的结果直接摆出来 ——
        到底是"还没播过"（null）、合成失败（ok:false + 原因）、还是播放被拦，
        一眼可见，不再靠猜。 */
+    /* 法官走的是浏览器本地合成（judge_voice.js），与 AI 的云端通道完全两条路 ——
+       只显示 LAST_TTS 会漏掉这一层（最近一句可能正好是 AI 的）。手机上"法官没声"
+       要能一眼分清：没中文音色 / 被静音标记挡住 / 合成器不回调。 */
+    ['法官通道', (typeof JudgeVoice !== 'undefined' && JudgeVoice.diagText)
+      ? JudgeVoice.diagText()
+      : '<span class="bad">judge_voice.js 未加载（/judge_voice.js 是不是 404？）</span>'],
+    ['TTS 通道', DIAG_TTS],
     ['最近播报', LAST_TTS
       ? ((LAST_TTS.ok ? '<span class="ok">ok</span>' : '<span class="bad">失败</span>')
          + '｜' + (LAST_TTS.how || '?')
@@ -1581,6 +1830,7 @@ function diagRefresh(){
          + (LAST_TTS.ms ? ('｜' + Math.round(LAST_TTS.ms) + 'ms') : '')
          + (LAST_TTS.http ? ('｜HTTP ' + LAST_TTS.http) : '')
          + (LAST_TTS.err ? ('｜<span class="bad">' + LAST_TTS.err + '</span>') : '')
+         + (LAST_TTS.fb ? ('｜<span class="bad">本地没出声 → 云端兜的</span>') : '')
          + '｜' + (LAST_TTS.text || ''))
       : '（还没有播过任何一句）'],
     ['手机访问', DIAG_NET.length ? DIAG_NET.join(' ｜ ') : '（查不到局域网地址）'],
@@ -1592,7 +1842,7 @@ function diagRefresh(){
   }).join('') +
     '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
     '<button id="diagRetry" class="bigbtn" style="padding:8px 12px;font-size:13px">重试麦克风</button>' +
-    '<button id="diagSpeak" class="bigbtn" style="padding:8px 12px;font-size:13px">试一句 AI 语音</button>' +
+    '<button id="diagSpeak" class="bigbtn" style="padding:8px 12px;font-size:13px">试语音（AI + 法官）</button>' +
     '<button id="diagEngine" class="bigbtn" style="padding:8px 12px;font-size:13px">切换识别引擎</button>' +
     '<button id="diagClose" class="bigbtn" style="padding:8px 12px;font-size:13px">收起</button>' +
     '</div>';
@@ -1619,12 +1869,49 @@ function diagRefresh(){
   };
   $('diagSpeak').onclick = async function(){
     DIAG_ASR_ERR = '（正在播报…）';
+    DIAG_TTS = '（正在检测…）';
     diagRefresh();
-    try {
-      var sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent('诊断：这是一句测试语音'));
-      await sp.promise;
-      DIAG_ASR_ERR = sp.error() ? ('TTS 出错：' + sp.error()) : '（TTS 正常，刚才听到声音了吗？）';
-    } catch (e) { DIAG_ASR_ERR = 'TTS 失败：' + e; }
+    var h = {};
+    try { h = await (await fetch('/api/health')).json(); } catch (e) { /* 老服务端 */ }
+    var _stream = !!h.tts_stream, _impl = h.tts || '?';
+    /* ★ 2026-10-31：按**服务端实际通道**测，不再无条件连 /ws/tts。
+       本地 SAPI 伺候不了流式通道，那是有意拒绝；以前把它当"TTS 出错"显示，
+       用户填了 key 之后看到的就是这条假警报（AI 其实已经从 /api/tts 出声）。 */
+    var _ai = '';
+    if (_stream){
+      try {
+        var sp = await Rec.speak('/ws/tts?text=' + encodeURIComponent('诊断：这是一句测试语音'));
+        await sp.promise;
+        _ai = sp.error() ? ('TTS 出错：' + sp.error())
+                         : ('TTS 正常（流式，首片 ' + Math.round(sp.firstMs() || 0) + 'ms）');
+      } catch (e) { _ai = 'TTS 失败：' + e; }
+    } else {
+      try {
+        var _t0 = time_ms();
+        var r = await fetch('/api/tts?text=' + encodeURIComponent('诊断：这是一句测试语音') + '&rate=0');
+        if (!r.ok){
+          var _et = '';
+          try { _et = (await r.json()).error || ''; } catch (e2) { /* 非 JSON */ }
+          _ai = 'TTS 出错（HTTP ' + r.status + '）：' + _et;
+        } else {
+          var _b = await r.blob();
+          await playBlob(_b);
+          _ai = 'TTS 正常（' + _impl + '，' + _b.size + 'B，'
+                + Math.round(time_ms() - _t0) + 'ms）';
+        }
+      } catch (e) { _ai = 'TTS 失败：' + e; }
+    }
+    DIAG_TTS = _ai + '｜服务端 TTS=' + _impl
+             + (_stream ? '（流式）' : '（非流式，AI 逐句走 /api/tts）');
+    DIAG_ASR_ERR = _ai;
+    /* 同一颗按钮顺带测**法官本地通道** —— 两条路互不相干（云端 vs 浏览器合成），
+       必须都过一遍才知道哑的是哪一条。 */
+    if (typeof JudgeVoice !== 'undefined' && JudgeVoice.speakAwait){
+      try {
+        var _jok = await JudgeVoice.speakAwait('诊断：法官播报测试', true);
+        DIAG_TTS += '｜法官本地合成：' + (_jok === false ? '没出声' : '已调起（第二声是法官）');
+      } catch (e) { DIAG_TTS += '｜法官合成抛错：' + e; }
+    }
     diagRefresh();
   };
 }
@@ -1701,6 +1988,10 @@ function wheelModeIdle(){
   $('bigIcon').textContent = '⚖️';
   $('bigWho').textContent = '';
   renderWheelBase();
+  /* ★ 2026-10-29：收完面板要**交还给"谁在说话"** —— 否则每个 tick 的
+     closeHandoff() 都会把大圆清成空的（AI 发言那一段大圆就一直空着，
+     用户看到的更糟：上一版这里还会被发言屏的旧文案顶回来，于是来回跳）。 */
+  paintBigIfIdle();
 }
 
 /* 交接层里的提示。**必须写在浮层内部** ——
@@ -1714,16 +2005,30 @@ function handoffMsg(msg, bad){
 
 /* 把「只有你知道」的结论摊给本人看（目前用于预言家验人）。
    验人这一下是预言家整轮唯一拿到的信息 —— 不给结果等于白验，
-   而且玩家会以为是游戏卡住了。 */
-function showPrivateResult(seatNo, v, title){
-  /* 验人结果直接写在大圆里（私有信息不上日志区），点圆心交回 */
+   而且玩家会以为是游戏卡住了。
+
+   `onlyNo`（1-based，可选）= **只显示这一次**的验人结果。预言家一局可能验了好几个人，
+   把历史记录全塞进大圆会变成一长串（"2 号是好人；5 号是狼人；…"），最该看的
+   反而是刚刚这一下。不传就保持旧行为（全列）。 */
+function showPrivateResult(seatNo, v, title, onlyNo){
   var inv = v.investigations || {};
   var ks = Object.keys(inv);
+  if (onlyNo != null && (String(onlyNo - 1) in inv)) ks = [String(onlyNo - 1)];
   var lines = ks.map(function(k){
     return (Number(k) + 1) + ' 号是 ' + (inv[k] ? '狼人' : '好人');
   });
   WHEEL = { mode: 'act', seatNo: seatNo, view: v, act: 'done',
-            pick: null, sub: null, angle: WHEEL.angle };
+            pick: null, sub: null, angle: WHEEL.angle,
+            /* 2026-10-31：结果屏的**展示起点**。晚一步确认（窗口已关、
+               闭眼句已在播）时，屏幕不能再被"闭眼句念完"立刻收掉 ——
+               至少要让人看清验的是谁、结果是什么。见 tick 里的 6 秒保护。 */
+            shownAt: Date.now() };
+  /* 🔴 2026-11-01：结果屏是**交接屏**，必须占住 HANDOFF —— 否则 tick 的
+     `else if (!HANDOFF)` 分支会把它当成"没人拿手机"再 open/close 一次，
+     大圆里的「X 号是 好人/狼人」当场被清空（用户看到的就是"窗口在、字没了"）。
+     窗口内的确认路径本来就 HANDOFF=本人；到点自动补结果时这里补上。 */
+  HANDOFF = seatNo;
+  HANDOFF_SIG = null;
   renderWheelBase();
   wheelTags(v);
   var bc = $('bigCircle');
@@ -1734,10 +2039,32 @@ function showPrivateResult(seatNo, v, title){
   $('wheelBtns').classList.remove('on');
   $('wheelExtra').classList.remove('on');
   $('wheelExtra').innerHTML = '';
+  /* 🔴 2026-11-01（截图实锤）：拨号盘和「确认验人」仍盖在结果屏上面，
+     大圆又被 renderNightDial 置了 `visibility:hidden` ⇒ 结果虽已生成，
+     玩家看到的仍是号码盘（用户："没有验人结果窗口"）。结果屏必须独占交接层。 */
+  var _nd = $('nightDial'); if (_nd) _nd.classList.remove('on');
+  var _dh = $('dialHead'); if (_dh) _dh.classList.remove('on');
+  var _bcv = $('bigCircle'); if (_bcv) _bcv.style.visibility = '';
   $('bigTitle').textContent = '预言家';
   $('bigIcon').textContent = '🔮';
   $('bigWho').textContent = lines.join('；') || '（没有记录）';
   $('hoTip').textContent = title + '（只有你知道，点圆心交回）';
+}
+
+/* 验人窗口到点自动收口时把结果补给人看（2026-11-01 用户实机：
+   "选了人但没来得及点确认 ⇒ 整晚没有验人结果"）。
+   触发点有两处：
+     · 法官念到「他是这个」（speech_ui.js）
+     · tick 发现验人节点已经过去（语音关掉/队列卡住时的兜底）
+   已经摊开过（shown）就不重复弹。 */
+function showSeerResultScreen(){
+  if (!SEER_LAST || SEER_LAST.shown || SEER_LAST.targetNo == null) return false;
+  if (PUBLIC && SEER_LAST.round != null && PUBLIC.round !== SEER_LAST.round) return false;
+  if (PUBLIC && PUBLIC.phase === 'night' && PUBLIC.now
+      && PUBLIC.now.node === 'seer') return false;      /* 还在选人窗口里 */
+  SEER_LAST.shown = true;
+  showPrivateResult(SEER_LAST.seatNo, SEER_LAST.view, '你验的结果', SEER_LAST.targetNo);
+  return true;
 }
 
 /* ================================================================
@@ -1758,7 +2085,10 @@ function resetSeerBig(){
     var _db = _d && _d.querySelector('button[data-no="' + SEER_LAST.targetNo + '"]');
     if (_db) _db.textContent = String(SEER_LAST.targetNo);
   }
-  SEER_LAST = null;
+  /* ★ 2026-11-01：结果屏还没摊开时**保留** SEER_LAST —— 验人窗口到点自动收口
+     （没来得及点确认）时，tick 的兜底要靠它把「X 号是 好人/狼人」补给人看。
+     已经摊开过的就清掉，避免下一夜重复弹旧结果。 */
+  if (SEER_LAST && SEER_LAST.shown) SEER_LAST = null;
   if (SEER_BIG_TIMER){ clearTimeout(SEER_BIG_TIMER); SEER_BIG_TIMER = null; }
   var el = $('seerBig');
   if (el){ el.className = ''; el.textContent = ''; }
@@ -1810,29 +2140,91 @@ async function submit(seatNo, action, target, text){
     PUBLIC = d.public;
     paintSeats(); renderLog(); speakQueue();
 
-    if (action === 'investigate'){
+    if (action === 'confirm' || action === 'seer_confirm'){
+      /* ★ 2026-10-29（用户定）：预言家**先点人、再点确认**，确认的这一刻才报结果。
+         所以点号码走的是 investigate（只是"我看的是谁"，服务端不报结果），
+         结果展示挪到这里。confirm 请求本身不带 target ⇒ 用本地选中的号。 */
+      if (target == null) target = WHEEL.pick;
       var v2 = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
       /* 2026-10-07 第二期：记下这次验人的结果 —— 播报「他是这个」时，
          圆盘上要出大大的好/坏标识（3 秒后消失）。只有本人看得到。 */
       var _inv = v2.investigations || {};
       var _ti = (target != null && target !== -1) ? (target - 1) : null;
       if (_ti != null && (_ti in _inv)){
-        SEER_LAST = { seatNo: seatNo, targetNo: target, wolf: !!_inv[_ti] };
+        SEER_LAST = { seatNo: seatNo, targetNo: target, wolf: !!_inv[_ti],
+                      view: v2, round: PUBLIC.round, shown: false };
       }
       /* 🔴 2026-10-12（用户定稿）：验人结果直接标在**拨号盘的号码按钮**上 ——
          号码被 👍（好人）/ 👎（狼人）替代，直到「预言家请闭眼」才还原数字
-         （resetSeerBig 挂在闭眼播报上）。大圆已藏 ⇒ 旧的结果屏看不见，
-         这就是"验了没反应"的原因。结果态（act='done'）不被重建冲掉。 */
+         （resetSeerBig 挂在闭眼播报上）。
+         ★ 2026-10-30（用户实机："点了确认窗口直接退出了，没有显示验人信息"）：
+         **旧写法只换图标就 return，结果屏从来没画过** —— 而服务端在
+         `seer_confirmed` 之后 `can_act` 立刻变空 ⇒ 下一拍 tick 把面板整个收掉，
+         玩家只看见 👍 闪一下。现在顺序改成：先摊结果屏（大圆写
+         「X 号是 狼人/好人」），再把目标号码换成图标；两样都留着，
+         由「预言家请闭眼」念完（或点圆心交回）才收。 */
+      if (SEER_LAST) SEER_LAST.shown = true;
+      showPrivateResult(seatNo, v2, '你验的结果', target);
       if (SEER_LAST && $('nightDial').classList.contains('on')){
         var _b2 = $('nightDial').querySelector('button[data-no="' + target + '"]');
         if (_b2){
           _b2.textContent = SEER_LAST.wolf ? '👎' : '👍';
           _b2.onclick = null;
-          WHEEL.act = 'done';
-          return;
         }
       }
-      showPrivateResult(seatNo, v2, '你验的结果');
+      return;
+    }
+    /* ★ 2026-10-28（用户定）：狼刀**整窗可改** —— 点完刀**不许把面板收掉**。
+       用户报的 bug 就是"点完击杀目标，窗口直接退出了，没法改刀"。
+       这里刷一次本人视图（队友的刀/锁定实时可见）再把盘重新画出来，
+       倒计时照旧接着走（NIGHT_CD 没被清），窗口结束时服务端才定案。
+       · 只对 kill（以及 kill 屏上的"取消"）这么做，其余动作照旧收屏。
+       · 面板没开（WHEEL.mode 不是 act）就别硬画 —— 交给下一拍 tick。 */
+    if (PUBLIC.phase === 'night' && WHEEL.mode === 'act'
+        && WHEEL.seatNo === seatNo
+        && ['kill', 'guard', 'heal', 'poison', 'investigate', 'clear',
+            'pass'].indexOf(action) >= 0){
+      try {
+        MYVIEW = await api('/api/game/' + GID + '/seat/' + (seatNo - 1));
+        /* ★ 2026-11-01：**选人即记住结果**，不再等「确认验人」才记。
+           用户实机：验人窗口 15 秒，面板弹出/选人后往往来不及再点一次确认，
+           窗口一到点服务端收口 ⇒ 结果屏从未出现。现在：
+             · 「他是这个」播报（或验人节点过去）时用这份数据自动摊开结果屏；
+             · 点确认仍可立即摊开（原有路径不变）。 */
+        if (action === 'investigate'
+            && MYVIEW.role === 'seer'
+            && target != null && target !== -1){
+          var _inv2 = MYVIEW.investigations || {};
+          var _k2 = String(target - 1);
+          if (_k2 in _inv2){
+            SEER_LAST = { seatNo: seatNo, targetNo: target,
+                          wolf: !!_inv2[_k2], view: MYVIEW,
+                          round: PUBLIC.round, shown: false };
+          }
+        } else if (action === 'clear' && SEER_LAST && SEER_LAST.seatNo === seatNo){
+          SEER_LAST = null;              /* 预言家主动撤掉这一眼 */
+        }
+        if (PUBLIC.phase === 'night'){
+          renderNightDial(seatNo, MYVIEW, MYVIEW.can_act || []);
+        } else {
+          renderWheelAct(seatNo, MYVIEW);
+        }
+      } catch (e2) { /* 视图取不到：保持当前屏，下一拍 tick 自愈 */ }
+      var _footMsg = (action === 'clear')
+        ? '已取消刚才的选择 —— 可以重新点一个号码'
+        : (action === 'heal'
+           ? '已选择救人 —— 窗口结束前可以点「不救」撤回'
+           : (action === 'investigate'
+              ? '已记下要验的人 —— 可以改；到点没点确认也会把结果给你'
+              : (action === 'poison'
+                 ? '毒药已记下：窗口结束前可以改（点别的号码就是改毒）'
+                 : (action === 'guard'
+                    ? '守护已记下：窗口结束前可以改（点别的号码就是改守）'
+                    : (action === 'pass'
+                       ? '已放弃这一问 —— 等窗口结束'
+                       : '刀口已记下：窗口结束前可以随时改（点别的号码就是改刀）')))));
+      foot(_footMsg);
+      setTimeout(tick, 300);
       return;
     }
     closeHandoff();
@@ -1856,6 +2248,24 @@ async function submit(seatNo, action, target, text){
 /* ---------------------------------------------------------- 按住说话 */
 
 var SAY_REC = false, SAY_STREAM = null, SAY_PENDING = null;
+
+/* 开麦失败的统一收口（★ 2026-11-01 用户实机："真人无法正常发言"）：
+   原来两条失败路径都 `return` 而**不把 SAY_REC 复位** —— 大圆停在
+   「发言中（无声音）」的假录音态，实际一个字都没在录；再点一下才按「过」
+   提交，真人这一回合等于永远说不了话。
+   现在：复位录音态 + 明说原因 + **直接把打字兜底摊开**（麦坏了也得能发言）。 */
+function sayAbort(msg){
+  SAY_REC = false;
+  var hb = $('hoSay'); if (hb) hb.classList.remove('on');
+  var bc = $('bigCircle'); if (bc) bc.classList.remove('rec');
+  if (SPK_MODE) syncSpkTip();
+  $('hoStatus').textContent = msg;
+  if (SPK_MODE){
+    openSpeakFallback(SPK_MODE);
+    var t = $('fbText');
+    if (t) { try { t.focus(); } catch (e) { /* 手机不弹键盘也无妨 */ } }
+  }
+}
 async function startSay(){
   /* 防重入：一次按压**只许开一条会话**。手机上一次按压会先后触发
      touchstart 与浏览器补发的 mousedown（见下面绑定处的注释），
@@ -1912,7 +2322,8 @@ async function startSay(){
     SAY_STREAM = null;
   }
   if (!SAY_REC) return;                  /* 同上：期间松手了就别再启一条老路 */
-  try { await Rec.start(); } catch (e){ $('hoStatus').textContent = '用不了麦克风：' + Rec.describeError(e); return; }
+  try { await Rec.start(); }
+  catch (e){ sayAbort('用不了麦克风：' + Rec.describeError(e) + ' —— 可以直接打字发言'); return; }
   if ($('hoSay')) $('hoSay').classList.add('on');   /* 录音态：按钮变红（无文字） */
   $('hoStatus').textContent = '录音中…';
 }
@@ -1930,7 +2341,16 @@ async function stopSay(seatNo){
     $('hoStatus').textContent = '收尾中…';
     try { SAY_STREAM = await SAY_PENDING; } catch (e) { SAY_STREAM = null; }
     SAY_PENDING = null;
-    if (!SAY_STREAM){ $('hoStatus').textContent = '没听清，直接打字后点「说这句」'; return; }
+    if (!SAY_STREAM){
+      /* ★ 2026-11-01：通道压根没打开（权限被拒 / 建连失败）——
+         不能只留一句"再点一下"就停在原地（用户实机："真人无法正常发言"）。
+         直接把打字兜底摊开：这一回合还能说话，也能从输入条上点「过」。 */
+      var _why0 = String((Rec.diag() || {}).lastErr || '').slice(0, 60);
+      $('hoStatus').textContent = '识别通道没打开' + (_why0 ? '（' + _why0 + '）' : '')
+        + ' —— 可以直接打字发言';
+      if (SPK_MODE) openSpeakFallback(SPK_MODE);
+      return;
+    }
   }
 
   /* ① 主路：句柄在手。**三条引擎共用这一处收尾**（它们的 stop() 返回同一形状：
@@ -2058,4 +2478,28 @@ $('bigCircle').onclick = function(){
     };
     sayBtn.oncontextmenu = function(e){ e.preventDefault(); return false; };
   }
+})();
+
+/* 「⌨ 打字」：发言屏的兜底入口（★ 2026-11-01）。点它 = 放弃这次录音（不提交），
+   摊开输入条；提交走 fbGo/fbPass。正在录音时先静默取消 —— 不能走 stopSay
+   （空文本会按「过」提交，用户还没说话就丢了这一回合）。 */
+(function(){
+  var typeBtn = $('sayType');
+  if (!typeBtn) return;
+  typeBtn.onclick = function(ev){
+    if (ev) ev.stopPropagation();
+    if (!SPK_MODE) return;
+    if (SAY_REC || SAY_PENDING || SAY_STREAM){
+      SAY_REC = false;
+      if (SAY_STREAM){ try { SAY_STREAM.stop(); } catch (e) { /* ignore */ } }
+      SAY_STREAM = null; SAY_PENDING = null;
+      var hb = $('hoSay'); if (hb) hb.classList.remove('on');
+      var bc = $('bigCircle'); if (bc) bc.classList.remove('rec');
+      syncSpkTip();
+    }
+    openSpeakFallback(SPK_MODE);
+    var t = $('fbText');
+    if (t) { try { t.focus(); } catch (e) { /* ignore */ } }
+  };
+  typeBtn.oncontextmenu = function(e){ e.preventDefault(); return false; };
 })();
